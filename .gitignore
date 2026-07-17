@@ -1,0 +1,25 @@
+# Models
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.engine
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
