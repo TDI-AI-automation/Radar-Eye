@@ -12,7 +12,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -28,7 +28,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -36,15 +36,29 @@ UNKNOWN
 
 Question:
 
-What detection range must be supported?
+What detection accuracy must be maintained across:
+
+- Zone 1 (0–20m)
+- Zone 2 (20–50m)
+- Zone 3 (50m+)
 
 Status:
 
-OPEN
+PARTIALLY RESOLVED
 
 Owner:
 
-UNKNOWN
+Client
+
+Notes:
+
+Distance zones have been defined:
+
+- Zone 1 = 0–20m
+- Zone 2 = 20–50m
+- Zone 3 = 50m+
+
+Required detection performance per zone remains unknown.
 
 ---
 
@@ -60,7 +74,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -68,15 +82,32 @@ UNKNOWN
 
 Question:
 
-What alarm hardware will be integrated?
+What siren and GPIO relay hardware models will be integrated in future phases?
 
 Status:
 
-OPEN
+PARTIALLY RESOLVED
 
 Owner:
 
-UNKNOWN
+Client
+
+Notes:
+
+Alert architecture shall support:
+
+- UI
+- SMS
+- Email
+- WhatsApp
+- GPIO Relay
+- Audio Siren
+
+Phase 1 implementation:
+
+- UI only
+
+Specific siren and relay hardware models remain unknown.
 
 ---
 
@@ -92,7 +123,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -108,7 +139,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -124,7 +155,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -140,7 +171,7 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
 
 ---
 
@@ -156,4 +187,73 @@ OPEN
 
 Owner:
 
-UNKNOWN
+Client
+
+---
+
+## Q-011
+
+Question:
+
+What confidence threshold should trigger Human Review?
+
+Status:
+
+OPEN
+
+Owner:
+
+TDI
+
+Notes:
+
+Classification outcomes:
+
+- Military
+- Civilian
+- Unknown
+
+Unknown classifications shall be routed to Human Review.
+
+Confidence threshold remains undefined.
+
+---
+
+## Q-012
+
+Question:
+
+What end-to-end alert latency is acceptable for HIGH threats?
+
+Status:
+
+OPEN
+
+Owner:
+
+Client
+
+---
+
+## Q-013
+
+Question:
+
+What calibration accuracy is required for zone assignment?
+
+Status:
+
+OPEN
+
+Owner:
+
+TDI
+
+Notes:
+
+Distance estimation method has been selected:
+
+- Ground Plane Calibration
+- Ground Plane Projection
+
+Required accuracy tolerance remains undefined.

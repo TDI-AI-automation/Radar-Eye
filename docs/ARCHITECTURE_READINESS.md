@@ -41,11 +41,15 @@ Evidence:
 
 Status:
 
-COMPLETE
+PARTIAL
 
 Evidence:
 
 - OPEN_QUESTIONS.md
+
+Reason:
+
+Several operational, performance, deployment, and calibration questions remain unresolved.
 
 ---
 
@@ -130,6 +134,10 @@ Status:
 
 NOT STARTED
 
+Reason:
+
+Technology benchmarking and selection have not yet begun.
+
 ---
 
 ## Overall Readiness
@@ -138,10 +146,28 @@ Current State:
 
 ARCHITECTURE FOUNDATION COMPLETE
 
+Key Decisions Resolved:
+
+- Threat categories defined
+- Uniform classification defined
+- Threat assessment logic defined
+- Distance zones defined
+- Ground-plane-based distance estimation selected
+- Calibration strategy defined
+- Alert delivery architecture defined
+- Fire incident pipeline defined
+- Minimum 20 tracked persons per camera defined
+
 Remaining Work:
 
-- Resolve open questions
+- Resolve remaining open questions
 - Validate assumptions
 - Execute benchmarks
 - Select technologies
 - Produce final physical architecture
+- Define alert escalation behavior
+- Validate target performance on deployment hardware
+
+Architecture Status:
+
+READY FOR TECHNOLOGY SELECTION AND BENCHMARK PLANNING
