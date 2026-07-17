@@ -1,0 +1,12 @@
+environment: development
+
+database:
+  host: localhost
+  port: 5432
+  name: radar_eye
+
+recording:
+  retention_days: 30
+
+threat_engine:
+  enabled: true
