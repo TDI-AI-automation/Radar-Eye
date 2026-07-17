@@ -14,6 +14,7 @@ Every event must contain:
 
 {
   "event_id": "uuid",
+  "schema_version": 1,
   "event_type": "string",
   "source": "string",
   "timestamp": "ISO8601",
@@ -24,23 +25,19 @@ Every event must contain:
 
 # ThreatAssessmentEvent
 
-## Description
-
-Generated after threat evaluation.
-
 ## Producer
 
 Threat Engine
 
 ## Consumers
 
-Incident Service
-API Service
+- Incident Service
+- API Service
 
 ## Payload
 
 {
-  "camera_id": "cam01",
+  "camera_id": "uuid",
   "track_id": 123,
   "weapon_type": "ranged_lethal",
   "uniform": "civilian",
@@ -51,11 +48,29 @@ API Service
 
 ---
 
+# HumanReviewItemCreatedEvent
+
+## Producer
+
+Threat Engine
+
+## Consumers
+
+- API Service
+- Frontend
+
+## Payload
+
+{
+  "camera_id": "uuid",
+  "track_id": 123,
+  "reason": "uniform_unknown",
+  "review_item_id": "uuid"
+}
+
+---
+
 # IncidentCreatedEvent
-
-## Description
-
-Generated when a new incident is created.
 
 ## Producer
 
@@ -63,14 +78,15 @@ Incident Service
 
 ## Consumers
 
-Recording Service
-API Service
+- Recording Service
+- API Service
 
 ## Payload
 
 {
   "incident_id": "uuid",
-  "camera_id": "cam01",
+  "camera_id": "uuid",
+  "track_id": 123,
   "incident_type": "THREAT",
   "threat_level": "HIGH",
   "status": "NEW"
@@ -80,18 +96,14 @@ API Service
 
 # IncidentUpdatedEvent
 
-## Description
-
-Generated when incident state changes.
-
 ## Producer
 
 Incident Service
 
 ## Consumers
 
-Recording Service
-API Service
+- Recording Service
+- API Service
 
 ## Payload
 
@@ -103,11 +115,30 @@ API Service
 
 ---
 
+# AlarmRequestedEvent
+
+## Producer
+
+Threat Engine
+
+## Consumers
+
+- Alarm Service
+- API Service
+
+## Payload
+
+{
+  "incident_id": "uuid",
+  "camera_id": "uuid",
+  "track_id": 123,
+  "threat_level": "HIGH",
+  "reason": "sustained_high_threat"
+}
+
+---
+
 # SnapshotCreatedEvent
-
-## Description
-
-Generated when a snapshot is stored.
 
 ## Producer
 
@@ -115,76 +146,41 @@ Recording Service
 
 ## Consumers
 
-API Service
+- API Service
 
 ## Payload
 
 {
   "snapshot_id": "uuid",
   "incident_id": "uuid",
-  "camera_id": "cam01",
-  "file_path": "/snapshots/cam01/..."
+  "camera_id": "uuid",
+  "file_path": "/snapshots/camera_01/file.jpg"
 }
 
 ---
 
 # ClipCreatedEvent
 
-## Description
-
-Generated when an event clip is stored.
-
 ## Producer
 
 Recording Service
 
 ## Consumers
 
-API Service
+- API Service
 
 ## Payload
 
 {
   "recording_id": "uuid",
   "incident_id": "uuid",
-  "camera_id": "cam01",
-  "file_path": "/recordings/cam01/..."
-}
-
----
-
-# SystemEvent
-
-## Description
-
-System operational events.
-
-## Producers
-
-DeepStream
-API
-Recording Service
-
-## Consumers
-
-API Service
-Frontend
-
-## Payload
-
-{
-  "severity": "INFO",
-  "source_component": "deepstream",
-  "message": "Camera connected"
+  "camera_id": "uuid",
+  "file_path": "/recordings/camera_01/file.mp4"
 }
 
 ---
 
 # CameraDisconnectedEvent
-
-## Description
-
-Camera connectivity failure.
 
 ## Producer
 
@@ -192,12 +188,12 @@ DeepStream
 
 ## Consumers
 
-API Service
+- API Service
 
 ## Payload
 
 {
-  "camera_id": "cam01",
+  "camera_id": "uuid",
   "reason": "RTSP timeout"
 }
 
@@ -205,23 +201,42 @@ API Service
 
 # CalibrationUpdatedEvent
 
-## Description
-
-Calibration parameters changed.
-
 ## Producer
 
 Calibration Service
 
 ## Consumers
 
-DeepStream
+- DeepStream
 
 ## Payload
 
 {
-  "camera_id": "cam01",
+  "camera_id": "uuid",
   "calibration_id": "uuid"
+}
+
+---
+
+# SystemEvent
+
+## Producer
+
+- DeepStream
+- API Service
+- Recording Service
+
+## Consumers
+
+- API Service
+- Frontend
+
+## Payload
+
+{
+  "severity": "INFO",
+  "source_component": "deepstream",
+  "message": "Camera connected"
 }
 
 ---
@@ -238,7 +253,7 @@ Events cannot be modified after publication.
 
 # Event Versioning
 
-Every event contract must include:
+Every event must contain:
 
 {
   "schema_version": 1
@@ -254,8 +269,10 @@ Breaking changes require a new schema version.
 
 Examples:
 
-ThreatAssessmentEvent
-IncidentCreatedEvent
-IncidentUpdatedEvent
-ClipCreatedEvent
-SystemEvent
+- ThreatAssessmentEvent
+- HumanReviewItemCreatedEvent
+- IncidentCreatedEvent
+- IncidentUpdatedEvent
+- AlarmRequestedEvent
+- SnapshotCreatedEvent
+- ClipCreatedEvent

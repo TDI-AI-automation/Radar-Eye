@@ -1,222 +1,229 @@
-# Radar Eye Agent System
+# Radar Eye Agents
+
+## Purpose
+
+Define all autonomous software agents inside the Radar Eye platform.
+
+Agents communicate through approved events and database state.
+
+No agent may directly manipulate another agent's internal state.
 
 ---
 
-# Authority Chain
+# Agent 1: Video Ingestion Agent
 
-Human (Tanvir)
-    ->
-Architect
-    ->
-Specialized Agents
+## Responsibilities
 
-The Human is the final authority.
+- RTSP connection management
+- Stream health monitoring
+- Frame delivery to DeepStream
 
-The Architect maintains architecture integrity.
+## Inputs
 
-Specialized Agents execute implementation.
+- Camera configuration
 
----
+## Outputs
 
-# Architect
-
-Responsibilities:
-
-- Architecture
-- ADRs
-- Reviews
-- Roadmap
-- Technical decisions
-- Acceptance review
-
-The Architect may:
-
-- Create ADRs
-- Approve architecture
-- Approve implementation plans
-
-The Architect may not:
-
-- Change project scope
-- Override Human decisions
+- Video frames
+- CameraDisconnectedEvent
 
 ---
 
-# Specialized Agents
+# Agent 2: Detection Agent
 
-## @backend
+## Responsibilities
 
-Responsibilities:
+- Weapon detection
 
-- FastAPI
-- API Design
-- Services
-- Business Logic
-- Event Publishing
+## Model
 
-Owns:
+YOLO26M
 
-- apps/api
-- services/*
+## Outputs
+
+- Bounding boxes
+- Confidence scores
 
 ---
 
-## @database
+# Agent 3: Tracking Agent
 
-Responsibilities:
+## Responsibilities
 
-- PostgreSQL
-- SQLAlchemy
-- Alembic
-- Persistence
-- Query Optimization
+- Persistent object tracking
 
-Owns:
+## Tracker
 
-- Database Schema
-- Migrations
+NvDCF
 
----
+## Outputs
 
-## @deepstream
-
-Responsibilities:
-
-- DeepStream
-- TensorRT
-- GStreamer
-- Inference Pipelines
-
-Owns:
-
-- apps/deepstream
+- Stable track IDs
 
 ---
 
-## @threat-engine
+# Agent 4: Classification Agent
 
-Responsibilities:
+## Responsibilities
 
-- Threat Classification
-- Threat Evaluation
-- Distance Assessment
-- Rule Engine
+- Uniform classification
 
-Owns:
+## Outputs
 
-- services/threat_engine
-
----
-
-## @recording
-
-Responsibilities:
-
-- Continuous Recording
-- Event Clips
-- Archive Management
-
-Owns:
-
-- services/recording
+- military
+- civilian
+- unknown
 
 ---
 
-## @calibration
+# Agent 5: Distance Estimation Agent
 
-Responsibilities:
+## Responsibilities
 
-- Camera Calibration
-- Ground Plane Projection
-- Distance Estimation
+- Ground plane projection
+- Threat distance estimation
 
-Owns:
+## Outputs
 
-- services/calibration
-
----
-
-## @frontend
-
-Responsibilities:
-
-- UI
-- Dashboards
-- Incident Visualization
-- Map Interfaces
-
-Owns:
-
-- frontend
+- zone_1
+- zone_2
+- zone_3
 
 ---
 
-## @qa
+# Agent 6: Threat Assessment Agent
 
-Responsibilities:
+## Responsibilities
 
-- Validation
-- Benchmarking
-- Acceptance Testing
+- Threat evaluation
+- Rule execution
+- Escalation handling
+- De-escalation handling
 
-Owns:
+## Outputs
 
-- tests
-
----
-
-## @devops
-
-Responsibilities:
-
-- Deployment
-- Packaging
-- CI/CD
-- Jetson Configuration
-
-Owns:
-
-- deployments
+- ThreatAssessmentEvent
+- AlarmRequestedEvent
+- HumanReviewItemCreatedEvent
 
 ---
 
-# Development Rules
+# Agent 7: Incident Management Agent
 
-Every task must contain:
+## Responsibilities
 
-- Owner
-- Description
-- Acceptance Criteria
-- Dependencies
+- Incident creation
+- Incident updates
+- Deduplication
 
-No code may be written without a task.
+## Outputs
 
-No agent may change architecture.
-
-No agent may change project scope.
-
-No agent may modify CLAUDE.md.
-
-No agent may modify PROJECT_CONTEXT.md.
-
-Only Human and Architect may modify AGENTS.md.
+- IncidentCreatedEvent
+- IncidentUpdatedEvent
 
 ---
 
-# Escalation Rules
+# Agent 8: Evidence Agent
 
-Architecture Question:
-    -> Architect
+## Responsibilities
 
-Scope Question:
-    -> Human
+- Snapshot generation
+- Event clip generation
 
-Implementation Question:
-    -> Responsible Agent
+## Outputs
 
-Security Question:
-    -> Architect + Human
+- SnapshotCreatedEvent
+- ClipCreatedEvent
 
-Unknowns must be escalated.
+---
 
-Unknowns must never be silently assumed.
+# Agent 9: Recording Agent
+
+## Responsibilities
+
+- Continuous recording
+- Archive management
+
+## Outputs
+
+- Recording metadata
+
+---
+
+# Agent 10: Human Review Agent
+
+## Responsibilities
+
+- Review queue creation
+- Review status tracking
+
+## Outputs
+
+- Human review records
+
+---
+
+# Agent 11: Notification Agent
+
+## Responsibilities
+
+- Alarm routing
+- Frontend notifications
+
+## Outputs
+
+- WebSocket notifications
+
+---
+
+# Agent 12: System Health Agent
+
+## Responsibilities
+
+- GPU monitoring
+- Storage monitoring
+- Service monitoring
+- Camera monitoring
+
+## Outputs
+
+- SystemEvent
+- CameraDisconnectedEvent
+
+---
+
+# Agent Communication Rules
+
+Allowed:
+
+Agent -> Event Bus -> Agent
+
+Agent -> Database
+
+Agent -> WebSocket Gateway
+
+Not Allowed:
+
+Agent -> Agent direct calls
+
+Reason:
+
+Loose coupling and future scalability.
+
+---
+
+# Deployment Scope
+
+Current Deployment
+
+- Single Jetson AGX Orin
+- Single node
+- 20 cameras
+
+Future
+
+- Multi-node
+- Distributed event bus
+- Distributed storage
+
+Current implementation must remain compatible with future expansion.

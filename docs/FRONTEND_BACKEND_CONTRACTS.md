@@ -1,26 +1,67 @@
 # Frontend Backend Contracts
 
+## Purpose
+
+Define all backend interfaces required by the Radar Eye Command frontend.
+
+The frontend repository:
+
+https://github.com/CodeHub1443/radar-eye-command
+
+must consume only these approved contracts.
+
+---
+
+# API Standards
+
+Base Path:
+
+/api/v1
+
+Authentication:
+
+Session / Token
+
+Future:
+
+LDAP / Active Directory
+
+Response Format:
+
+{
+  "success": true,
+  "data": {}
+}
+
 ---
 
 # Live Monitoring
 
-Frontend Requires:
+## REST
 
 GET /cameras
 
-GET /incidents/open
-
 GET /threats/active
 
-WebSocket /events/threats
+GET /incidents/open
 
-WebSocket /events/incidents
+## WebSocket
+
+/ws/threats
+
+/ws/incidents
+
+/ws/camera-health
+
+Purpose:
+
+Real-time operational monitoring.
 
 ---
 
 # Incident Center
 
-Frontend Requires:
+## REST
 
 GET /incidents
 
@@ -28,13 +69,19 @@ GET /incidents/{incident_id}
 
 PATCH /incidents/{incident_id}
 
+GET /incidents/{incident_id}/events
+
 GET /incidents/{incident_id}/evidence
+
+Purpose:
+
+Incident investigation and management.
 
 ---
 
 # Tactical Map
 
-Frontend Requires:
+## REST
 
 GET /cameras
 
@@ -42,13 +89,21 @@ GET /threats/active
 
 GET /incidents/open
 
-WebSocket /events/tracking
+## WebSocket
+
+/ws/tracking
+
+/ws/incidents
+
+Purpose:
+
+Operational situational awareness.
 
 ---
 
 # Camera Management
 
-Frontend Requires:
+## REST
 
 GET /cameras
 
@@ -58,11 +113,17 @@ PATCH /cameras/{camera_id}
 
 GET /cameras/{camera_id}/health
 
+GET /cameras/{camera_id}/calibration
+
+Purpose:
+
+Camera administration.
+
 ---
 
 # Analytics
 
-Frontend Requires:
+## REST
 
 GET /analytics/threats
 
@@ -72,11 +133,15 @@ GET /analytics/cameras
 
 GET /analytics/system
 
+Purpose:
+
+Historical analytics.
+
 ---
 
 # System Health
 
-Frontend Requires:
+## REST
 
 GET /health/system
 
@@ -86,11 +151,17 @@ GET /health/storage
 
 GET /health/recording
 
+GET /health/cameras
+
+Purpose:
+
+Operational monitoring.
+
 ---
 
 # Settings
 
-Frontend Requires:
+## REST
 
 GET /config
 
@@ -100,25 +171,39 @@ GET /users
 
 PATCH /users
 
+Purpose:
+
+System administration.
+
 ---
 
 # Threat Review Center
 
-Frontend Requires:
+## REST
 
-GET /threats/pending
+GET /reviews
 
-GET /threats/{threat_id}
+GET /reviews/{review_id}
 
-PATCH /threats/{threat_id}
+PATCH /reviews/{review_id}
 
-POST /threats/{threat_id}/escalate
+POST /reviews/{review_id}/confirm-military
+
+POST /reviews/{review_id}/confirm-civilian
+
+POST /reviews/{review_id}/escalate
+
+POST /reviews/{review_id}/dismiss
+
+Purpose:
+
+Human review workflow.
 
 ---
 
 # Calibration Center
 
-Frontend Requires:
+## REST
 
 GET /calibration/cameras
 
@@ -128,11 +213,17 @@ POST /calibration/validate
 
 GET /calibration/results
 
+GET /calibration/{camera_id}
+
+Purpose:
+
+Distance estimation management.
+
 ---
 
 # Evidence Viewer
 
-Frontend Requires:
+## REST
 
 GET /evidence
 
@@ -142,19 +233,140 @@ GET /recordings
 
 GET /recordings/{recording_id}
 
+GET /recordings/{recording_id}/download
+
+GET /snapshots/{snapshot_id}
+
+GET /snapshots/{snapshot_id}/download
+
+Purpose:
+
+Evidence retrieval.
+
 ---
 
-# Event Streaming
+# Real-Time Event Streams
 
-The following shall be real-time:
+## Threat Events
 
-- Threat Events
-- Incident Events
-- Camera Health Events
-- System Health Events
+WebSocket:
 
-Transport:
+/ws/threats
 
-WebSocket
+Event:
 
-Polling shall be avoided where practical.
+ThreatAssessmentEvent
+
+---
+
+## Incident Events
+
+WebSocket:
+
+/ws/incidents
+
+Events:
+
+- IncidentCreatedEvent
+- IncidentUpdatedEvent
+
+---
+
+## Human Review Events
+
+WebSocket:
+
+/ws/reviews
+
+Event:
+
+HumanReviewItemCreatedEvent
+
+---
+
+## Alarm Events
+
+WebSocket:
+
+/ws/alarms
+
+Event:
+
+AlarmRequestedEvent
+
+---
+
+## Camera Events
+
+WebSocket:
+
+/ws/camera-health
+
+Events:
+
+- CameraDisconnectedEvent
+- SystemEvent
+
+---
+
+# Frontend Event Models
+
+## ThreatAssessmentEvent
+
+{
+  "camera_id": "uuid",
+  "track_id": 123,
+  "weapon_type": "ranged_lethal",
+  "uniform": "civilian",
+  "zone": "zone_1",
+  "threat_level": "HIGH"
+}
+
+---
+
+## IncidentCreatedEvent
+
+{
+  "incident_id": "uuid",
+  "camera_id": "uuid",
+  "track_id": 123,
+  "status": "NEW"
+}
+
+---
+
+## HumanReviewItemCreatedEvent
+
+{
+  "review_item_id": "uuid",
+  "camera_id": "uuid",
+  "track_id": 123,
+  "reason": "uniform_unknown"
+}
+
+---
+
+## AlarmRequestedEvent
+
+{
+  "incident_id": "uuid",
+  "camera_id": "uuid",
+  "threat_level": "HIGH"
+}
+
+---
+
+# Architecture Constraints
+
+Mandatory:
+
+- REST for retrieval
+- WebSocket for real-time events
+
+Avoid:
+
+- Polling where practical
+
+Reason:
+
+Reduce latency and backend load.

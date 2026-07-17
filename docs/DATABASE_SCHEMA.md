@@ -66,13 +66,23 @@ Primary incident records.
 ### Fields
 
 id (UUID)
+
 camera_id (FK)
+
+track_id
+
 incident_type
+
 threat_level
+
 status
+
 threat_summary
+
 created_at
+
 updated_at
+
 resolved_at
 
 ### Example Threat Summary
@@ -81,7 +91,7 @@ resolved_at
   "weapon": "ranged_lethal",
   "uniform": "civilian",
   "zone": "zone_1",
-  "rule": "RANGED_LETHAL_ZONE_1"
+  "rule_id": "RANGED_LETHAL_ZONE_1"
 }
 
 ---
@@ -90,15 +100,63 @@ resolved_at
 
 ## Description
 
-Incident state transitions and audit history.
+Incident lifecycle and audit history.
 
 ### Fields
 
 id (UUID)
+
 incident_id (FK)
+
 event_type
+
 event_payload
+
 created_at
+
+---
+
+# human_review_items
+
+## Description
+
+Threats requiring operator review.
+
+Generated when:
+
+uniform == unknown
+
+### Fields
+
+id (UUID)
+
+camera_id (FK)
+
+track_id
+
+reason
+
+status
+
+resolution
+
+resolved_by
+
+created_at
+
+resolved_at
+
+### Status Values
+
+OPEN
+
+CONFIRMED_MILITARY
+
+CONFIRMED_CIVILIAN
+
+ESCALATED
+
+DISMISSED
 
 ---
 
@@ -106,14 +164,18 @@ created_at
 
 ## Description
 
-Incident snapshot metadata.
+Snapshot metadata.
 
 ### Fields
 
 id (UUID)
+
 incident_id (FK)
+
 camera_id (FK)
+
 file_path
+
 captured_at
 
 ---
@@ -127,11 +189,17 @@ Event clip metadata.
 ### Fields
 
 id (UUID)
+
 incident_id (FK)
+
 camera_id (FK)
+
 file_path
+
 start_time
+
 end_time
+
 created_at
 
 ---
@@ -140,14 +208,18 @@ created_at
 
 ## Description
 
-System operational events.
+Operational events.
 
 ### Fields
 
 id (UUID)
+
 event_type
+
 severity
+
 payload
+
 created_at
 
 ---
@@ -161,9 +233,13 @@ System users.
 ### Fields
 
 id (UUID)
+
 username
+
 password_hash
+
 role
+
 created_at
 
 ---
@@ -171,53 +247,55 @@ created_at
 # Relationships
 
 camera
-    ├── camera_stream_profiles
-    ├── camera_calibrations
-    └── incidents
+├── camera_stream_profiles
+├── camera_calibrations
+├── incidents
+└── human_review_items
 
 incident
-    ├── incident_events
-    ├── snapshots
-    └── recordings
+├── incident_events
+├── snapshots
+└── recordings
 
 ---
 
 # Persistence Strategy
 
-## Real-Time Data
+## Transient Processing Data
 
-The following data is processed in memory only and is never persisted:
+The following are processed in memory only:
 
 - Video frames
 - Object detections
 - Tracking data
 - Intermediate classifier outputs
-- Distance estimation results
-- Threat assessment results
+- Per-frame distance estimates
+- Per-frame threat assessments
 
 Reason:
 
-These are transient processing artifacts and would generate excessive storage volume with limited operational value.
+Transient processing artifacts with high storage cost and low operational value.
 
 ---
 
 ## Persisted Data
 
-The following data is persisted:
+Store:
 
 - Cameras
-- Camera stream profiles
-- Camera calibrations
+- Camera Profiles
+- Calibrations
 - Incidents
-- Incident events
+- Incident History
+- Human Review Items
 - Snapshots
-- Event clips
-- System events
+- Event Clips
+- System Events
 - Users
 
 ---
 
-## Explicit Non-Persistence Rules
+# Explicit Non-Persistence Rules
 
 DO NOT STORE:
 
@@ -225,13 +303,13 @@ DO NOT STORE:
 - Frame-level metadata
 - Detection history
 - Tracking history
-- Per-frame threat evaluations
+- Per-frame analytics
 
 STORE ONLY:
 
 - Incident records
-- Evidence (snapshots/clips)
-- Threat metadata
+- Human review records
+- Evidence metadata
 - Audit history
 - Configuration
 
@@ -250,4 +328,23 @@ STORE ONLY:
         YYYY-MM-DD/
 
 Database stores metadata only.
-Filesystem stores actual video and image files.
+
+Filesystem stores actual media files.
+
+---
+
+# Incident Deduplication Constraint
+
+Rule:
+
+1 Track = 1 Active Incident
+
+Constraint:
+
+(camera_id, track_id)
+
+must map to a single active incident.
+
+Reason:
+
+Prevent duplicate incidents for the same tracked subject.

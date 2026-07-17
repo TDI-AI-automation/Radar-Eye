@@ -2,31 +2,37 @@
 
 ## Purpose
 
-Define the end-to-end video processing pipeline.
+Define the end-to-end real-time video analytics pipeline.
+
+This document is the authoritative specification for all DeepStream processing stages.
 
 ---
 
-## Pipeline Overview
+# Pipeline Overview
 
 RTSP Camera
     ↓
+Source Bin
+    ↓
 StreamMux
     ↓
-YOLO Detector
+Primary GIE (Detector)
     ↓
 NvDCF Tracker
     ↓
-Uniform Classification
+Secondary GIE (Uniform Classifier)
     ↓
 Distance Estimation
     ↓
 Threat Engine
     ↓
-Incident Generation
+Incident Service
     ↓
-Recording
+Recording Service
     ↓
-API/Event Bus
+Event Bus
+    ↓
+API Service
     ↓
 Frontend
 
@@ -35,129 +41,433 @@ Frontend
 # Stage 1: Camera Ingestion
 
 Input:
+
 - RTSP H.264
-- RTSP H.265
+
+Camera Count:
+
+- 20 Cameras
+
+Deployment Target:
+
+- 1 × Jetson AGX Orin 32GB
 
 Output:
-- Decoded GPU Frames
+
+- GPU Decoded Frames
+
+Requirements:
+
+- Reconnect automatically
+- Detect camera failures
+- Emit CameraDisconnectedEvent
 
 ---
 
 # Stage 2: StreamMux
 
+Component:
+
+nvstreammux
+
 Responsibilities:
-- Batch frames
-- Synchronize streams
 
-Inputs:
-- Multiple cameras
+- Stream synchronization
+- Batch generation
+- Frame aggregation
 
-Outputs:
-- Batched frames
+Input:
+
+- Multiple camera streams
+
+Output:
+
+- Batched GPU frames
 
 ---
 
-# Stage 3: Weapon/Person Detection
+# Stage 3: Primary GIE
+
+Purpose:
+
+Weapon and person detection.
 
 Model:
-- yolo26m_weapon.pt
+
+models/yolo26m_weapon.pt
+
+Runtime:
+
+TensorRT
 
 Outputs:
-- Bounding boxes
-- Confidence
-- Class
 
-Classes:
+- Bounding Boxes
+- Confidence
+- Class IDs
+
+Supported Classes:
+
 - person
 - fire
 - ranged_lethal
 - melee_lethal
 - non_lethal
 
+Output Metadata:
+
+{
+  "camera_id": "...",
+  "class_id": "...",
+  "confidence": 0.95,
+  "bbox": {}
+}
+
 ---
 
 # Stage 4: Tracking
 
-Tracker:
-- NvDCF
+Component:
+
+NvDCF
+
+Purpose:
+
+Persistent object tracking.
 
 Outputs:
-- Persistent Track IDs
+
+- Track IDs
 
 Requirements:
+
 - Support 20+ simultaneous persons
+- Stable track persistence
+- Re-identification support where available
+
+Output Metadata:
+
+{
+  "track_id": 123
+}
 
 ---
 
-# Stage 5: Uniform Classification
+# Stage 5: Secondary GIE
+
+Purpose:
+
+Uniform Classification.
 
 Model:
-- vit_48k_binary.pth
+
+models/vit_48k_binary.pth
+
+Runtime:
+
+TensorRT
 
 Input:
-- Person crop
 
-Output:
+Person crop from tracker output.
+
+Output Classes:
+
 - military
 - civilian
 - unknown
+
+Output Metadata:
+
+{
+  "track_id": 123,
+  "uniform": "civilian"
+}
 
 ---
 
 # Stage 6: Distance Estimation
 
+Purpose:
+
+Estimate distance from camera.
+
 Method:
-- Ground Plane Projection
+
+Ground Plane Projection
 
 Inputs:
-- Person foot point
-- Calibration
+
+- Track Position
+- Camera Calibration
 
 Outputs:
-- Estimated distance
+
+- Distance
 - Zone
+
+Zones:
+
+zone_1
+0m - 20m
+
+zone_2
+20m - 50m
+
+zone_3
+50m+
+
+Output Metadata:
+
+{
+  "track_id": 123,
+  "distance": 12.5,
+  "zone": "zone_1"
+}
 
 ---
 
 # Stage 7: Threat Engine
 
+Purpose:
+
+Threat Classification.
+
 Inputs:
-- Weapon
-- Uniform
-- Zone
+
+- Weapon Type
+- Uniform Class
+- Distance Zone
 
 Outputs:
-- Threat level
+
+- Threat Level
+- Human Review Decision
+- Incident Decision
+- Alarm Decision
+
+Threat Levels:
+
+- ALLY
+- OBSERVE
+- LOW
+- MEDIUM
+- HIGH
+- HUMAN_REVIEW
+
+Generated Events:
+
+- ThreatAssessmentEvent
+- HumanReviewItemCreatedEvent
+- AlarmRequestedEvent
 
 ---
 
-# Stage 8: Incident Generation
+# Stage 8: Incident Service
 
-Creates:
-- Incident record
-- Snapshot
-- Clip request
+Purpose:
+
+Incident lifecycle management.
+
+Responsibilities:
+
+- Incident creation
+- Incident updates
+- Deduplication
+
+Rule:
+
+1 Track = 1 Active Incident
+
+Outputs:
+
+- IncidentCreatedEvent
+- IncidentUpdatedEvent
 
 ---
 
-# Stage 9: Recording
+# Stage 9: Recording Service
 
-Continuous recording
+Purpose:
 
-Event clip extraction:
-- Pre-event window
-- Post-event window
+Evidence generation.
+
+Recording Mode:
+
+Continuous Recording
+
+Codec:
+
+H.265
+
+Retention:
+
+30 Days
+
+Evidence Types:
+
+- Snapshots
+- Event Clips
+
+Clip Policy:
+
+Pre-event buffer
++
+Post-event buffer
+
+Generated Events:
+
+- SnapshotCreatedEvent
+- ClipCreatedEvent
 
 ---
 
-# Stage 10: Event Publication
+# Stage 10: Event Bus
 
-Publishes:
-- Detection events
-- Incident events
-- System events
+Purpose:
+
+Internal service communication.
 
 Consumers:
-- Backend
-- Frontend
-- Alert services
+
+- API Service
+- Recording Service
+- Incident Service
+- Alarm Service
+
+Transport:
+
+Internal Event Bus
+
+Requirements:
+
+- Immutable events
+- Versioned contracts
+
+---
+
+# Stage 11: API Service
+
+Purpose:
+
+Expose system functionality.
+
+Interfaces:
+
+- REST API
+- WebSocket API
+
+Responsibilities:
+
+- Frontend integration
+- Incident retrieval
+- Threat retrieval
+- Evidence retrieval
+
+---
+
+# Stage 12: Frontend
+
+Repository:
+
+https://github.com/CodeHub1443/radar-eye-command
+
+Consumes:
+
+- REST APIs
+- WebSocket Events
+
+Provides:
+
+- Live Monitoring
+- Incident Center
+- Tactical Map
+- Threat Review Center
+- Calibration Center
+- Evidence Viewer
+
+---
+
+# Failure Handling
+
+## Camera Failure
+
+Generate:
+
+CameraDisconnectedEvent
+
+---
+
+## Model Failure
+
+Generate:
+
+SystemEvent
+
+Severity:
+
+ERROR
+
+---
+
+## Calibration Failure
+
+Generate:
+
+SystemEvent
+
+Severity:
+
+ERROR
+
+---
+
+## Event Bus Failure
+
+Generate:
+
+SystemEvent
+
+Severity:
+
+CRITICAL
+
+---
+
+# Performance Targets
+
+Camera Count:
+
+20
+
+Processing:
+
+Real-Time
+
+Deployment:
+
+Jetson AGX Orin 32GB
+
+Architecture:
+
+Air-Gapped
+Offline-First
+
+---
+
+# Architecture Constraints
+
+Mandatory:
+
+- DeepStream
+- TensorRT
+- NvDCF
+- PostgreSQL
+- FastAPI
+
+Prohibited:
+
+- OpenCV Production Pipelines
+- SQLite
+- MongoDB
+- Direct YOLO Execution Outside DeepStream

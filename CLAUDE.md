@@ -1,172 +1,295 @@
-# Radar Eye
+# CLAUDE.md
 
-Military AI Surveillance Platform
+## Project
 
----
+Radar Eye
 
-# Mission
+AI-powered military surveillance and threat assessment platform.
 
-Radar Eye is an AI-powered military surveillance platform designed to detect, classify, track, assess, and manage potential threats from RTSP camera streams running on NVIDIA Jetson AGX Orin edge devices.
+Primary deployment target:
 
-The platform operates in air-gapped military environments and provides real-time situational awareness, incident management, and threat assessment.
+- Jetson AGX Orin 32GB
+- DeepStream
+- TensorRT
+- FastAPI
+- PostgreSQL
 
----
+Current deployment:
 
-# Architecture Authority
-
-The architecture defined in the repository is authoritative.
-
-Architecture changes require:
-
-1. Human approval
-2. Architecture review
-3. ADR update
-
-No implementation may bypass architecture decisions.
+- Single node
+- Air-gapped
+- 20 cameras
 
 ---
 
-# Source of Truth
+# Architecture Rules
+
+All implementation must follow approved architecture documents.
 
 Priority Order:
 
-1. PROJECT_CONTEXT.md
-2. CLAUDE.md
-3. docs/*
-4. TASKS.md
+1. ADR_INDEX.md
+2. THREAT_ENGINE_SPEC.md
+3. EVENT_CONTRACTS.md
+4. DATABASE_SCHEMA.md
+5. DEEPSTREAM_PIPELINE_SPEC.md
+6. FRONTEND_BACKEND_CONTRACTS.md
+7. AGENTS.md
 
-If documents conflict:
+If conflicts occur:
 
-PROJECT_CONTEXT.md wins.
+Higher priority document wins.
 
 ---
 
-# Core Technology Decisions
+# Core Principles
 
-Deployment Target:
-- NVIDIA Jetson AGX Orin 32GB
+## Deterministic Decisions
 
-Video Analytics:
-- NVIDIA DeepStream 7.0
+Threat evaluation must be rule-based.
 
-Inference Runtime:
-- TensorRT
+No LLM may make threat decisions.
 
-Backend:
-- FastAPI
+---
+
+## Event Driven Design
+
+Preferred:
+
+Producer -> Event -> Consumer
+
+Avoid:
+
+Direct service coupling.
+
+---
+
+## Offline First
+
+System must operate without internet access.
+
+Internet connectivity is optional.
+
+---
+
+## Evidence Preservation
+
+Every HIGH threat incident must retain:
+
+- Snapshot
+- Event clip
+- Incident timeline
+
+---
+
+## Auditability
+
+All threat decisions must be explainable.
+
+Every incident must have:
+
+- Detection source
+- Classification result
+- Distance zone
+- Threat level
+
+---
+
+# AI Components
+
+## Detection
+
+Model:
+
+YOLO26M
+
+Purpose:
+
+Weapon detection
+
+---
+
+## Tracking
+
+Tracker:
+
+NvDCF
+
+Purpose:
+
+Persistent tracking
+
+---
+
+## Classification
+
+Model:
+
+ViT Binary Classifier
+
+Outputs:
+
+- military
+- civilian
+- unknown
+
+---
+
+## Distance Estimation
+
+Method:
+
+Ground Plane Projection
+
+Outputs:
+
+- zone_1
+- zone_2
+- zone_3
+
+---
+
+## Threat Engine
+
+Inputs:
+
+- weapon type
+- classification
+- distance zone
+
+Outputs:
+
+- ALLY
+- OBSERVE
+- LOW
+- MEDIUM
+- HIGH
+- HUMAN_REVIEW
+
+---
+
+# Backend Constraints
+
+Framework:
+
+FastAPI
 
 Database:
-- PostgreSQL
 
-Tracking:
-- NvDCF
+PostgreSQL
 
 Communication:
-- Internal Event Bus
 
-Recording:
-- H.265 Archive
-- Continuous Recording
-- Event Clip Extraction
+REST + WebSocket
 
----
+Avoid:
 
-# Mandatory Rules
+GraphQL
 
-The following are mandatory:
+Avoid:
 
-- DeepStream is mandatory
-- TensorRT is mandatory
-- PostgreSQL is mandatory
-- FastAPI is mandatory
-- Event-driven architecture is mandatory
-- Repository architecture must be respected
-- Threat engine rules must follow THREAT_ENGINE_SPEC.md
-- Event contracts must follow EVENT_CONTRACTS.md
+Tightly coupled services
 
 ---
 
-# Prohibited
+# Frontend Constraints
 
-The following are prohibited unless explicitly approved:
+Frontend repository:
 
-- SQLite
-- MongoDB
-- OpenCV production inference pipelines
-- YOLO execution outside DeepStream production pipelines
-- Direct commits to master
-- Architecture modifications without ADR
-- Hardcoded configuration
-- Hardcoded thresholds
-- Business logic inside API routes
+radar-eye-command
 
----
+Use:
 
-# Development Rules
+REST APIs
 
-Every change must originate from TASKS.md.
+Use:
 
-Every task must include:
+WebSocket events
 
-- Owner
-- Description
-- Acceptance Criteria
-- Dependencies
+Avoid:
 
-No implementation may begin without a task.
+Mock data
 
-Unknowns remain UNKNOWN until validated.
+Avoid:
 
-Assumptions must be documented.
+Polling where practical
 
 ---
 
-# Code Quality Rules
+# Recording Rules
 
-All production code must:
+Continuous recording enabled.
 
-- Be typed where practical
-- Include logging
-- Handle failures gracefully
-- Follow repository architecture
-- Be testable
-- Avoid global state
-- Avoid hidden dependencies
+Store:
 
----
+H.265 archive
 
-# Performance Principles
+Retention:
 
-The system is designed for:
+30 days
 
-- 20 Cameras
-- Real-time processing
-- Edge deployment
-- Air-gapped operation
-- Offline-first operation
+Generate:
 
-Performance optimizations must not violate architecture constraints.
+- snapshots
+- event clips
 
 ---
 
-# Security Principles
+# Human Review Rules
 
-Military deployment assumptions:
+Unknown uniforms must never be auto-resolved.
 
-- Air-gapped environment
-- Local-only operation
-- RBAC authorization
-- Auditability required
-- Incident history immutable
+Create review item.
 
-Security is prioritized over convenience.
+Operator action required.
+
+Allowed actions:
+
+- Confirm Military
+- Confirm Civilian
+- Escalate
+- Dismiss
 
 ---
 
-# Human Authority
+# Alarm Rules
 
-Human (Tanvir) is the final authority.
+HIGH:
 
-Human decisions override all AI-generated decisions.
+Alarm eligible
 
-No AI agent may modify project scope.
+MEDIUM:
+
+No alarm
+
+LOW:
+
+No alarm
+
+ALLY:
+
+No alarm
+
+OBSERVE:
+
+No alarm
+
+FIRE:
+
+Immediate alarm
+
+---
+
+# Scalability
+
+Current:
+
+Single Jetson
+
+Future:
+
+- Multi-node
+- Distributed event bus
+- Distributed storage
+
+Do not introduce design decisions that block future scaling.
