@@ -15,6 +15,14 @@ logs/
 # Environment
 .env
 .env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+
+# Test artifacts
+.pytest_cache/
 
 # IDE
 .vscode/
