@@ -307,9 +307,10 @@ Before planning or writing code, reconstruct project context by reading reposito
 1. CLAUDE.md
 2. PROJECT_CONTEXT.md
 3. ADR_INDEX.md
-4. TASKS.md
-5. IMPLEMENTATION_STATUS.md
-6. Subsystem documentation and source code
+4. TASKS.md (root) — ticket-level backlog
+5. docs/IMPLEMENTATION_ROADMAP.md — milestone sequencing (the single source of truth for what "RM-XX" means)
+6. docs/IMPLEMENTATION_STATUS.md — current build state and subsystem branch assignments
+7. Subsystem documentation and source code
 
 Do not begin implementation before completing this sequence.
 
@@ -325,10 +326,11 @@ Authority order, highest first:
 
 1. Architecture documentation (see Priority Order above)
 2. PROJECT_CONTEXT.md
-3. TASKS.md
-4. IMPLEMENTATION_STATUS.md
-5. Source code
-6. Conversation context
+3. TASKS.md (root) — ticket-level backlog
+4. docs/IMPLEMENTATION_ROADMAP.md — milestone sequence (authoritative for RM-XX definitions)
+5. docs/IMPLEMENTATION_STATUS.md — current build state
+6. Source code
+7. Conversation context
 
 If conflicts occur:
 
@@ -344,12 +346,14 @@ Conversation context never overrides the repository.
 2. Reconstruct project understanding.
 3. Review assigned work.
 4. Identify affected files.
-5. Present implementation plan.
-6. Wait for approval.
-7. Implement only approved scope.
-8. Run verification.
-9. Update IMPLEMENTATION_STATUS.md if implementation state changed.
-10. Summarize completed work.
+5. Identify the owning subsystem branch (see "Git Branching & Merge Strategy" below); branch a short-lived ticket branch from it if the work is large enough to warrant one.
+6. Present implementation plan.
+7. Wait for approval.
+8. Implement only approved scope.
+9. Run verification.
+10. Commit and push to the subsystem (or ticket) branch.
+11. Update IMPLEMENTATION_STATUS.md if implementation state changed.
+12. Summarize completed work.
 
 ---
 
@@ -379,9 +383,27 @@ Do not overwrite unrelated work.
 
 Coordinate through repository documentation, not conversation memory.
 
-TASKS.md is the authoritative execution plan.
+TASKS.md (root) is the authoritative ticket-level execution plan.
 
-IMPLEMENTATION_STATUS.md is the operational implementation state.
+docs/IMPLEMENTATION_ROADMAP.md is the authoritative milestone sequence — what each RM-XX covers and in what order.
+
+IMPLEMENTATION_STATUS.md is the operational implementation state — what is built, and on which subsystem branch.
+
+Milestones are a planning concept only. They are never Git branch names — see "Git Branching & Merge Strategy" below.
+
+---
+
+## Git Branching & Merge Strategy
+
+Four distinct concerns, kept separate:
+
+**Implementation order** — governed by docs/IMPLEMENTATION_ROADMAP.md. Milestones (RM-XX) sequence work; they are not Git branches.
+
+**Subsystem ownership** — each subsystem branch owns one logical part of the architecture. See docs/IMPLEMENTATION_STATUS.md's Subsystem Status table for the current list and their corresponding apps/, services/, or shared/ paths.
+
+**Git branching** — long-lived subsystem branches (feature/api, feature/deepstream, feature/threat-engine, feature/incident-service, feature/recording, feature/calibration, feature/shared-contracts, feature/frontend-integration, feature/deployment, feature/testing) are the primary integration branches. A milestone is implemented on the subsystem branch its work belongs to. If a milestone is large enough to need parallel work, short-lived ticket branches branch from the subsystem branch (e.g. feature/RE-301-rtsp-ingestion from feature/deepstream) and merge back into it.
+
+**Merge strategy** — ticket branches merge into their subsystem branch when their piece is done. Subsystem branches merge into master at a reviewed, approved integration point — not automatically after every milestone. master never receives a direct commit.
 
 ---
 
