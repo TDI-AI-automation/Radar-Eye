@@ -293,3 +293,121 @@ Future:
 - Distributed storage
 
 Do not introduce design decisions that block future scaling.
+
+---
+
+# AI Development Workflow
+
+## Repository Startup Procedure
+
+Every new AI session starts with zero conversation memory.
+
+Before planning or writing code, reconstruct project context by reading repository documentation, in this order:
+
+1. CLAUDE.md
+2. PROJECT_CONTEXT.md
+3. ADR_INDEX.md
+4. TASKS.md
+5. IMPLEMENTATION_STATUS.md
+6. Subsystem documentation and source code
+
+Do not begin implementation before completing this sequence.
+
+---
+
+## Repository Authority Hierarchy
+
+The repository is the project's permanent memory.
+
+Conversation history is not authoritative and does not survive between sessions.
+
+Authority order, highest first:
+
+1. Architecture documentation (see Priority Order above)
+2. PROJECT_CONTEXT.md
+3. TASKS.md
+4. IMPLEMENTATION_STATUS.md
+5. Source code
+6. Conversation context
+
+If conflicts occur:
+
+Higher authority wins.
+
+Conversation context never overrides the repository.
+
+---
+
+## Standard Development Workflow
+
+1. Read repository documentation.
+2. Reconstruct project understanding.
+3. Review assigned work.
+4. Identify affected files.
+5. Present implementation plan.
+6. Wait for approval.
+7. Implement only approved scope.
+8. Run verification.
+9. Update IMPLEMENTATION_STATUS.md if implementation state changed.
+10. Summarize completed work.
+
+---
+
+## Implementation Rules
+
+Never modify architecture without explicit approval.
+
+Unknowns remain unknown until validated.
+
+Avoid assumptions.
+
+Keep changes narrowly scoped.
+
+Do not perform unrelated refactoring.
+
+Preserve repository conventions.
+
+Minimize implementation blast radius.
+
+---
+
+## Multi-Agent Collaboration
+
+Respect subsystem ownership.
+
+Do not overwrite unrelated work.
+
+Coordinate through repository documentation, not conversation memory.
+
+TASKS.md is the authoritative execution plan.
+
+IMPLEMENTATION_STATUS.md is the operational implementation state.
+
+---
+
+## Conflict Resolution
+
+Architecture conflicts:
+
+Stop implementation. Request clarification.
+
+Task conflicts:
+
+Request clarification.
+
+Implementation status conflicts:
+
+Verify against source code first.
+
+Update IMPLEMENTATION_STATUS.md if necessary.
+
+---
+
+## Completion Procedure
+
+Before considering work complete:
+
+- Verify implementation.
+- Update IMPLEMENTATION_STATUS.md if required.
+- Ensure repository documentation remains consistent.
+- Summarize completed work.

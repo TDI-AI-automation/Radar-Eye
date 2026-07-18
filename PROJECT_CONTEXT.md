@@ -22,6 +22,32 @@ Provide real-time military surveillance, threat detection, threat assessment, in
 
 ---
 
+# Documentation Map
+
+CLAUDE.md:
+
+Repository operating manual and AI development workflow.
+
+PROJECT_CONTEXT.md:
+
+Long-lived, mostly static project facts — vision, hardware, technology stack, repositories, deployment targets. This document.
+
+TASKS.md:
+
+Authoritative implementation execution plan, backlog, priorities, and active work.
+
+IMPLEMENTATION_STATUS.md:
+
+Operational implementation state — subsystem progress, roadmap status, blockers, current implementation maturity.
+
+Scope boundary:
+
+This document holds stable facts, not implementation progress.
+
+For current progress, active blockers, or what to work on next, see TASKS.md and IMPLEMENTATION_STATUS.md.
+
+---
+
 # Deployment Model
 
 Deployment Type:
@@ -231,19 +257,6 @@ feature/*
 Direct commits to master are prohibited.
 
 ---
-
-# Current Phase
-
-Phase:
-Implementation Phase 1
-
-Current Goal:
-
-Backend Foundation
-
-Reference:
-
-docs/IMPLEMENTATION_PLAN.md
 
 # Repositories
 
