@@ -16,6 +16,21 @@ Attributes:
 
 ---
 
+### Camera Calibration
+
+Represents calibration parameters used for distance estimation.
+
+Attributes:
+
+- calibration_id
+- camera_id
+- mount_height
+- tilt_angle
+- ground_reference_points
+- calibration_timestamp
+
+---
+
 ### Video Stream
 
 Represents decoded video frames from a camera.
@@ -27,6 +42,21 @@ Attributes:
 - resolution
 - fps
 - codec
+
+---
+
+### Person Track
+
+Represents a continuously tracked person across frames.
+
+Attributes:
+
+- track_id
+- camera_id
+- first_seen
+- last_seen
+- current_zone
+- status
 
 ---
 
@@ -42,6 +72,87 @@ Attributes:
 - class
 - confidence
 - bounding_box
+
+Possible Classes:
+
+- person
+- fire
+- ranged_lethal
+- melee_lethal
+- non_lethal
+
+---
+
+### Uniform Classification
+
+Represents classification of a tracked person.
+
+Attributes:
+
+- classification_id
+- track_id
+- classification
+- confidence
+
+Possible Values:
+
+- Military
+- Civilian
+- Unknown
+
+Military Definition:
+
+- Green camouflage torso
+- Green camouflage pants
+- Black boots
+
+Civilian Definition:
+
+- Any other appearance
+
+Unknown Definition:
+
+- Confidence below threshold
+
+---
+
+### Threat Assessment
+
+Represents threat evaluation for a tracked person.
+
+Attributes:
+
+- assessment_id
+- track_id
+- weapon_category
+- zone
+- threat_level
+
+Weapon Categories:
+
+- ranged_lethal
+- melee_lethal
+- non_lethal
+
+Zones:
+
+- Zone 1 (0–20m)
+- Zone 2 (20–50m)
+- Zone 3 (50m+)
+
+Threat Levels:
+
+- ALLY
+- OBSERVE
+- LOW
+- MEDIUM
+- HIGH
+
+Threat Rules:
+
+- Military + Any Weapon → ALLY
+- Civilian + No Weapon → OBSERVE
+- Fire → Separate Incident Pipeline
 
 ---
 
@@ -59,6 +170,26 @@ Attributes:
 
 ---
 
+### Incident
+
+Represents a security incident.
+
+Attributes:
+
+- incident_id
+- timestamp
+- camera_id
+- incident_type
+- severity
+- status
+
+Incident Types:
+
+- Human Threat
+- Fire
+
+---
+
 ### Alert
 
 Represents an operator-facing notification.
@@ -69,6 +200,18 @@ Attributes:
 - threat_id
 - timestamp
 - status
+
+Current Delivery Channel:
+
+- UI
+
+Future Delivery Channels:
+
+- SMS
+- Email
+- WhatsApp
+- GPIO Relay
+- Audio Siren
 
 ---
 
