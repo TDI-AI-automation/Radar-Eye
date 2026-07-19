@@ -31,8 +31,8 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 done, RM-02 next |
-| Repo stage | RM-01 complete: `apps/api` foundation (settings, logging, DB engine/session factory, app factory) merged into `feature/api`. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-02 done, RM-DEV and RM-06 next |
+| Repo stage | RM-01 complete on `feature/api`. RM-02 complete on `feature/shared-contracts`: `shared/constants`, `shared/events`, `shared/schemas` fully implemented; 52 tests passing; `conftest.py` + `pytest.ini` added at repo root. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
 | Primary branch | `master` (protected — no direct commits per `PROJECT_CONTEXT.md`) |
 | Branching model | Long-lived subsystem branches are the primary integration branches (see Subsystem Status below). `develop`'s role is not yet decided — do not treat it as an active integration branch. |
 
@@ -41,16 +41,17 @@ This document reflects the **operational implementation state** as last recorded
 ## Next Immediate Action
 
 **Current Milestone:**
-RM-02 — Shared Contracts Package (see `docs/IMPLEMENTATION_ROADMAP.md` for full deliverables/acceptance criteria)
+RM-DEV — Developer Infrastructure (see `docs/IMPLEMENTATION_ROADMAP.md`)
+OR RM-06 — Threat Engine Service (parallelisable per roadmap)
 
-**Owning Branch:**
-`feature/shared-contracts`
+**Owning Branches:**
+`feature/testing` (RM-DEV) · `feature/threat-engine` (RM-06)
 
 **Status:**
-Not Started — planning in progress.
+Not Started.
 
 **Blocking Issues:**
-None. RM-02 depends only on RM-01, which is done.
+None. Both depend only on RM-02, which is now done.
 
 ---
 
@@ -61,7 +62,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | Milestone | Status | Owning Branch |
 |---|---|---|
 | RM-01 | **Done** | `feature/api` |
-| RM-02 | Not Started | `feature/shared-contracts` |
+| RM-02 | **Done** | `feature/shared-contracts` |
 | RM-DEV | Not Started | `feature/testing` |
 | RM-06 | Not Started | `feature/threat-engine` |
 | RM-03 | Not Started | `feature/api` |
@@ -84,7 +85,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | Subsystem | Path | Status | Branch | Depends On |
 |---|---|---|---|---|
 | API service (FastAPI, persistence, event bus, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01 done) | `feature/api` | Shared contracts |
-| Shared contracts (events, schemas, constants) | `shared/` | Not Started | `feature/shared-contracts` | — |
+| Shared contracts (events, schemas, constants) | `shared/` | **Done** | `feature/shared-contracts` | — |
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
 | Threat engine (rule-based scoring) | `services/threat_engine/` | Not Started | `feature/threat-engine` | Shared contracts |
 | Incident service (also owns the Alarm Service until it warrants its own subsystem — see RM-10) | `services/incident_service/` | Not Started | `feature/incident-service` | Threat engine, API service |
@@ -116,6 +117,7 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
+| 2026-07-19 | RM-02 (Shared Contracts Package) implemented and tested on `feature/shared-contracts`: `shared/constants` (ThreatLevel, DistanceZone, WeaponType, UniformClass, IncidentType, IncidentStatus), `shared/events` (EventEnvelope + 10 typed event aliases matching EVENT_CONTRACTS.md), `shared/schemas` (ApiResponse + threat/incident/review/camera/alarm schemas from FRONTEND_BACKEND_CONTRACTS.md). `conftest.py` and `pytest.ini` added at repo root. 52 tests passing. |
 | 2026-07-19 | RM-01 (Repository & Runtime Foundation) implemented, tested (11 passing tests), merged into `feature/api` |
 | 2026-07-19 | Repository governance reconciled with actual workflow: `docs/IMPLEMENTATION_ROADMAP.md` created as single source of truth for milestone sequencing; this document, `CLAUDE.md`, and `PROJECT_CONTEXT.md` updated to match the subsystem-branch model |
 | 2026-07-16 | Repository skeleton, package structure for `apps/`, `services/`, `shared/` |
@@ -151,6 +153,7 @@ Note: `docs/TASKS.md` (a different file from root `TASKS.md`) is a candidate for
 
 | Date | Change | By |
 |---|---|---|
+| 2026-07-19 | RM-02 complete: updated Snapshot, Next Immediate Action, Milestone Status, Subsystem Status, Recently Completed | Antigravity |
 | 2026-07-18 | Initial version created | Claude |
 | 2026-07-18 | Added Roadmap Progress, Next Immediate Action, and Architecture Contract sections; reordered recommended read sequence to place `TASKS.md` before this file | Claude |
 | 2026-07-18 | Re-sourced Roadmap Progress from `TASKS.md` §1.1/§2.3 instead of `IMPLEMENTATION_PLAN.md`; added Source of Truth note | Claude |
