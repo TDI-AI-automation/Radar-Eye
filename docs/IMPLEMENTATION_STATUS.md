@@ -31,8 +31,8 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 and RM-02 merged to `develop`; RM-DEV implemented on `feature/developer-infrastructure`, pending review/merge; RM-06 next |
-| Repo stage | RM-01 and RM-02 complete and merged into `develop` (63 tests passing). RM-DEV (Developer Infrastructure) implemented on `feature/developer-infrastructure`: `pyproject.toml` (ruff/black/mypy/coverage config), `.pre-commit-config.yaml`, GitHub Actions CI (`.github/workflows/ci.yml`, triggers on PRs/pushes to `develop` only), `ruff`/`black`/`mypy`/`pre-commit`/`pytest-cov` added to `requirements-dev.txt`. Existing RM-01/RM-02 code reformatted to a clean black/ruff baseline (formatting-only, no behavior change); mypy runs advisory-only (does not fail CI) and currently reports 3 pre-existing findings, left unresolved as out of RM-DEV's scope. All quality gates (black, ruff, pytest, pre-commit) pass clean; not yet merged into `develop`. `feature/shared-contracts`, `feature/api`, and `feature/developer-infrastructure` all retained as long-lived subsystem branches. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01, RM-02, and RM-DEV all done and merged to `develop`; RM-06 next |
+| Repo stage | RM-01, RM-02, and RM-DEV complete and merged into `develop` (commit `35e4f77`), following Principal Engineer review. RM-DEV (Developer Infrastructure) added `pyproject.toml` (ruff/black/mypy/coverage config), `.pre-commit-config.yaml` (markdown docs excluded from generic formatting tools), GitHub Actions CI (`.github/workflows/ci.yml`, triggers on PRs/pushes to `develop` only), and pinned `ruff`/`black`/`mypy`/`pre-commit`/`pytest-cov`/`types-PyYAML` in `requirements-dev.txt`. Existing RM-01/RM-02 code reformatted to a clean black/ruff baseline (formatting-only, no behavior change); mypy runs advisory-only (does not fail CI) and reports 3 pre-existing findings, recorded as technical debt to be addressed by the owning subsystem when those files are next modified for functional work — not fixed as part of RM-DEV. 63 tests passing, 100% coverage on existing code; ruff, black, pytest, and pre-commit all verified clean on `develop` post-merge. `feature/shared-contracts`, `feature/api`, and `feature/developer-infrastructure` all retained as long-lived subsystem branches. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
 | Primary branches | `develop` (integration branch, protected — no direct commits outside reviewed subsystem merges). `main` (production) does not exist yet — created only at the first full production release, per the Production Release Gate in `CLAUDE.md`. |
 | Branching model | `main` ← `develop` ← long-lived subsystem branches ← optional short-lived ticket branches. `develop` is the active integration branch every subsystem milestone merges into after review; `main` receives merges from `develop` only at a validated production release. See Subsystem Status below for current branches, and `CLAUDE.md`'s "Git Branching & Merge Strategy" for the full model. |
 
@@ -52,7 +52,7 @@ Not Started.
 **Blocking Issues:**
 None. RM-06 depends only on RM-02, which is done and merged into `develop`.
 
-**Note:** RM-DEV is implemented on `feature/developer-infrastructure` and passes all quality gates, but has not yet been through review/merge into `develop` — that is a separate, reviewed integration step, not a blocker for starting RM-06. RM-03 (Database), RM-04 (Event Bus), and other RM-02-only-dependent milestones also remain available in parallel per the roadmap's parallelization guidance.
+**Note:** RM-DEV is now merged into `develop` (Principal Engineer review approved). RM-03 (Database), RM-04 (Event Bus), and other RM-02-only-dependent milestones also remain available in parallel per the roadmap's parallelization guidance.
 
 ---
 
@@ -64,7 +64,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 |---|---|---|
 | RM-01 | **Done** | `feature/api` |
 | RM-02 | **Done** | `feature/shared-contracts` |
-| RM-DEV | **Done** (implemented, pending merge into `develop`) | `feature/developer-infrastructure` |
+| RM-DEV | **Done** (merged into `develop`) | `feature/developer-infrastructure` |
 | RM-06 | Not Started | `feature/threat-engine` |
 | RM-03 | Not Started | `feature/api` |
 | RM-04 | Not Started | `feature/shared-contracts` |
@@ -94,7 +94,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | Camera calibration service | `services/calibration/` | Not Started | `feature/calibration` | Shared contracts |
 | Frontend (Command Center UI) | external repo: `radar-eye-command` | Prototype UI complete, **not integrated** | `feature/frontend-integration` | API service |
 | Deployment bundle / systemd | `deployments/`, `scripts/` | Not Started | `feature/deployment` | All backend subsystems |
-| Developer infrastructure (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow) | (repo-wide) | **Done** (implemented on branch, pending merge into `develop`) | `feature/developer-infrastructure` | — |
+| Developer infrastructure (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow) | (repo-wide) | **Done** (merged to `develop`) | `feature/developer-infrastructure` | — |
 | Testing (validation, regression testing, benchmarking, soak testing, evaluation) | (repo-wide) | Not Started | `feature/testing` | — |
 
 Status values: `Not Started` · `In Progress` · `Blocked` · `In Review` · `Done`.
@@ -119,7 +119,7 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
-| 2026-07-20 | RM-DEV (Developer Infrastructure) implemented on `feature/developer-infrastructure`: ruff + black (required CI checks), mypy (advisory-only, `continue-on-error` in CI, 3 pre-existing findings reported and left unresolved as out of scope), pre-commit hooks (file hygiene + black + ruff; markdown docs excluded since they're under architecture-freeze change control), GitHub Actions CI scoped to PRs/pushes targeting `develop` only (not `feature/*`), pytest-cov coverage reporting with no minimum threshold enforced yet. Existing RM-01/RM-02 code brought to a clean black/ruff baseline (formatting-only). All gates pass; 63 tests still passing. Not yet merged into `develop` — pending review. |
+| 2026-07-20 | RM-DEV (Developer Infrastructure) merged into `develop` (commit `35e4f77`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. Delivers: ruff + black (required CI checks), mypy (advisory-only, `continue-on-error` in CI, 3 pre-existing findings recorded as technical debt for the owning subsystem to resolve when those files are next touched for functional work), pre-commit hooks (file hygiene + black + ruff; markdown docs excluded since they're under architecture-freeze change control), GitHub Actions CI scoped to PRs/pushes targeting `develop` only (not `feature/*`), pytest-cov coverage reporting with no minimum threshold enforced yet, and pinned dev-tool versions (ruff/black/mypy/pre-commit/pytest-cov/types-PyYAML) in `requirements-dev.txt`. Existing RM-01/RM-02 code brought to a clean black/ruff baseline (formatting-only). All gates re-verified clean on `develop` post-merge; 63 tests passing, 100% coverage on existing code. `feature/developer-infrastructure` retained as a long-lived subsystem branch. |
 | 2026-07-20 | Branch hierarchy restructured to `main` (production) / `develop` (integration) per updated governance: `develop` fast-forwarded to absorb the prior `master` history, `feature/api` (RM-01) merged into `develop` (commit `cbcc49c`), 63 tests passing. `main` intentionally not created yet — reserved for the first full production release. `feature/developer-infrastructure` created as a new long-lived subsystem branch (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow), split out from `feature/testing`, which now scopes exclusively to validation/regression/benchmarking/soak testing/evaluation. RM-DEV ownership moved to `feature/developer-infrastructure`. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) merged into `master` (commit `8a39b34`) via a regular merge commit, following Principal Engineer review. Two blocking issues were found and fixed pre-merge: `IncidentStatus` used `CLOSED` and omitted `ARCHIVED` (corrected to match `docs/INCIDENT_LIFECYCLE.md`'s five-state lifecycle: NEW/ACTIVE/ACKNOWLEDGED/RESOLVED/ARCHIVED); `ReviewStatus` used `PENDING` instead of `OPEN` (corrected to match `docs/DATABASE_SCHEMA.md`'s `human_review_items.status` values). `feature/shared-contracts` retained as a long-lived subsystem branch. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) implemented and tested on `feature/shared-contracts`: `shared/constants` (ThreatLevel, DistanceZone, WeaponType, UniformClass, IncidentType, IncidentStatus), `shared/events` (EventEnvelope + 10 typed event aliases matching EVENT_CONTRACTS.md), `shared/schemas` (ApiResponse + threat/incident/review/camera/alarm schemas from FRONTEND_BACKEND_CONTRACTS.md). `conftest.py` and `pytest.ini` added at repo root. 52 tests passing. |
@@ -161,6 +161,7 @@ Note: `docs/TASKS.md` (a different file from root `TASKS.md`) is a candidate for
 
 | Date | Change | By |
 |---|---|---|
+| 2026-07-20 | RM-DEV (Developer Infrastructure) merged into `develop` (`35e4f77`) following Principal Engineer review approval; all quality gates re-verified clean post-merge; Snapshot, Next Immediate Action, Milestone Status, and Subsystem Status updated to reflect the merge | Claude |
 | 2026-07-20 | RM-DEV implemented on `feature/developer-infrastructure` (ruff, black, mypy-advisory, pre-commit, CI, coverage reporting); Snapshot, Next Immediate Action (now RM-06), Milestone Status, and Subsystem Status updated | Claude |
 | 2026-07-20 | Branch hierarchy restructured to main/develop model: `develop` established as the active integration branch (absorbed prior `master` history), RM-01 merged into `develop`, `feature/developer-infrastructure` created and given RM-DEV ownership (split from `feature/testing`); Snapshot, Next Immediate Action, Milestone Status, and Subsystem Status updated accordingly | Claude |
 | 2026-07-19 | RM-02 merged into master (`8a39b34`); Next Immediate Action set to RM-DEV; Snapshot, Subsystem Status, and Recently Completed updated to reflect the merge and the pre-merge review fixes | Claude |
