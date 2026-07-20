@@ -31,28 +31,29 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-02 done and merged to master, RM-DEV next |
-| Repo stage | RM-01 complete on `feature/api` (not yet merged to master). RM-02 complete and **merged into `master`** (commit `8a39b34`): `shared/constants`, `shared/events`, `shared/schemas` fully implemented; 52 tests passing; `conftest.py` + `pytest.ini` added at repo root. `feature/shared-contracts` retained as a long-lived subsystem branch for future work (RM-04 and beyond). All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
-| Primary branch | `master` (protected — no direct commits per `PROJECT_CONTEXT.md`) |
-| Branching model | Long-lived subsystem branches are the primary integration branches (see Subsystem Status below). `develop`'s role is not yet decided — do not treat it as an active integration branch. |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01, RM-02, and RM-DEV merged to `develop`; RM-06 implemented on `feature/threat-engine`, pending review/merge |
+| Repo stage | RM-01, RM-02, and RM-DEV complete and merged into `develop` (commit `35e4f77`). RM-06 (Threat Engine Service) implemented on `feature/threat-engine`: `services/threat_engine/rules.py` (deterministic classification, full THREAT_ENGINE_SPEC.md table), `engine.py` (per-track escalation/de-escalation state machine — 3-frame HIGH debounce, 1s/2s/3s incident/alarm timers, 10s/5s/3s de-escalation hysteresis, FIRE immediate bypass), `types.py` (`EscalationSignal` — see design note below). 113 new tests, 176 total passing repo-wide, 100% coverage; ruff/black/pre-commit clean; mypy advisory-only, 8 findings (3 pre-existing + 5 new `isinstance`-against-generic-alias notes that don't affect runtime behavior). Not yet merged into `develop` — pending Principal Engineer review. `feature/shared-contracts`, `feature/api`, `feature/developer-infrastructure`, and `feature/threat-engine` all retained as long-lived subsystem branches. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
+| Design note (RM-06) | Two design decisions from the RM-06 design review, approved before implementation: (1) rule precedence — FIRE overrides uniform-based rules (a fire hazard applies regardless of allegiance), so `military`/`unknown` + `fire` → HIGH, not ALLY/HUMAN_REVIEW; (2) `AlarmRequestedEvent`'s documented producer (Threat Engine, per EVENT_CONTRACTS.md) has no documented way to obtain the `incident_id` its payload requires, since `IncidentCreatedEvent` is produced by Incident Service (RM-07, not yet built) and Threat Engine isn't a documented consumer of it. RM-06 therefore emits an internal `EscalationSignal` (`INCIDENT_ELIGIBLE`/`ALARM_ELIGIBLE`, no `incident_id`) instead of constructing literal `IncidentCreatedEvent`/`AlarmRequestedEvent` instances. The real event assembly and Threat Engine ↔ Incident Service hand-off still needs to be designed once RM-04 (event bus) and RM-07 (Incident Service) exist — not an architecture change, but an open integration point to revisit then. |
+| Primary branches | `develop` (integration branch, protected — no direct commits outside reviewed subsystem merges). `main` (production) does not exist yet — created only at the first full production release, per the Production Release Gate in `CLAUDE.md`. |
+| Branching model | `main` ← `develop` ← long-lived subsystem branches ← optional short-lived ticket branches. `develop` is the active integration branch every subsystem milestone merges into after review; `main` receives merges from `develop` only at a validated production release. See Subsystem Status below for current branches, and `CLAUDE.md`'s "Git Branching & Merge Strategy" for the full model. |
 
 ---
 
 ## Next Immediate Action
 
 **Current Milestone:**
-RM-DEV — Developer Infrastructure (see `docs/IMPLEMENTATION_ROADMAP.md`)
+RM-03 — Database Migrations & Persistence Layer (see `docs/IMPLEMENTATION_ROADMAP.md`)
 
 **Owning Branch:**
-`feature/testing`
+`feature/api`
 
 **Status:**
 Not Started.
 
 **Blocking Issues:**
-None. RM-DEV depends only on RM-02, which is now done and merged into master.
+None. RM-03 depends on RM-01 and RM-02, both done and merged into `develop`.
 
-**Note:** RM-06 (Threat Engine Service) also depends only on RM-02 and remains available to start in parallel on `feature/threat-engine` per the roadmap's parallelization guidance — RM-DEV is called out here only because it's the next explicitly sequenced item, not because RM-06 is blocked.
+**Note:** RM-06 is implemented on `feature/threat-engine` and passes all quality gates, but is pending Principal Engineer review/merge into `develop` — that review step is a separate action, not a blocker for starting RM-03. RM-04 (Event Bus) also remains available in parallel per the roadmap's parallelization guidance.
 
 ---
 
@@ -64,8 +65,8 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 |---|---|---|
 | RM-01 | **Done** | `feature/api` |
 | RM-02 | **Done** | `feature/shared-contracts` |
-| RM-DEV | Not Started | `feature/testing` |
-| RM-06 | Not Started | `feature/threat-engine` |
+| RM-DEV | **Done** (merged into `develop`) | `feature/developer-infrastructure` |
+| RM-06 | **Done** (implemented, pending review/merge into `develop`) | `feature/threat-engine` |
 | RM-03 | Not Started | `feature/api` |
 | RM-04 | Not Started | `feature/shared-contracts` |
 | RM-07 | Not Started | `feature/incident-service` |
@@ -85,16 +86,17 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 
 | Subsystem | Path | Status | Branch | Depends On |
 |---|---|---|---|---|
-| API service (FastAPI, persistence, event bus, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01 done) | `feature/api` | Shared contracts |
-| Shared contracts (events, schemas, constants) | `shared/` | **Done** (merged to master) | `feature/shared-contracts` | — |
+| API service (FastAPI, persistence, event bus, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01 done, merged to `develop`) | `feature/api` | Shared contracts |
+| Shared contracts (events, schemas, constants) | `shared/` | **Done** (merged to `develop`) | `feature/shared-contracts` | — |
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
-| Threat engine (rule-based scoring) | `services/threat_engine/` | Not Started | `feature/threat-engine` | Shared contracts |
+| Threat engine (rule-based scoring) | `services/threat_engine/` | **Done** (implemented on branch, pending merge into `develop`) | `feature/threat-engine` | Shared contracts |
 | Incident service (also owns the Alarm Service until it warrants its own subsystem — see RM-10) | `services/incident_service/` | Not Started | `feature/incident-service` | Threat engine, API service |
 | Recording / evidence service | `services/recording/` | Not Started | `feature/recording` | Incident service |
 | Camera calibration service | `services/calibration/` | Not Started | `feature/calibration` | Shared contracts |
 | Frontend (Command Center UI) | external repo: `radar-eye-command` | Prototype UI complete, **not integrated** | `feature/frontend-integration` | API service |
 | Deployment bundle / systemd | `deployments/`, `scripts/` | Not Started | `feature/deployment` | All backend subsystems |
-| Developer tooling / validation & benchmarking | (repo-wide) | Not Started | `feature/testing` | — |
+| Developer infrastructure (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow) | (repo-wide) | **Done** (merged to `develop`) | `feature/developer-infrastructure` | — |
+| Testing (validation, regression testing, benchmarking, soak testing, evaluation) | (repo-wide) | Not Started | `feature/testing` | — |
 
 Status values: `Not Started` · `In Progress` · `Blocked` · `In Review` · `Done`.
 
@@ -118,6 +120,9 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
+| 2026-07-20 | RM-06 (Threat Engine Service) implemented on `feature/threat-engine`, per an explicit design review approved before implementation began. Delivers `services/threat_engine`: `rules.py` (deterministic classify() covering every THREAT_ENGINE_SPEC.md table row), `engine.py` (per-track escalation/de-escalation state machine: 3-frame HIGH debounce, 1s/2s/3s incident/alarm timers, 10s/5s/3s de-escalation hysteresis, FIRE immediate bypass), `types.py` (`EscalationSignal` — see Snapshot's Design Note). 113 new tests (exhaustive rule table + precedence + determinism; engine timers/debounce/de-escalation/FIRE/HUMAN_REVIEW/track-isolation), 176 total passing repo-wide, 100% coverage. Not yet merged into `develop` — pending Principal Engineer review. |
+| 2026-07-20 | RM-DEV (Developer Infrastructure) merged into `develop` (commit `35e4f77`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. Delivers: ruff + black (required CI checks), mypy (advisory-only, `continue-on-error` in CI, 3 pre-existing findings recorded as technical debt for the owning subsystem to resolve when those files are next touched for functional work), pre-commit hooks (file hygiene + black + ruff; markdown docs excluded since they're under architecture-freeze change control), GitHub Actions CI scoped to PRs/pushes targeting `develop` only (not `feature/*`), pytest-cov coverage reporting with no minimum threshold enforced yet, and pinned dev-tool versions (ruff/black/mypy/pre-commit/pytest-cov/types-PyYAML) in `requirements-dev.txt`. Existing RM-01/RM-02 code brought to a clean black/ruff baseline (formatting-only). All gates re-verified clean on `develop` post-merge; 63 tests passing, 100% coverage on existing code. `feature/developer-infrastructure` retained as a long-lived subsystem branch. |
+| 2026-07-20 | Branch hierarchy restructured to `main` (production) / `develop` (integration) per updated governance: `develop` fast-forwarded to absorb the prior `master` history, `feature/api` (RM-01) merged into `develop` (commit `cbcc49c`), 63 tests passing. `main` intentionally not created yet — reserved for the first full production release. `feature/developer-infrastructure` created as a new long-lived subsystem branch (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow), split out from `feature/testing`, which now scopes exclusively to validation/regression/benchmarking/soak testing/evaluation. RM-DEV ownership moved to `feature/developer-infrastructure`. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) merged into `master` (commit `8a39b34`) via a regular merge commit, following Principal Engineer review. Two blocking issues were found and fixed pre-merge: `IncidentStatus` used `CLOSED` and omitted `ARCHIVED` (corrected to match `docs/INCIDENT_LIFECYCLE.md`'s five-state lifecycle: NEW/ACTIVE/ACKNOWLEDGED/RESOLVED/ARCHIVED); `ReviewStatus` used `PENDING` instead of `OPEN` (corrected to match `docs/DATABASE_SCHEMA.md`'s `human_review_items.status` values). `feature/shared-contracts` retained as a long-lived subsystem branch. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) implemented and tested on `feature/shared-contracts`: `shared/constants` (ThreatLevel, DistanceZone, WeaponType, UniformClass, IncidentType, IncidentStatus), `shared/events` (EventEnvelope + 10 typed event aliases matching EVENT_CONTRACTS.md), `shared/schemas` (ApiResponse + threat/incident/review/camera/alarm schemas from FRONTEND_BACKEND_CONTRACTS.md). `conftest.py` and `pytest.ini` added at repo root. 52 tests passing. |
 | 2026-07-19 | RM-01 (Repository & Runtime Foundation) implemented, tested (11 passing tests), merged into `feature/api` |
@@ -132,6 +137,11 @@ Subsystem-level blockers only.
 
 Running log of build-time findings that future contributors (human or AI) need but that don't belong in an ADR or spec. Newest first. Keep entries short. Move anything that becomes a durable architecture decision into an ADR instead of leaving it here.
 
+- 2026-07-20 — `services/__init__.py` was missing since the original bootstrap (only its subdirectories had `__init__.py`); added it during RM-06 since it's needed to import `services.threat_engine` as an explicit package. Applies to the whole `services/` tree, not just threat_engine.
+- 2026-07-20 — mypy's advisory findings now include 5 `isinstance(x, EventEnvelope[SomePayload])` notes ("Parameterized generics cannot be used with class or instance checks") from `tests/services/threat_engine/test_engine.py`. This is a static-analysis-only limitation — Pydantic's generic models make `isinstance` work correctly at runtime (all 176 tests pass) — not a real type error. Left as-is per RM-DEV's advisory-only mypy policy.
+- 2026-07-20 — `requirements-dev.txt`'s dev/quality tools (ruff, black, mypy, pre-commit, types-PyYAML) are pinned to exact versions rather than `>=`, so CI, pre-commit, and local dev installs can't drift apart. `ruff`/`black` pins match the versions pinned in `.pre-commit-config.yaml` exactly. Runtime deps in `requirements.txt` and the RM-01-era `pytest`/`pytest-asyncio`/`httpx` entries remain `>=` — unchanged, out of scope for this update.
+- 2026-07-20 — Pre-commit's generic file-hygiene hooks (trailing-whitespace, end-of-file-fixer) initially reformatted every architecture/governance markdown file repo-wide on first run. That was reverted, and `.pre-commit-config.yaml` now excludes all `*.md` files repo-wide (`exclude: '\.md$'`) — those docs are under architecture-freeze change control and must never be touched by generic formatting tooling.
+- 2026-07-20 — `master` is superseded by `develop` as the active integration branch (`main` reserved for production releases; not created yet). Any doc, script, or CI config still referencing `master` as the branch to build against should be treated as stale and pointed at `develop` instead.
 - 2026-07-19 — This document previously carried its own "Roadmap Progress" table (RM-01–RM-07) sourced from `docs/TASKS.md`'s `RE-xxx` ranges. That table used the same `RM-XX` IDs as the actual, approved roadmap to mean entirely different milestones (e.g. its RM-01 was "AI model optimization," not "Repository & Runtime Foundation," which is what was actually built). It has been replaced by a reference to `docs/IMPLEMENTATION_ROADMAP.md`. Do not recreate a second milestone definition in this file.
 - 2026-07-19 — `feature/backend-foundation` and the original `feature/rm-01-repository-runtime-foundation` branch have been retired; RM-01's work now lives on `feature/api`.
 - 2026-07-19 — Except for `apps/api/`, every `apps/*` and `services/*` package still contains only `__init__.py`. Treat any subsystem not listed as "In Progress" or later above as literally empty before starting work.
@@ -155,6 +165,10 @@ Note: `docs/TASKS.md` (a different file from root `TASKS.md`) is a candidate for
 
 | Date | Change | By |
 |---|---|---|
+| 2026-07-20 | RM-06 (Threat Engine Service) implemented on `feature/threat-engine` following an approved design review (fire-precedence and AlarmRequestedEvent/incident_id design decisions); Snapshot, Next Immediate Action (now RM-03), Milestone Status, and Subsystem Status updated | Claude |
+| 2026-07-20 | RM-DEV (Developer Infrastructure) merged into `develop` (`35e4f77`) following Principal Engineer review approval; all quality gates re-verified clean post-merge; Snapshot, Next Immediate Action, Milestone Status, and Subsystem Status updated to reflect the merge | Claude |
+| 2026-07-20 | RM-DEV implemented on `feature/developer-infrastructure` (ruff, black, mypy-advisory, pre-commit, CI, coverage reporting); Snapshot, Next Immediate Action (now RM-06), Milestone Status, and Subsystem Status updated | Claude |
+| 2026-07-20 | Branch hierarchy restructured to main/develop model: `develop` established as the active integration branch (absorbed prior `master` history), RM-01 merged into `develop`, `feature/developer-infrastructure` created and given RM-DEV ownership (split from `feature/testing`); Snapshot, Next Immediate Action, Milestone Status, and Subsystem Status updated accordingly | Claude |
 | 2026-07-19 | RM-02 merged into master (`8a39b34`); Next Immediate Action set to RM-DEV; Snapshot, Subsystem Status, and Recently Completed updated to reflect the merge and the pre-merge review fixes | Claude |
 | 2026-07-19 | RM-02 complete: updated Snapshot, Next Immediate Action, Milestone Status, Subsystem Status, Recently Completed | Antigravity |
 | 2026-07-18 | Initial version created | Claude |

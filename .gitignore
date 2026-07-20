@@ -15,6 +15,19 @@ logs/
 # Environment
 .env
 .env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .vscode/
