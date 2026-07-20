@@ -1,0 +1,66 @@
+"""Incident-related API schemas.
+
+Source: docs/FRONTEND_BACKEND_CONTRACTS.md
+  - Incident Center section (GET /incidents, GET /incidents/{id})
+  - Frontend Event Models / IncidentCreatedEvent section
+  - /ws/incidents WebSocket channel
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel
+
+from shared.constants.incident_types import IncidentStatus, IncidentType
+from shared.constants.threat_levels import ThreatLevel
+
+
+class IncidentSchema(BaseModel):
+    """Full incident representation returned by ``GET /incidents/{incident_id}``.
+
+    Used in Incident Center screens and evidence workflows.
+    """
+
+    incident_id: uuid.UUID
+    camera_id: uuid.UUID
+    track_id: int
+    incident_type: IncidentType
+    threat_level: ThreatLevel
+    status: IncidentStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class IncidentSummarySchema(BaseModel):
+    """Lightweight incident summary for list responses (``GET /incidents``).
+
+    Omits timestamps to reduce payload size in list views.
+    """
+
+    incident_id: uuid.UUID
+    camera_id: uuid.UUID
+    threat_level: ThreatLevel
+    status: IncidentStatus
+
+
+class IncidentCreatedSchema(BaseModel):
+    """WebSocket message body for ``/ws/incidents`` — IncidentCreatedEvent.
+
+    Matches the "Frontend Event Models / IncidentCreatedEvent" shape in
+    FRONTEND_BACKEND_CONTRACTS.md.
+    """
+
+    incident_id: uuid.UUID
+    camera_id: uuid.UUID
+    track_id: int
+    status: IncidentStatus
+
+
+class IncidentUpdatedSchema(BaseModel):
+    """WebSocket message body for ``/ws/incidents`` — IncidentUpdatedEvent."""
+
+    incident_id: uuid.UUID
+    old_status: IncidentStatus
+    new_status: IncidentStatus
