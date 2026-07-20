@@ -57,6 +57,21 @@ def test_missing_db_password_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         load_settings()
 
 
+def test_encryption_key_comes_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RADAR_EYE_ENCRYPTION_KEY", "custom-key-value")
+
+    settings = load_settings()
+
+    assert settings.encryption_key.get_secret_value() == "custom-key-value"
+
+
+def test_missing_encryption_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RADAR_EYE_ENCRYPTION_KEY", raising=False)
+
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
     second = get_settings()

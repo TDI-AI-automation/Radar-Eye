@@ -60,6 +60,7 @@ class EnvSettings(BaseSettings):
 
     db_user: str
     db_password: SecretStr
+    encryption_key: SecretStr
     log_level: str = "INFO"
 
 
@@ -68,6 +69,7 @@ class Settings(BaseModel):
     database: DatabaseSettings
     recording: RecordingSettings
     threat_engine: ThreatEngineSettings
+    encryption_key: SecretStr
     log_level: str
 
     @property
@@ -105,6 +107,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         database=database,
         recording=RecordingSettings(**raw.get("recording", {})),
         threat_engine=ThreatEngineSettings(**raw.get("threat_engine", {})),
+        encryption_key=env.encryption_key,
         log_level=env.log_level,
     )
 
