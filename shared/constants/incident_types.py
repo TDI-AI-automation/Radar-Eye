@@ -26,7 +26,7 @@ class IncidentStatus(str, Enum):
     """Lifecycle state of an incident.
 
     Transitions (per docs/INCIDENT_LIFECYCLE.md):
-      NEW -> ACTIVE -> ACKNOWLEDGED -> CLOSED
+      NEW -> ACTIVE -> ACKNOWLEDGED -> RESOLVED -> ARCHIVED
     """
 
     NEW = "NEW"
@@ -38,5 +38,9 @@ class IncidentStatus(str, Enum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
     """An operator has reviewed the incident."""
 
-    CLOSED = "CLOSED"
-    """Incident resolved — track lost >10 s or operator-closed."""
+    RESOLVED = "RESOLVED"
+    """Threat condition no longer exists — track lost >10 s or operator-closed."""
+
+    ARCHIVED = "ARCHIVED"
+    """Historical incident retained for audit and investigation, per the
+    retention workflow. Terminal state — exits only via record deletion."""

@@ -186,17 +186,18 @@ class TestHumanReviewSchema:
             reason="uniform_unknown",
         )
         restored = _round_trip(schema)
-        assert restored.status == "PENDING"
+        assert restored.status == "OPEN"
         assert restored.reason == "uniform_unknown"
 
-    def test_default_status_is_pending(self) -> None:
+    def test_default_status_is_open(self) -> None:
+        """Per docs/DATABASE_SCHEMA.md, human_review_items' initial status is OPEN."""
         schema = HumanReviewSchema(
             review_item_id=_REVIEW_ID,
             camera_id=_CAMERA_ID,
             track_id=1,
             reason="uniform_unknown",
         )
-        assert schema.status == "PENDING"
+        assert schema.status == "OPEN"
 
 
 # ---------------------------------------------------------------------------

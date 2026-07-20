@@ -119,7 +119,8 @@ class TestIncidentType:
 
 class TestIncidentStatus:
     def test_all_lifecycle_states_present(self) -> None:
-        expected = {"NEW", "ACTIVE", "ACKNOWLEDGED", "CLOSED"}
+        """Full lifecycle per docs/INCIDENT_LIFECYCLE.md: five states, not four."""
+        expected = {"NEW", "ACTIVE", "ACKNOWLEDGED", "RESOLVED", "ARCHIVED"}
         actual = {member.value for member in IncidentStatus}
         assert actual == expected
 

@@ -16,8 +16,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-ReviewStatus = Literal["PENDING", "CONFIRMED_MILITARY", "CONFIRMED_CIVILIAN", "ESCALATED", "DISMISSED"]
-"""Valid states for a human review item (ADR-023 operator actions)."""
+ReviewStatus = Literal["OPEN", "CONFIRMED_MILITARY", "CONFIRMED_CIVILIAN", "ESCALATED", "DISMISSED"]
+"""Valid states for a human review item (docs/DATABASE_SCHEMA.md — human_review_items
+Status Values; ADR-023 operator actions)."""
 
 
 class HumanReviewSchema(BaseModel):
@@ -33,4 +34,4 @@ class HumanReviewSchema(BaseModel):
     track_id: int
     reason: str
     """Why this item was queued (e.g. "uniform_unknown")."""
-    status: ReviewStatus = "PENDING"
+    status: ReviewStatus = "OPEN"
