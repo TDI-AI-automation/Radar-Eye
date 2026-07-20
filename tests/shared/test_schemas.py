@@ -16,7 +16,14 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from shared.constants import DistanceZone, IncidentStatus, IncidentType, ThreatLevel, UniformClass, WeaponType
+from shared.constants import (
+    DistanceZone,
+    IncidentStatus,
+    IncidentType,
+    ThreatLevel,
+    UniformClass,
+    WeaponType,
+)
 from shared.schemas import (
     ActiveThreatSchema,
     AlarmSchema,
