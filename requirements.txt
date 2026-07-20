@@ -8,3 +8,4 @@ asyncpg>=0.29
 alembic>=1.13
 cryptography>=42.0
 python-json-logger>=2.0
+numpy>=1.26
