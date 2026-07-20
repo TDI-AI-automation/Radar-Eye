@@ -67,8 +67,8 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 
 | Milestone | Status | Owning Branch |
 |---|---|---|
-| RM-01 | **Done** | `feature/api` |
-| RM-02 | **Done** | `feature/shared-contracts` |
+| RM-01 | **Done** (merged into `develop`) | `feature/api` |
+| RM-02 | **Done** (merged into `develop`) | `feature/shared-contracts` |
 | RM-DEV | **Done** (merged into `develop`) | `feature/developer-infrastructure` |
 | RM-06 | **Done** (merged into `develop`) | `feature/threat-engine` |
 | RM-03 | **Done** (merged into `develop`) | `feature/api` |
@@ -145,6 +145,7 @@ Subsystem-level blockers only.
 
 Running log of build-time findings that future contributors (human or AI) need but that don't belong in an ADR or spec. Newest first. Keep entries short. Move anything that becomes a durable architecture decision into an ADR instead of leaving it here.
 
+- 2026-07-20 — Milestone Status's RM-01 and RM-02 rows read as "**Done**" with no branch qualifier, unlike every later row's "**Done** (merged into `develop`)" -- ambiguous, since it looked like they might not be in `develop`. Verified against source: both merge commits (`cbcc49c` for RM-01, `8a39b34` for RM-02, the latter originally merged into `master` before `develop` absorbed `master`'s history during the branch restructuring) are ancestors of `develop`, and `shared/` (RM-02's deliverable) is present there. Not a real gap -- corrected the wording for consistency.
 - 2026-07-20 — pytest hit a hard collection error ("import file mismatch") once a second file literally named `test_service.py` appeared under `tests/` without an enclosing `__init__.py` chain (`tests/services/calibration/test_service.py` vs. `tests/services/incident_service/test_service.py`) -- pytest's default "prepend" import mode names modules by basename alone in that layout, so the two collided the moment both were collected in one run (each file passed fine on its own). Fixed by adding `addopts = --import-mode=importlib` to `pytest.ini`, which resolves modules by full path instead. Will recur for any future service that names its test file `test_service.py` (a very likely name) if this config regresses -- verify `pytest --cov` still collects and runs the full suite (not just individual files) after adding one.
 - 2026-07-20 — Postgres's `func.now()` (used for `server_default` on `created_at` columns, `apps/api/app/models/base.py`) returns *transaction start time*, not per-statement time -- two inserts in the same uncommitted transaction get an identical `created_at`. This broke a test relying on "latest by `created_at` wins" ordering (RM-05's `get_latest_for_camera()`) until the test was fixed to `commit()` between the two inserts, simulating the separate requests/transactions real usage would have. Not an implementation bug -- watch for it in any future test that creates >1 row of the same append-only-history table without committing in between and then asserts on `created_at` ordering.
 - 2026-07-20 — mypy hit a hard error ("Duplicate module named conftest") once a second file literally named `conftest.py` appeared under `tests/` without an enclosing `__init__.py` chain (`tests/services/incident_service/conftest.py` vs. root `conftest.py`) — unlike advisory findings, this stops mypy from analyzing anything at all. Fixed by adding `mypy_path`, `explicit_package_bases`, and `namespace_packages` to `pyproject.toml`'s `[tool.mypy]`, so module names are computed from full file paths. Will recur for any future service that adds its own test `conftest.py` if this config regresses — verify `mypy .` still runs clean (no hard errors, only the accepted advisory findings) after adding one.
