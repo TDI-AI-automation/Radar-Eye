@@ -48,7 +48,5 @@ class EventEnvelope(BaseModel, Generic[P]):
     schema_version: int = Field(default=1, ge=1)
     event_type: str
     source: str
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(tz=timezone.utc)
-    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     payload: P
