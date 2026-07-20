@@ -31,10 +31,10 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-02 done and merged to master, RM-DEV next |
-| Repo stage | RM-01 complete on `feature/api` (not yet merged to master). RM-02 complete and **merged into `master`** (commit `8a39b34`): `shared/constants`, `shared/events`, `shared/schemas` fully implemented; 52 tests passing; `conftest.py` + `pytest.ini` added at repo root. `feature/shared-contracts` retained as a long-lived subsystem branch for future work (RM-04 and beyond). All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
-| Primary branch | `master` (protected — no direct commits per `PROJECT_CONTEXT.md`) |
-| Branching model | Long-lived subsystem branches are the primary integration branches (see Subsystem Status below). `develop`'s role is not yet decided — do not treat it as an active integration branch. |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 and RM-02 both done and merged to `develop`, RM-DEV next |
+| Repo stage | RM-01 complete on `feature/api` and **merged into `develop`** (commit `cbcc49c`). RM-02 complete on `feature/shared-contracts` and merged into `develop`: `shared/constants`, `shared/events`, `shared/schemas` fully implemented; `apps/api` app factory, settings, logging, and async DB engine/session setup implemented. 63 tests passing on `develop`. `feature/shared-contracts` and `feature/api` both retained as long-lived subsystem branches for future work. `feature/developer-infrastructure` created as a new long-lived subsystem branch, split out from `feature/testing`. All other `apps/*` and `services/*` packages remain stub `__init__.py` only — do not assume partial implementation exists anywhere else. |
+| Primary branches | `develop` (integration branch, protected — no direct commits outside reviewed subsystem merges). `main` (production) does not exist yet — created only at the first full production release, per the Production Release Gate in `CLAUDE.md`. |
+| Branching model | `main` ← `develop` ← long-lived subsystem branches ← optional short-lived ticket branches. `develop` is the active integration branch every subsystem milestone merges into after review; `main` receives merges from `develop` only at a validated production release. See Subsystem Status below for current branches, and `CLAUDE.md`'s "Git Branching & Merge Strategy" for the full model. |
 
 ---
 
@@ -44,13 +44,13 @@ This document reflects the **operational implementation state** as last recorded
 RM-DEV — Developer Infrastructure (see `docs/IMPLEMENTATION_ROADMAP.md`)
 
 **Owning Branch:**
-`feature/testing`
+`feature/developer-infrastructure`
 
 **Status:**
 Not Started.
 
 **Blocking Issues:**
-None. RM-DEV depends only on RM-02, which is now done and merged into master.
+None. RM-DEV depends only on RM-02, which is now done and merged into `develop`.
 
 **Note:** RM-06 (Threat Engine Service) also depends only on RM-02 and remains available to start in parallel on `feature/threat-engine` per the roadmap's parallelization guidance — RM-DEV is called out here only because it's the next explicitly sequenced item, not because RM-06 is blocked.
 
@@ -64,7 +64,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 |---|---|---|
 | RM-01 | **Done** | `feature/api` |
 | RM-02 | **Done** | `feature/shared-contracts` |
-| RM-DEV | Not Started | `feature/testing` |
+| RM-DEV | Not Started | `feature/developer-infrastructure` |
 | RM-06 | Not Started | `feature/threat-engine` |
 | RM-03 | Not Started | `feature/api` |
 | RM-04 | Not Started | `feature/shared-contracts` |
@@ -85,8 +85,8 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 
 | Subsystem | Path | Status | Branch | Depends On |
 |---|---|---|---|---|
-| API service (FastAPI, persistence, event bus, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01 done) | `feature/api` | Shared contracts |
-| Shared contracts (events, schemas, constants) | `shared/` | **Done** (merged to master) | `feature/shared-contracts` | — |
+| API service (FastAPI, persistence, event bus, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01 done, merged to `develop`) | `feature/api` | Shared contracts |
+| Shared contracts (events, schemas, constants) | `shared/` | **Done** (merged to `develop`) | `feature/shared-contracts` | — |
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
 | Threat engine (rule-based scoring) | `services/threat_engine/` | Not Started | `feature/threat-engine` | Shared contracts |
 | Incident service (also owns the Alarm Service until it warrants its own subsystem — see RM-10) | `services/incident_service/` | Not Started | `feature/incident-service` | Threat engine, API service |
@@ -94,7 +94,8 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | Camera calibration service | `services/calibration/` | Not Started | `feature/calibration` | Shared contracts |
 | Frontend (Command Center UI) | external repo: `radar-eye-command` | Prototype UI complete, **not integrated** | `feature/frontend-integration` | API service |
 | Deployment bundle / systemd | `deployments/`, `scripts/` | Not Started | `feature/deployment` | All backend subsystems |
-| Developer tooling / validation & benchmarking | (repo-wide) | Not Started | `feature/testing` | — |
+| Developer infrastructure (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow) | (repo-wide) | Not Started | `feature/developer-infrastructure` | — |
+| Testing (validation, regression testing, benchmarking, soak testing, evaluation) | (repo-wide) | Not Started | `feature/testing` | — |
 
 Status values: `Not Started` · `In Progress` · `Blocked` · `In Review` · `Done`.
 
@@ -118,6 +119,7 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
+| 2026-07-20 | Branch hierarchy restructured to `main` (production) / `develop` (integration) per updated governance: `develop` fast-forwarded to absorb the prior `master` history, `feature/api` (RM-01) merged into `develop` (commit `cbcc49c`), 63 tests passing. `main` intentionally not created yet — reserved for the first full production release. `feature/developer-infrastructure` created as a new long-lived subsystem branch (formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow), split out from `feature/testing`, which now scopes exclusively to validation/regression/benchmarking/soak testing/evaluation. RM-DEV ownership moved to `feature/developer-infrastructure`. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) merged into `master` (commit `8a39b34`) via a regular merge commit, following Principal Engineer review. Two blocking issues were found and fixed pre-merge: `IncidentStatus` used `CLOSED` and omitted `ARCHIVED` (corrected to match `docs/INCIDENT_LIFECYCLE.md`'s five-state lifecycle: NEW/ACTIVE/ACKNOWLEDGED/RESOLVED/ARCHIVED); `ReviewStatus` used `PENDING` instead of `OPEN` (corrected to match `docs/DATABASE_SCHEMA.md`'s `human_review_items.status` values). `feature/shared-contracts` retained as a long-lived subsystem branch. |
 | 2026-07-19 | RM-02 (Shared Contracts Package) implemented and tested on `feature/shared-contracts`: `shared/constants` (ThreatLevel, DistanceZone, WeaponType, UniformClass, IncidentType, IncidentStatus), `shared/events` (EventEnvelope + 10 typed event aliases matching EVENT_CONTRACTS.md), `shared/schemas` (ApiResponse + threat/incident/review/camera/alarm schemas from FRONTEND_BACKEND_CONTRACTS.md). `conftest.py` and `pytest.ini` added at repo root. 52 tests passing. |
 | 2026-07-19 | RM-01 (Repository & Runtime Foundation) implemented, tested (11 passing tests), merged into `feature/api` |
@@ -132,6 +134,7 @@ Subsystem-level blockers only.
 
 Running log of build-time findings that future contributors (human or AI) need but that don't belong in an ADR or spec. Newest first. Keep entries short. Move anything that becomes a durable architecture decision into an ADR instead of leaving it here.
 
+- 2026-07-20 — `master` is superseded by `develop` as the active integration branch (`main` reserved for production releases; not created yet). Any doc, script, or CI config still referencing `master` as the branch to build against should be treated as stale and pointed at `develop` instead.
 - 2026-07-19 — This document previously carried its own "Roadmap Progress" table (RM-01–RM-07) sourced from `docs/TASKS.md`'s `RE-xxx` ranges. That table used the same `RM-XX` IDs as the actual, approved roadmap to mean entirely different milestones (e.g. its RM-01 was "AI model optimization," not "Repository & Runtime Foundation," which is what was actually built). It has been replaced by a reference to `docs/IMPLEMENTATION_ROADMAP.md`. Do not recreate a second milestone definition in this file.
 - 2026-07-19 — `feature/backend-foundation` and the original `feature/rm-01-repository-runtime-foundation` branch have been retired; RM-01's work now lives on `feature/api`.
 - 2026-07-19 — Except for `apps/api/`, every `apps/*` and `services/*` package still contains only `__init__.py`. Treat any subsystem not listed as "In Progress" or later above as literally empty before starting work.
@@ -155,6 +158,7 @@ Note: `docs/TASKS.md` (a different file from root `TASKS.md`) is a candidate for
 
 | Date | Change | By |
 |---|---|---|
+| 2026-07-20 | Branch hierarchy restructured to main/develop model: `develop` established as the active integration branch (absorbed prior `master` history), RM-01 merged into `develop`, `feature/developer-infrastructure` created and given RM-DEV ownership (split from `feature/testing`); Snapshot, Next Immediate Action, Milestone Status, and Subsystem Status updated accordingly | Claude |
 | 2026-07-19 | RM-02 merged into master (`8a39b34`); Next Immediate Action set to RM-DEV; Snapshot, Subsystem Status, and Recently Completed updated to reflect the merge and the pre-merge review fixes | Claude |
 | 2026-07-19 | RM-02 complete: updated Snapshot, Next Immediate Action, Milestone Status, Subsystem Status, Recently Completed | Antigravity |
 | 2026-07-18 | Initial version created | Claude |
