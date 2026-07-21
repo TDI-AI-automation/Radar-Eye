@@ -4,6 +4,12 @@ Source:
   - docs/ADR_INDEX.md (ADR-012: Hardware-agnostic Alarm Protocol, ADR-026: Alarm Trigger Policy)
   - docs/IMPLEMENTATION_ROADMAP.md (RM-10 acceptance criteria)
   - docs/THREAT_ENGINE_SPEC.md (Alarm eligibility: HIGH only, all others excluded)
+
+trigger() is exercised directly here, simulating the future Threat Engine
+Runtime Adapter (RM-11), per the RM-10 architectural review (Repository
+Integration Audit) that replaced the original AlarmRequestedEvent bus
+subscription with a direct in-process entry point -- the same shape as
+IncidentService.handle_escalation() (RM-07).
 """
 
 from __future__ import annotations
@@ -24,32 +30,26 @@ from services.incident_service.alarm import (
 )
 from shared.constants.threat_levels import ThreatLevel
 from shared.events.bus import InProcessEventBus
-from shared.events.payloads import AlarmRequestedPayload
-from shared.events.types import AlarmRequestedEvent
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _alarm_request(
+def _alarm_kwargs(
     *,
     incident_id: uuid.UUID | None = None,
     camera_id: uuid.UUID | None = None,
     track_id: int = 1,
     threat_level: ThreatLevel = ThreatLevel.HIGH,
     reason: str = "sustained_high_threat",
-) -> AlarmRequestedEvent:
-    return AlarmRequestedEvent(
-        event_type="AlarmRequestedEvent",
-        source="threat_engine",
-        timestamp=T0,
-        payload=AlarmRequestedPayload(
-            incident_id=incident_id or uuid.uuid4(),
-            camera_id=camera_id or uuid.uuid4(),
-            track_id=track_id,
-            threat_level=threat_level,
-            reason=reason,
-        ),
-    )
+) -> dict:
+    return {
+        "incident_id": incident_id or uuid.uuid4(),
+        "camera_id": camera_id or uuid.uuid4(),
+        "track_id": track_id,
+        "threat_level": threat_level,
+        "reason": reason,
+        "timestamp": T0,
+    }
 
 
 def _collecting_handler(sink: list):
@@ -65,14 +65,14 @@ class TestAlarmThreatFiltering:
 
     async def test_high_threat_triggers_alarm(self) -> None:
         service = AlarmService()
-        event = _alarm_request(threat_level=ThreatLevel.HIGH)
+        kwargs = _alarm_kwargs(threat_level=ThreatLevel.HIGH)
 
-        record = await service.on_alarm_requested(event)
+        record = await service.trigger(**kwargs)
 
         assert record is not None
         assert record.state is AlarmState.ACTIVE
         assert record.threat_level is ThreatLevel.HIGH
-        assert record.incident_id == event.payload.incident_id
+        assert record.incident_id == kwargs["incident_id"]
         assert len(service.get_active_alarms()) == 1
 
         mock_adapter: MockAlarmAdapter = service.adapter  # type: ignore[assignment]
@@ -91,9 +91,9 @@ class TestAlarmThreatFiltering:
     )
     async def test_non_high_threat_levels_are_rejected(self, threat_level: ThreatLevel) -> None:
         service = AlarmService()
-        event = _alarm_request(threat_level=threat_level)
+        kwargs = _alarm_kwargs(threat_level=threat_level)
 
-        record = await service.on_alarm_requested(event)
+        record = await service.trigger(**kwargs)
 
         assert record is None
         assert len(service.get_active_alarms()) == 0
@@ -107,11 +107,11 @@ class TestAlarmIdempotency:
     async def test_repeated_alarm_request_returns_existing_active_record(self) -> None:
         service = AlarmService()
         incident_id = uuid.uuid4()
-        event1 = _alarm_request(incident_id=incident_id)
-        event2 = _alarm_request(incident_id=incident_id)
+        kwargs1 = _alarm_kwargs(incident_id=incident_id)
+        kwargs2 = _alarm_kwargs(incident_id=incident_id)
 
-        rec1 = await service.on_alarm_requested(event1)
-        rec2 = await service.on_alarm_requested(event2)
+        rec1 = await service.trigger(**kwargs1)
+        rec2 = await service.trigger(**kwargs2)
 
         assert rec1 is not None and rec2 is not None
         assert rec1.alarm_id == rec2.alarm_id
@@ -125,11 +125,11 @@ class TestAlarmIdempotency:
 class TestManualSilenceAndClear:
     async def test_silence_specific_incident_alarm(self) -> None:
         service = AlarmService()
-        event = _alarm_request()
-        rec = await service.on_alarm_requested(event)
+        kwargs = _alarm_kwargs()
+        rec = await service.trigger(**kwargs)
         assert rec is not None
 
-        silenced = await service.silence(event.payload.incident_id)
+        silenced = await service.silence(kwargs["incident_id"])
 
         assert len(silenced) == 1
         assert silenced[0].state is AlarmState.SILENCED
@@ -141,10 +141,8 @@ class TestManualSilenceAndClear:
 
     async def test_silence_all_active_alarms(self) -> None:
         service = AlarmService()
-        event1 = _alarm_request()
-        event2 = _alarm_request()
-        await service.on_alarm_requested(event1)
-        await service.on_alarm_requested(event2)
+        await service.trigger(**_alarm_kwargs())
+        await service.trigger(**_alarm_kwargs())
 
         silenced = await service.silence()
 
@@ -154,11 +152,11 @@ class TestManualSilenceAndClear:
 
     async def test_clear_alarm(self) -> None:
         service = AlarmService()
-        event = _alarm_request()
-        rec = await service.on_alarm_requested(event)
+        kwargs = _alarm_kwargs()
+        rec = await service.trigger(**kwargs)
         assert rec is not None
 
-        cleared = await service.clear(event.payload.incident_id)
+        cleared = await service.clear(kwargs["incident_id"])
 
         assert cleared is not None
         assert cleared.state is AlarmState.CLEARED
@@ -169,17 +167,17 @@ class TestManualSilenceAndClear:
         assert len(mock_adapter.cleared_records) == 1
 
         # Clearing again returns None
-        assert await service.clear(event.payload.incident_id) is None
+        assert await service.clear(kwargs["incident_id"]) is None
         # Clearing non-existent incident returns None
         assert await service.clear(uuid.uuid4()) is None
 
     async def test_get_all_alarms(self) -> None:
         service = AlarmService()
-        event1 = _alarm_request()
-        event2 = _alarm_request()
-        await service.on_alarm_requested(event1)
-        await service.on_alarm_requested(event2)
-        await service.silence(event1.payload.incident_id)
+        kwargs1 = _alarm_kwargs()
+        kwargs2 = _alarm_kwargs()
+        await service.trigger(**kwargs1)
+        await service.trigger(**kwargs2)
+        await service.silence(kwargs1["incident_id"])
 
         all_records = service.get_all_alarms()
         assert len(all_records) == 2
@@ -191,10 +189,8 @@ class TestFailSafeShutdown:
 
     async def test_stop_silences_all_active_alarms(self) -> None:
         service = AlarmService()
-        event1 = _alarm_request()
-        event2 = _alarm_request()
-        await service.on_alarm_requested(event1)
-        await service.on_alarm_requested(event2)
+        await service.trigger(**_alarm_kwargs())
+        await service.trigger(**_alarm_kwargs())
 
         silenced = await service.stop()
 
@@ -229,16 +225,16 @@ class TestCustomAlarmAdapter:
         custom = DummyAdapter()
         service = AlarmService(adapter=custom, default_target=AlarmTargetType.RELAY)
 
-        event = _alarm_request()
-        rec = await service.on_alarm_requested(event)
+        kwargs = _alarm_kwargs()
+        rec = await service.trigger(**kwargs)
         assert rec is not None
         assert rec.target_type is AlarmTargetType.RELAY
         assert custom.triggered is True
 
-        await service.silence(event.payload.incident_id)
+        await service.silence(kwargs["incident_id"])
         assert custom.silenced is True
 
-        await service.clear(event.payload.incident_id)
+        await service.clear(kwargs["incident_id"])
         assert custom.cleared is True
 
 
@@ -251,11 +247,11 @@ class TestSystemEventBusIntegration:
             bus.subscribe("SystemEvent", _collecting_handler(events))
 
             service = AlarmService(bus=bus)
-            event = _alarm_request()
+            kwargs = _alarm_kwargs()
 
-            await service.on_alarm_requested(event)
-            await service.silence(event.payload.incident_id)
-            await service.clear(event.payload.incident_id)
+            await service.trigger(**kwargs)
+            await service.silence(kwargs["incident_id"])
+            await service.clear(kwargs["incident_id"])
 
             await asyncio.sleep(0.05)  # drain bus subscribers
 
