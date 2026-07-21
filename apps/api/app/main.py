@@ -1,7 +1,5 @@
 """FastAPI application factory.
 
-No application routes are exposed yet -- this milestone only establishes the
-app instance, structured logging, and the database engine/session factory.
 FastAPI's default documentation routes (/docs, /redoc, /openapi.json) are
 left enabled.
 
