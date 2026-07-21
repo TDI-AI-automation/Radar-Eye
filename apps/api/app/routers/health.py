@@ -1,12 +1,14 @@
 """Health monitoring REST router.
 
 Source: docs/FRONTEND_BACKEND_CONTRACTS.md — System Health & Camera Management sections.
-Endpoints:
-  - GET /api/v1/health/system
-  - GET /api/v1/health/gpu
-  - GET /api/v1/health/storage
-  - GET /api/v1/health/cameras
-  - GET /api/v1/cameras/{camera_id}/health
+Endpoints (paths match the documented contract exactly -- no version prefix;
+introducing one is a real API-versioning decision requiring its own ADR):
+  - GET /health/system
+  - GET /health/gpu
+  - GET /health/storage
+  - GET /health/recording
+  - GET /health/cameras
+  - GET /cameras/{camera_id}/health
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ async def _get_db_session(request: Request) -> Any:
 
 
 @router.get(
-    "/api/v1/health/system",
+    "/health/system",
     response_model=ApiResponse[SystemHealthSchema],
     summary="Get aggregated system health metrics",
 )
@@ -78,7 +80,7 @@ async def get_system_health(
 
 
 @router.get(
-    "/api/v1/health/gpu",
+    "/health/gpu",
     response_model=ApiResponse[GPUHealthSchema],
     summary="Get GPU health and utilization metrics",
 )
@@ -90,7 +92,7 @@ async def get_gpu_health(
 
 
 @router.get(
-    "/api/v1/health/storage",
+    "/health/storage",
     response_model=ApiResponse[StorageHealthSchema],
     summary="Get storage utilization metrics",
 )
@@ -102,7 +104,19 @@ async def get_storage_health(
 
 
 @router.get(
-    "/api/v1/health/cameras",
+    "/health/recording",
+    response_model=ApiResponse[StorageHealthSchema],
+    summary="Get recording/evidence storage utilization metrics",
+)
+async def get_recording_health(
+    collector: HealthCollector = Depends(_get_collector),  # noqa: B008
+) -> ApiResponse[StorageHealthSchema]:
+    recording_health = collector.get_recording_health()
+    return ApiResponse[StorageHealthSchema](success=True, data=recording_health)
+
+
+@router.get(
+    "/health/cameras",
     response_model=ApiResponse[list[CameraHealthSchema]],
     summary="Get health metrics for all registered cameras",
 )
@@ -129,7 +143,7 @@ async def get_all_cameras_health(
 
 
 @router.get(
-    "/api/v1/cameras/{camera_id}/health",
+    "/cameras/{camera_id}/health",
     response_model=ApiResponse[CameraHealthSchema],
     summary="Get health metrics for a specific camera",
 )

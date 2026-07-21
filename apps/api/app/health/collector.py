@@ -37,9 +37,15 @@ class HealthCollector:
         self,
         stalled_threshold_seconds: float = 5.0,
         default_storage_path: str = "./storage",
+        recording_storage_path: str = "storage",
     ) -> None:
         self.stalled_threshold_seconds = stalled_threshold_seconds
         self.default_storage_path = default_storage_path
+        self.recording_storage_path = recording_storage_path
+        """Matches services.recording.types.RecordingConfig's default
+        storage_root -- surfaced separately by GET /health/recording per
+        FRONTEND_BACKEND_CONTRACTS.md, since recording evidence storage is a
+        distinct concern from general system storage (GET /health/storage)."""
         self._camera_heartbeats: dict[uuid.UUID, dict[str, Any]] = {}
 
     def record_camera_heartbeat(
@@ -164,6 +170,13 @@ class HealthCollector:
             free_bytes=free,
             usage_percent=round(usage_pct, 2),
         )
+
+    def get_recording_health(self) -> StorageHealthSchema:
+        """Query storage capacity and usage for the recording/evidence storage root.
+
+        Returned by ``GET /health/recording`` (FRONTEND_BACKEND_CONTRACTS.md).
+        """
+        return self.get_storage_health(self.recording_storage_path)
 
     def get_gpu_health(self) -> GPUHealthSchema:
         """Query GPU health parameters (utilization, memory, temperature).

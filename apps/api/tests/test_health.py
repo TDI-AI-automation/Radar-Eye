@@ -127,7 +127,9 @@ def test_system_health_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_health_rest_endpoints(_default_env: None) -> None:
-    """Test REST API responses for /api/v1/health/* and /api/v1/cameras/{id}/health."""
+    """Test REST API responses match FRONTEND_BACKEND_CONTRACTS.md's documented
+    System Health paths exactly (no version prefix -- see the RM-09
+    architectural review, Repository Integration Audit)."""
     app = create_app()
     cam_id = uuid.uuid4()
 
@@ -138,35 +140,42 @@ async def test_health_rest_endpoints(_default_env: None) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        # GET /api/v1/health/system
-        resp = await client.get("/api/v1/health/system")
+        # GET /health/system
+        resp = await client.get("/health/system")
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
         assert "status" in body["data"]
 
-        # GET /api/v1/health/gpu
-        resp = await client.get("/api/v1/health/gpu")
+        # GET /health/gpu
+        resp = await client.get("/health/gpu")
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
 
-        # GET /api/v1/health/storage
-        resp = await client.get("/api/v1/health/storage")
+        # GET /health/storage
+        resp = await client.get("/health/storage")
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
         assert "usage_percent" in body["data"]
 
-        # GET /api/v1/health/cameras
-        resp = await client.get("/api/v1/health/cameras")
+        # GET /health/recording
+        resp = await client.get("/health/recording")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert "usage_percent" in body["data"]
+
+        # GET /health/cameras
+        resp = await client.get("/health/cameras")
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
         assert len(body["data"]) >= 1
 
-        # GET /api/v1/cameras/{camera_id}/health
-        resp = await client.get(f"/api/v1/cameras/{cam_id}/health")
+        # GET /cameras/{camera_id}/health
+        resp = await client.get(f"/cameras/{cam_id}/health")
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
