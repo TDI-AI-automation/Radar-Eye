@@ -41,7 +41,7 @@ async def _setup_camera_and_incident(
     camera_repo = CameraRepository(session)
     incident_repo = IncidentRepository(session)
 
-    camera = Camera(name="Test Camera", location="North Gate", status="ACTIVE")
+    camera = Camera(name="Test Camera", location="North Gate", status="CONNECTED")
     await camera_repo.add(camera)
 
     incident = Incident(
