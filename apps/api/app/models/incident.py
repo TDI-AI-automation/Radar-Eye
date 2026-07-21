@@ -22,8 +22,10 @@ from shared.constants.threat_levels import ThreatLevel
 # Statuses that count as "still active" for the (camera_id, track_id) dedup
 # constraint (docs/DATABASE_SCHEMA.md -- "Incident Deduplication Constraint";
 # docs/INCIDENT_LIFECYCLE.md). RESOLVED and ARCHIVED are terminal states, not
-# an active incident that a new detection could collide with.
-_ACTIVE_INCIDENT_STATUSES = (
+# an active incident that a new detection could collide with. Public: reused
+# by IncidentRepository.get_active_for_track() (RM-07) as the single source
+# of truth for "active" so the query and the DB constraint never diverge.
+ACTIVE_INCIDENT_STATUSES = (
     IncidentStatus.NEW.value,
     IncidentStatus.ACTIVE.value,
     IncidentStatus.ACKNOWLEDGED.value,
@@ -41,7 +43,7 @@ class Incident(Base):
             "track_id",
             unique=True,
             postgresql_where=text(
-                "status IN (" + ", ".join(repr(v) for v in _ACTIVE_INCIDENT_STATUSES) + ")"
+                "status IN (" + ", ".join(repr(v) for v in ACTIVE_INCIDENT_STATUSES) + ")"
             ),
         ),
     )
