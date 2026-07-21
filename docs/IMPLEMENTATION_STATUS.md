@@ -31,24 +31,24 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 through RM-09 merged to `develop` |
-| Repo stage | RM-01, RM-02, RM-DEV, RM-06, RM-03, RM-04, RM-07, RM-05, RM-08, and RM-09 complete and merged into `develop`. RM-09 (Health & Monitoring) delivers `shared/schemas/health.py` (`GPUHealthSchema`, `StorageHealthSchema`, `CameraHealthSummarySchema`, `SystemHealthSchema`), `apps/api/app/health/collector.py` (`HealthCollector` GPU/storage metrics, camera heartbeat/FPS tracking, stalled stream detection), `apps/api/app/routers/health.py` (REST endpoints `/api/v1/health/system`, `/api/v1/health/gpu`, `/api/v1/health/storage`, `/api/v1/health/cameras`, `/api/v1/cameras/{id}/health`), and 6 unit & API integration tests (`apps/api/tests/test_health.py`). All quality gates clean (248 tests total repo-wide). |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 through RM-10 complete |
+| Repo stage | RM-01 through RM-10 complete. RM-10 (Alarm Service) delivers `services/incident_service/alarm.py` (`AlarmService`, `AlarmAdapter`, `MockAlarmAdapter`, `AlarmRecord`, `AlarmState`, `AlarmTargetType`), re-exported in `services/incident_service/__init__.py`, and 14 new unit tests (`tests/services/incident_service/test_alarm.py`). All quality gates clean (261 tests total repo-wide, 100% coverage on `alarm.py`). |
 
 ---
 
 ## Next Immediate Action
 
 **Current Milestone:**
-RM-10 — Alarm Service (see `docs/IMPLEMENTATION_ROADMAP.md`)
+RM-11 — DeepStream AI Pipeline (see `docs/IMPLEMENTATION_ROADMAP.md`)
 
 **Owning Branch:**
-`feature/incident-service`
+`feature/deepstream`
 
 **Status:**
 Not Started.
 
 **Blocking Issues:**
-None. RM-10 depends on RM-02, RM-04, and RM-06, all done and merged into `develop`.
+None. RM-11 depends on RM-01, RM-02, RM-04, RM-05, RM-06, all done and merged into `develop`.
 
 ---
 
@@ -68,7 +68,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | RM-05 | **Done** (merged into `develop`) | `feature/calibration` |
 | RM-08 | **Done** (merged into `develop`) | `feature/recording` |
 | RM-09 | **Done** (merged into `develop`) | `feature/api` |
-| RM-10 | Not Started | `feature/incident-service` |
+| RM-10 | **Done** (implemented on `feature/incident-service`) | `feature/incident-service` |
 | RM-11 | Not Started | `feature/deepstream` |
 | RM-12 | Not Started | `feature/api` |
 | RM-13 | Not Started | `feature/frontend-integration` |
@@ -85,7 +85,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | Shared contracts (events, schemas, constants, internal event bus) | `shared/` | **Done** (RM-02, RM-04 merged to `develop`) | `feature/shared-contracts` | — |
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
 | Threat engine (rule-based scoring) | `services/threat_engine/` | **Done** (merged to `develop`) | `feature/threat-engine` | Shared contracts |
-| Incident service (also owns the Alarm Service until it warrants its own subsystem — see RM-10) | `services/incident_service/` | **In Progress** (RM-07 done and merged to `develop`) | `feature/incident-service` | Threat engine, API service |
+| Incident service (also owns the Alarm Service — see RM-10) | `services/incident_service/` | **Done** (RM-07 merged to `develop`; RM-10 implemented) | `feature/incident-service` | Threat engine, API service |
 | Recording / evidence service | `services/recording/` | **In Progress** (RM-08 done and merged to `develop`) | `feature/recording` | Incident service |
 | Camera calibration service | `services/calibration/` | **In Progress** (RM-05 done and merged to `develop`) | `feature/calibration` | Shared contracts, API service (persistence) |
 | Frontend (Command Center UI) | external repo: `radar-eye-command` | Prototype UI complete, **not integrated** | `feature/frontend-integration` | API service |
@@ -115,6 +115,7 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
+| 2026-07-21 | RM-10 (Alarm Service) implemented on `feature/incident-service`. Delivers `services/incident_service/alarm.py` (`AlarmService`, `AlarmAdapter`, `MockAlarmAdapter`, `AlarmRecord`, `AlarmState`, `AlarmTargetType`), re-exported in `services/incident_service/__init__.py`. Implements hardware-agnostic alarm integration (ADR-012), strict HIGH/FIRE-only threat eligibility filtering (ADR-026), manual silence/override controls, fail-safe shutdown behavior (`stop()`), and `SystemEvent` audit log publication onto the event bus. 14 new unit tests (`tests/services/incident_service/test_alarm.py`). All quality gates clean (261 tests total repo-wide, 100% coverage on `alarm.py`). |
 | 2026-07-21 | RM-09 (Health & Monitoring) merged into `develop` via a regular merge commit, following Principal Engineer review approval. Delivers `shared/schemas/health.py` (`GPUHealthSchema`, `StorageHealthSchema`, `CameraHealthSummarySchema`, `SystemHealthSchema`), `apps/api/app/health/collector.py` (`HealthCollector` GPU/storage metrics, camera heartbeat/FPS tracking, stalled stream detection), `apps/api/app/routers/health.py` (REST endpoints `/api/v1/health/system`, `/api/v1/health/gpu`, `/api/v1/health/storage`, `/api/v1/health/cameras`, `/api/v1/cameras/{id}/health`), and 6 new unit & API integration tests (`apps/api/tests/test_health.py`). All quality gates clean (248 tests total repo-wide). `feature/api` retained as a long-lived subsystem branch. |
 | 2026-07-21 | RM-08 (Recording & Evidence Service) merged into `develop` (commit `f5ad06c`) via a regular merge commit, following Principal Engineer review approval. Delivers `services/recording/types.py` (`RecordingConfig`, `SnapshotResult`, `ClipResult`), `services/recording/storage.py` (`StorageManager`, filesystem storage layout generator, disk quota monitor, continuous retention sweep), `services/recording/service.py` (`RecordingService` snapshot capture, -10s/+20s event clip extraction, event bus integration, storage warning alerts). Extended `SnapshotRepository` and `RecordingRepository` in `apps/api/app/repositories/recording.py`. 6 new unit/integration tests (`tests/services/recording/test_service.py`). All quality gates verified clean post-merge. `feature/recording` retained as a long-lived subsystem branch. |
 | 2026-07-20 | RM-05 (Calibration Service) merged into `develop` (commit `29e0261`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. `feature/calibration` was synced with `develop` first (43 commits behind, stale since project bootstrap). Delivers `services/calibration/service.py`: `CalibrationService` -- `calibrate()` (computes and persists a ground-plane homography from >=4 reference points, ADR-016), `estimate()` (projects an image point to distance + `DistanceZone` using a camera's latest calibration, raises `CalibrationNotFoundError` if none exists). `services/calibration/homography.py` implements DLT homography estimation/projection via numpy (no OpenCV dependency). Extends `CameraCalibrationRepository` with `get_latest_for_camera()`/`list_for_camera()`. 24 new tests (synthetic-geometry accuracy against `BENCHMARK_ACCEPTANCE_CRITERIA.md`'s tolerances of <=2m@20m/<=5m@50m, append-only history, missing-calibration error path, `CalibrationUpdatedEvent` publication against the real bus). Also fixed a pytest module-collision issue (`--import-mode=importlib` in `pytest.ini`) that would have recurred as more services add their own `test_service.py`. All gates re-verified clean on `develop` post-merge: 236 tests passing, 100% coverage. `feature/calibration` retained as a long-lived subsystem branch. |
