@@ -3,13 +3,21 @@
 Source:
   - docs/ADR_INDEX.md (ADR-012: Alarm Integration Protocol, ADR-026: Alarm Trigger Policy)
   - docs/THREAT_ENGINE_SPEC.md (Alarm Policy: HIGH/FIRE eligible, others excluded)
-  - docs/EVENT_CONTRACTS.md (AlarmRequestedEvent payload contract)
-  - docs/FRONTEND_BACKEND_CONTRACTS.md (/ws/alarms WebSocket payload)
   - docs/IMPLEMENTATION_ROADMAP.md (RM-10 deliverables and acceptance criteria)
 
+Integration boundary (per the RM-10 architectural review, Repository Integration
+Audit): ``trigger()`` is a plain, timing-free public entry point for the future
+Threat Engine Runtime Adapter (RM-11) -- the same in-process-call shape as
+``IncidentService.handle_escalation()`` (RM-07's design review), not a bus
+event. The Runtime Adapter observes ``EscalationSignal`` and invokes both
+services directly, so it does not need two different hand-off mechanisms for
+the two outputs of one state machine. ``AlarmRequestedEvent`` (EVENT_CONTRACTS.md)
+remains a valid shared contract but is not this service's integration point.
+
 Per RM-10 requirements:
-  - Filters AlarmRequestedEvent: ONLY HIGH (and FIRE elevated to HIGH) trigger alarms.
-    MEDIUM, LOW, ALLY, OBSERVE, and HUMAN_REVIEW events are explicitly ignored (ADR-026).
+  - Filters alarm requests: ONLY HIGH (and FIRE, always resolved to HIGH by the
+    Threat Engine per ADR-015/RM-06) trigger alarms. MEDIUM, LOW, ALLY, OBSERVE,
+    and HUMAN_REVIEW are explicitly ignored (ADR-026).
   - Hardware-agnostic AlarmAdapter interface supporting Relay Controllers, GPIO Relays,
     Sirens, and Beacon Lights (ADR-012).
   - MockAlarmAdapter included for hardware-free development and testing environments.
@@ -30,7 +38,7 @@ from enum import Enum
 from shared.constants.threat_levels import ThreatLevel
 from shared.events.bus import EventBus
 from shared.events.payloads import SystemEventPayload
-from shared.events.types import AlarmRequestedEvent, SystemEvent
+from shared.events.types import SystemEvent
 
 logger = logging.getLogger(__name__)
 
@@ -127,40 +135,51 @@ class AlarmService:
         """Return the underlying alarm hardware adapter."""
         return self._adapter
 
-    async def on_alarm_requested(self, event: AlarmRequestedEvent) -> AlarmRecord | None:
-        """Consume AlarmRequestedEvent from threat engine / bus.
+    async def trigger(
+        self,
+        *,
+        camera_id: uuid.UUID,
+        track_id: int,
+        incident_id: uuid.UUID,
+        threat_level: ThreatLevel,
+        reason: str,
+        timestamp: datetime | None = None,
+    ) -> AlarmRecord | None:
+        """Public in-process entry point for the future Threat Engine Runtime
+        Adapter (RM-11). Contains no escalation-timing logic -- the Threat
+        Engine remains the sole source of timing decisions (ADR-021).
 
-        Enforces ADR-026: Alarms are ONLY eligible for HIGH (and FIRE elevated to HIGH).
-        Ignores any requests for MEDIUM, LOW, ALLY, OBSERVE, or HUMAN_REVIEW.
+        Enforces ADR-026: Alarms are ONLY eligible for HIGH (and FIRE, always
+        resolved to HIGH upstream). Ignores MEDIUM, LOW, ALLY, OBSERVE, or
+        HUMAN_REVIEW.
         """
-        payload = event.payload
-        if payload.threat_level is not ThreatLevel.HIGH:
+        if threat_level is not ThreatLevel.HIGH:
             logger.warning(
                 "Rejected alarm request for incident %s: threat_level %s is not eligible (ADR-026)",
-                payload.incident_id,
-                payload.threat_level.value,
+                incident_id,
+                threat_level.value,
             )
             return None
 
         # Idempotency check: if an active alarm already exists for this incident, return it
-        existing = self._records.get(payload.incident_id)
+        existing = self._records.get(incident_id)
         if existing is not None and existing.state is AlarmState.ACTIVE:
             return existing
 
-        now = datetime.now(timezone.utc)
+        now = timestamp or datetime.now(timezone.utc)
         record = AlarmRecord(
             alarm_id=uuid.uuid4(),
-            incident_id=payload.incident_id,
-            camera_id=payload.camera_id,
-            track_id=payload.track_id,
-            threat_level=payload.threat_level,
-            reason=payload.reason,
+            incident_id=incident_id,
+            camera_id=camera_id,
+            track_id=track_id,
+            threat_level=threat_level,
+            reason=reason,
             state=AlarmState.ACTIVE,
             triggered_at=now,
             target_type=self._default_target,
         )
 
-        self._records[payload.incident_id] = record
+        self._records[incident_id] = record
         await self._adapter.trigger_alarm(record)
 
         if self._bus is not None:
@@ -173,9 +192,9 @@ class AlarmService:
                         severity="WARNING",
                         source_component="alarm_service",
                         message=(
-                            f"Alarm triggered for incident {payload.incident_id} "
-                            f"(camera={payload.camera_id}, threat={payload.threat_level.value}, "
-                            f"reason={payload.reason})"
+                            f"Alarm triggered for incident {incident_id} "
+                            f"(camera={camera_id}, threat={threat_level.value}, "
+                            f"reason={reason})"
                         ),
                     ),
                 )
