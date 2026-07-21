@@ -24,7 +24,9 @@ from fastapi import FastAPI
 
 from apps.api.app.config import get_settings
 from apps.api.app.db import create_engine, create_session_factory
+from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
+from apps.api.app.routers import health_router
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ def create_app() -> FastAPI:
 
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
+    health_collector = HealthCollector()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -51,5 +54,8 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+    app.state.health_collector = health_collector
+
+    app.include_router(health_router)
 
     return app
