@@ -52,10 +52,10 @@ RM-08 — Recording & Evidence Service (see `docs/IMPLEMENTATION_ROADMAP.md`)
 `feature/recording`
 
 **Status:**
-Not Started.
+Implemented on `feature/recording`, pending Principal Engineer review and merge to `develop`.
 
 **Blocking Issues:**
-None. RM-08 depends on RM-02, RM-03, RM-04, and RM-07, all done and merged into `develop`.
+None.
 
 ---
 
@@ -73,7 +73,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | RM-04 | **Done** (merged into `develop`) | `feature/shared-contracts` |
 | RM-07 | **Done** (merged into `develop`) | `feature/incident-service` |
 | RM-05 | **Done** (merged into `develop`) | `feature/calibration` |
-| RM-08 | Not Started | `feature/recording` |
+| RM-08 | **In Progress** (implemented on `feature/recording`) | `feature/recording` |
 | RM-09 | Not Started | `feature/api` |
 | RM-10 | Not Started | `feature/incident-service` |
 | RM-11 | Not Started | `feature/deepstream` |
@@ -93,7 +93,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
 | Threat engine (rule-based scoring) | `services/threat_engine/` | **Done** (merged to `develop`) | `feature/threat-engine` | Shared contracts |
 | Incident service (also owns the Alarm Service until it warrants its own subsystem — see RM-10) | `services/incident_service/` | **In Progress** (RM-07 done and merged to `develop`) | `feature/incident-service` | Threat engine, API service |
-| Recording / evidence service | `services/recording/` | Not Started | `feature/recording` | Incident service |
+| Recording / evidence service | `services/recording/` | **In Progress** (RM-08 implemented on `feature/recording`) | `feature/recording` | Incident service |
 | Camera calibration service | `services/calibration/` | **In Progress** (RM-05 done and merged to `develop`) | `feature/calibration` | Shared contracts, API service (persistence) |
 | Frontend (Command Center UI) | external repo: `radar-eye-command` | Prototype UI complete, **not integrated** | `feature/frontend-integration` | API service |
 | Deployment bundle / systemd | `deployments/`, `scripts/` | Not Started | `feature/deployment` | All backend subsystems |
@@ -122,6 +122,7 @@ Subsystem-level blockers only.
 
 | Date | Item |
 |---|---|
+| 2026-07-21 | RM-08 (Recording & Evidence Service) implemented on `feature/recording`: delivers `services/recording/types.py` (`RecordingConfig`, `SnapshotResult`, `ClipResult`), `services/recording/storage.py` (`StorageManager`, filesystem storage layout generator, disk quota monitor, retention sweep), `services/recording/service.py` (`RecordingService` snapshot capture, -10s/+20s event clip extraction, event bus integration, storage warning alerts). Extended `SnapshotRepository` and `RecordingRepository` in `apps/api/app/repositories/recording.py`. Added unit/integration tests (`tests/services/recording/test_service.py`). |
 | 2026-07-20 | RM-05 (Calibration Service) merged into `develop` (commit `29e0261`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. `feature/calibration` was synced with `develop` first (43 commits behind, stale since project bootstrap). Delivers `services/calibration/service.py`: `CalibrationService` -- `calibrate()` (computes and persists a ground-plane homography from >=4 reference points, ADR-016), `estimate()` (projects an image point to distance + `DistanceZone` using a camera's latest calibration, raises `CalibrationNotFoundError` if none exists). `services/calibration/homography.py` implements DLT homography estimation/projection via numpy (no OpenCV dependency). Extends `CameraCalibrationRepository` with `get_latest_for_camera()`/`list_for_camera()`. 24 new tests (synthetic-geometry accuracy against `BENCHMARK_ACCEPTANCE_CRITERIA.md`'s tolerances of <=2m@20m/<=5m@50m, append-only history, missing-calibration error path, `CalibrationUpdatedEvent` publication against the real bus). Also fixed a pytest module-collision issue (`--import-mode=importlib` in `pytest.ini`) that would have recurred as more services add their own `test_service.py`. All gates re-verified clean on `develop` post-merge: 236 tests passing, 100% coverage. `feature/calibration` retained as a long-lived subsystem branch. |
 | 2026-07-20 | RM-07 (Incident Service) merged into `develop` (commit `90c21cc`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. Delivers `services/incident_service/service.py`: `IncidentService` — `handle_escalation()` (idempotent create-or-return, no timing logic), `on_threat_assessment()` (metadata + track-lost bookkeeping from the real bus stream), `sweep_track_lost()` (10s auto-close, ADR-025). Extends `IncidentRepository` with `get_active_for_track()`. 10 new tests (creation + event publication, metadata caching, idempotency, the concurrent create-race fallback verified against a real `IntegrityError`, and the full track-lost sweep behavior). Also fixed a mypy module-resolution issue (`explicit_package_bases`/`namespace_packages` in `pyproject.toml`) that would have recurred as more services add their own test `conftest.py`. All gates re-verified clean on `develop` post-merge: 221 tests passing, 100% coverage. `feature/incident-service` retained as a long-lived subsystem branch. |
 | 2026-07-20 | RM-04 (Internal Event Bus) merged into `develop` (commit `832cc6e`) via a regular merge commit, following Principal Engineer review — approved with no blocking issues. Delivers `shared/events/bus.py`: `EventBus` abstract contract, `InProcessEventBus` initial implementation (per-subscriber bounded queues, configurable publish timeout with drop-and-CRITICAL-alert on back-pressure, per-producer-per-event-type ordering, full subscriber fault isolation). 9 new tests. Also corrected stale "event bus" wording in `PROJECT_CONTEXT.md` that had listed it under `apps/api` from before RM-04's branch ownership was settled. All gates re-verified clean on `develop` post-merge: 211 tests passing, 100% coverage. `feature/shared-contracts` retained as a long-lived subsystem branch. |
