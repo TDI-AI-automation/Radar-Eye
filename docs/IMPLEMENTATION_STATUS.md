@@ -31,24 +31,24 @@ This document reflects the **operational implementation state** as last recorded
 
 | | |
 |---|---|
-| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01, RM-02, RM-DEV, RM-06, RM-03, RM-04, RM-07, RM-05, and RM-08 merged to `develop` |
-| Repo stage | RM-01, RM-02, RM-DEV, RM-06, RM-03, RM-04, RM-07, RM-05, and RM-08 complete and merged into `develop` (commit `f5ad06c`), following Principal Engineer review. RM-08 (Recording & Evidence Service) delivers `services/recording/types.py` (`RecordingConfig`, `SnapshotResult`, `ClipResult`), `services/recording/storage.py` (`StorageManager`, filesystem storage layout generator, disk quota monitor, continuous retention sweep), `services/recording/service.py` (`RecordingService` snapshot capture, -10s/+20s event clip extraction, event bus integration, storage warning alerts). Extends `SnapshotRepository` and `RecordingRepository` in `apps/api/app/repositories/recording.py`. 6 new unit/integration tests (242 tests total repo-wide), ruff/black/pre-commit clean; mypy advisory-only (9 findings accepted technical debt, unchanged). `feature/shared-contracts`, `feature/api`, `feature/developer-infrastructure`, `feature/threat-engine`, `feature/incident-service`, `feature/calibration`, and `feature/recording` all retained as long-lived subsystem branches. |
+| Current phase | Implementation Phase 1 (per `PROJECT_CONTEXT.md`) — RM-01 through RM-08 merged to `develop`; RM-09 in progress on `feature/api` |
+| Repo stage | RM-01, RM-02, RM-DEV, RM-06, RM-03, RM-04, RM-07, RM-05, and RM-08 complete and merged into `develop` (commit `f5ad06c`). RM-09 (Health & Monitoring) implemented on `feature/api`: delivers `shared/schemas/health.py` (`GPUHealthSchema`, `StorageHealthSchema`, `CameraHealthSummarySchema`, `SystemHealthSchema`), `apps/api/app/health/collector.py` (`HealthCollector` GPU/storage metrics, camera heartbeat/FPS tracking, stalled stream detection), `apps/api/app/routers/health.py` (REST endpoints `/api/v1/health/system`, `/api/v1/health/gpu`, `/api/v1/health/storage`, `/api/v1/health/cameras`, `/api/v1/cameras/{id}/health`), and 6 new unit & API integration tests (`apps/api/tests/test_health.py`). All quality gates verified clean (pytest, ruff, black). |
 
 ---
 
 ## Next Immediate Action
 
 **Current Milestone:**
-RM-09 — Health & Monitoring (lightweight) (see `docs/IMPLEMENTATION_ROADMAP.md`)
+RM-10 — Alarm Service (see `docs/IMPLEMENTATION_ROADMAP.md`)
 
 **Owning Branch:**
-`feature/api`
+`feature/incident-service`
 
 **Status:**
 Not Started.
 
 **Blocking Issues:**
-None. RM-09 depends on RM-02, RM-03, and RM-04, all done and merged into `develop`.
+None. RM-10 depends on RM-02, RM-04, and RM-06, all done and merged into `develop`.
 
 ---
 
@@ -67,7 +67,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 | RM-07 | **Done** (merged into `develop`) | `feature/incident-service` |
 | RM-05 | **Done** (merged into `develop`) | `feature/calibration` |
 | RM-08 | **Done** (merged into `develop`) | `feature/recording` |
-| RM-09 | Not Started | `feature/api` |
+| RM-09 | **In Progress** (implemented on `feature/api`) | `feature/api` |
 | RM-10 | Not Started | `feature/incident-service` |
 | RM-11 | Not Started | `feature/deepstream` |
 | RM-12 | Not Started | `feature/api` |
@@ -81,7 +81,7 @@ Full milestone definitions, dependencies, and acceptance criteria live in `docs/
 
 | Subsystem | Path | Status | Branch | Depends On |
 |---|---|---|---|---|
-| API service (FastAPI, persistence, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01, RM-03 done and merged) | `feature/api` | Shared contracts |
+| API service (FastAPI, persistence, auth/audit, lightweight health monitoring) | `apps/api/` | **In Progress** (RM-01, RM-03 done & merged; RM-09 implemented) | `feature/api` | Shared contracts |
 | Shared contracts (events, schemas, constants, internal event bus) | `shared/` | **Done** (RM-02, RM-04 merged to `develop`) | `feature/shared-contracts` | — |
 | DeepStream pipeline (ingest → YOLO → NvDCF → ViT) | `apps/deepstream/` | Not Started | `feature/deepstream` | Shared contracts |
 | Threat engine (rule-based scoring) | `services/threat_engine/` | **Done** (merged to `develop`) | `feature/threat-engine` | Shared contracts |
