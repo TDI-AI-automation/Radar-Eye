@@ -138,3 +138,72 @@ class TestEstimate:
 
         with pytest.raises(CalibrationNotFoundError):
             await service.estimate(camera_id=camera.id, image_x=0, image_y=0)
+
+
+@pytest.mark.asyncio
+class TestCache:
+    """RM-11 Phase 2 design review, Decision A: estimate() must not query
+    the database on every call -- RM-11 calls it on a per-frame hot path."""
+
+    async def test_repeated_estimate_hits_database_at_most_once(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        service = CalibrationService(db_session)
+        await service.calibrate(
+            camera_id=camera.id, reference_points=_POINTS, calibrated_by="installer-1"
+        )
+
+        repo = CameraCalibrationRepository(db_session)
+        original = repo.get_latest_for_camera
+        call_count = 0
+
+        async def _counting_get_latest_for_camera(camera_id):
+            nonlocal call_count
+            call_count += 1
+            return await original(camera_id)
+
+        repo.get_latest_for_camera = _counting_get_latest_for_camera  # type: ignore[method-assign]
+        service._repo = repo  # noqa: SLF001 -- swap in the spying repo for this test only
+
+        for _ in range(5):
+            await service.estimate(camera_id=camera.id, image_x=10, image_y=0)
+
+        # calibrate() already populated the cache -- estimate() should never
+        # have needed to query the database at all.
+        assert call_count == 0
+
+    async def test_calibrate_populates_cache_immediately(self, db_session) -> None:
+        """A fresh CalibrationService instance (a new request/session, as
+        happens throughout the rest of the repository) must still see a
+        warm cache after another instance calibrated -- the cache is
+        process-wide, not per-instance."""
+        camera = await _make_camera(db_session)
+        writer = CalibrationService(db_session)
+        await writer.calibrate(
+            camera_id=camera.id, reference_points=_POINTS, calibrated_by="installer-1"
+        )
+
+        reader = CalibrationService(db_session)
+        estimate = await reader.estimate(camera_id=camera.id, image_x=10, image_y=0)
+
+        assert estimate.zone is DistanceZone.ZONE_1
+
+    async def test_recalibration_updates_cache_without_a_database_read(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        service = CalibrationService(db_session)
+        await service.calibrate(
+            camera_id=camera.id, reference_points=_POINTS, calibrated_by="installer-1"
+        )
+        await service.estimate(camera_id=camera.id, image_x=10, image_y=0)  # warm the cache
+
+        wider_points = [
+            ReferencePoint(image_x=0, image_y=0, ground_x=0, ground_y=0),
+            ReferencePoint(image_x=100, image_y=0, ground_x=50, ground_y=0),
+            ReferencePoint(image_x=0, image_y=100, ground_x=0, ground_y=50),
+            ReferencePoint(image_x=100, image_y=100, ground_x=50, ground_y=50),
+        ]
+        await service.calibrate(
+            camera_id=camera.id, reference_points=wider_points, calibrated_by="operator-2"
+        )
+
+        estimate = await service.estimate(camera_id=camera.id, image_x=100, image_y=0)
+        assert estimate.distance_meters == pytest.approx(50.0, abs=1e-6)
