@@ -151,7 +151,7 @@ def get_models_settings() -> ModelsSettings:
     return load_models_settings()
 
 
-_STAGE_LOGGER_NAMES = (
+STAGE_LOGGER_NAMES = (
     "camera",
     "rtsp",
     "deepstream",
@@ -181,7 +181,7 @@ class LoggingSettings(BaseModel):
     default_level: str = "INFO"
     loggers: dict[str, str] = {}
     """Per-stage-logger level override, keyed by name from
-    _STAGE_LOGGER_NAMES (e.g. {"pgie": "DEBUG"}). Any name not present here
+    STAGE_LOGGER_NAMES (e.g. {"pgie": "DEBUG"}). Any name not present here
     falls back to default_level."""
 
 
