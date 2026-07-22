@@ -9,6 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from apps.api.app.config import get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.models import Base
+from services.calibration import service as calibration_service
+
+
+@pytest.fixture(autouse=True)
+def _clear_calibration_cache() -> Iterator[None]:
+    """CalibrationService's homography cache is module-level/process-wide
+    by design (RM-11 Phase 2 design review, Decision A) -- reset it between
+    tests so no test observes another's cached state."""
+    calibration_service.clear_cache()
+    yield
+    calibration_service.clear_cache()
 
 
 @pytest.fixture(autouse=True)
