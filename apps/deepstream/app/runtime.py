@@ -40,17 +40,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatScheduler
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
+from apps.deepstream.app.stage_logging import get_audit_logger
 from apps.deepstream.app.threat_runtime_adapter import ThreatEngineRuntimeAdapter
 from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
 
 logger = logging.getLogger(__name__)
+_audit_logger = get_audit_logger()
 
 
 def _import_glib() -> Any:
@@ -81,6 +84,13 @@ class DeepStreamRuntime:
         self._bus = bus
         self._encryption = encryption
 
+        # RM-11.SIV Unified Heartbeat: one registry, shared by every
+        # component below and (read-only) by the watchdog/dashboard --
+        # exposed as a public attribute (not self._heartbeat -- already
+        # taken by the RM-09 HeartbeatScheduler below) so scripts/run_siv.py
+        # can wire them up without reaching into private state.
+        self.heartbeat_registry = HeartbeatRegistry()
+
         # RM-11.SIV Decision C: placeholder status now comes from
         # configs/models.yaml (pgie.enabled/sgie.enabled), not
         # DeepStreamSettings -- computed here rather than read off
@@ -89,7 +99,9 @@ class DeepStreamRuntime:
         self._instrumentation = PerformanceInstrumentation(
             pgie_is_placeholder=not models.pgie.enabled
         )
-        self._runtime_adapter = RuntimeAdapter(bus, instrumentation=self._instrumentation)
+        self._runtime_adapter = RuntimeAdapter(
+            bus, instrumentation=self._instrumentation, heartbeat=self.heartbeat_registry
+        )
 
         # Phase 2: AlarmService is a long-lived singleton (its in-memory
         # _records state must persist across escalation calls, unlike
@@ -97,7 +109,10 @@ class DeepStreamRuntime:
         # per short-lived session -- see threat_runtime_adapter.py).
         self._alarm_service = AlarmService(bus=bus)
         self._threat_runtime_adapter = ThreatEngineRuntimeAdapter(
-            session_factory=session_factory, bus=bus, alarm_service=self._alarm_service
+            session_factory=session_factory,
+            bus=bus,
+            alarm_service=self._alarm_service,
+            heartbeat=self.heartbeat_registry,
         )
 
         self._frame_counter = FrameCounter()
@@ -108,6 +123,7 @@ class DeepStreamRuntime:
             frame_counter=self._frame_counter,
             on_bus_message=self._on_bus_message,
             on_inference_buffer=self._on_inference_buffer,
+            heartbeat=self.heartbeat_registry,
         )
         self._policies: dict[uuid.UUID, ReconnectPolicy] = {}
         self._heartbeat: HeartbeatScheduler | None = None
@@ -145,6 +161,7 @@ class DeepStreamRuntime:
             camera_ids=[c.camera_id for c in camera_sources],
             status_provider=self._runtime_adapter.status_for,
             interval_seconds=self._settings.heartbeat_interval_seconds,
+            on_tick=lambda: self.heartbeat_registry.beat("heartbeat"),
         )
         self._heartbeat.start()
 
@@ -256,8 +273,14 @@ class DeepStreamRuntime:
                 logger.exception("Reconnect failed for camera %s, will retry", source.camera_id)
                 self._schedule_reconnect(source)
                 return False
+            succeeded_after_attempt = policy.attempt_count
             policy.reset()
             self._bridge.schedule(self._runtime_adapter.on_camera_connected(source.camera_id))
+            _audit_logger.info(
+                "Pipeline Restarted: camera=%s attempt=%d",
+                source.camera_id,
+                succeeded_after_attempt,
+            )
             return False  # one-shot timeout
 
         GLib.timeout_add_seconds(int(max(delay, 1)), _reconnect)

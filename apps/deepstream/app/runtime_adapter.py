@@ -36,14 +36,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import FrameObservation, RawDetection, build_frame_observation
+from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from shared.events.bus import EventBus
 from shared.events.payloads import CameraDisconnectedPayload, SystemEventPayload
 from shared.events.types import CameraDisconnectedEvent, SystemEvent
 from shared.schemas.camera import CameraConnectionStatus
 
 logger = logging.getLogger(__name__)
+_camera_logger = get_stage_logger("camera")
+_runtime_adapter_logger = get_stage_logger("runtime_adapter")
+_audit_logger = get_audit_logger()
 
 _SOURCE_COMPONENT = "deepstream"
 _DEFAULT_STATUS: CameraConnectionStatus = "DISCONNECTED"
@@ -57,16 +62,27 @@ class RuntimeAdapter:
     bus and tracks per-camera connection status for the heartbeat scheduler."""
 
     def __init__(
-        self, bus: EventBus, *, instrumentation: PerformanceInstrumentation | None = None
+        self,
+        bus: EventBus,
+        *,
+        instrumentation: PerformanceInstrumentation | None = None,
+        heartbeat: HeartbeatRegistry | None = None,
     ) -> None:
         self._bus = bus
         self._instrumentation = instrumentation
+        self._heartbeat = heartbeat
+        """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
+        identical pattern."""
         self._status: dict[uuid.UUID, CameraConnectionStatus] = {}
         self._observation_count = 0
         self.last_observation: FrameObservation | None = None
         """Most recently processed frame observation -- exposed for tests
         and manual inspection; not otherwise consumed in Phase 1 (no
         downstream service integration yet -- see Phase 1's Out of Scope)."""
+
+    def _beat(self, component: str, *, reason: str | None = None) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.beat(component, reason=reason)
 
     def status_for(self, camera_id: uuid.UUID) -> CameraConnectionStatus:
         """Synchronous, non-blocking read -- safe for HeartbeatScheduler's
@@ -76,6 +92,9 @@ class RuntimeAdapter:
 
     async def on_camera_connected(self, camera_id: uuid.UUID) -> None:
         self._status[camera_id] = "CONNECTED"
+        self._beat("camera")
+        _camera_logger.info("Camera %s connected", camera_id)
+        _audit_logger.info("Camera Connected: camera=%s", camera_id)
         await self._bus.publish(
             SystemEvent(
                 event_type="SystemEvent",
@@ -95,6 +114,8 @@ class RuntimeAdapter:
         """DEEPSTREAM_PIPELINE_SPEC.md 'Failure Handling' -> 'Camera Failure':
         generate CameraDisconnectedEvent."""
         self._status[camera_id] = "DISCONNECTED"
+        _camera_logger.warning("Camera %s disconnected: %s", camera_id, reason)
+        _audit_logger.warning("Camera Disconnected: camera=%s reason=%s", camera_id, reason)
         await self._bus.publish(
             CameraDisconnectedEvent(
                 event_type="CameraDisconnectedEvent",
@@ -110,7 +131,7 @@ class RuntimeAdapter:
         pipeline-level GStreamer error). Component-specific failures (model,
         calibration -- DEEPSTREAM_PIPELINE_SPEC.md's 'Failure Handling')
         arrive in Phase 1/2 once those stages exist."""
-        logger.error("DeepStream pipeline error: %s", message)
+        get_stage_logger("system").error("DeepStream pipeline error: %s", message)
         await self._bus.publish(
             SystemEvent(
                 event_type="SystemEvent",
@@ -238,6 +259,7 @@ class RuntimeAdapter:
         """
         self.last_observation = observation
         self._observation_count += 1
+        self._beat("runtime_adapter")
 
         if self._instrumentation is not None:
             self._instrumentation.record_frame(
@@ -246,7 +268,7 @@ class RuntimeAdapter:
             )
 
         if self._observation_count % _OBSERVATION_LOG_INTERVAL == 1:
-            logger.info(
+            _runtime_adapter_logger.info(
                 "Frame observation: camera=%s frame_num=%d detections=%d (observation #%d)",
                 observation.camera_id,
                 observation.frame_num,

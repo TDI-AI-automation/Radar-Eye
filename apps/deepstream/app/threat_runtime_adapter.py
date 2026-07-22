@@ -38,19 +38,32 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.observations import DetectionObservation, FrameObservation
+from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from services.calibration.service import CalibrationService
 from services.calibration.types import CalibrationNotFoundError
 from services.incident_service.alarm import AlarmService
 from services.incident_service.service import IncidentService
 from services.threat_engine.engine import ThreatEngine
 from services.threat_engine.types import EscalationSignal, EscalationSignalType
+from shared.constants.threat_levels import ThreatLevel
 from shared.constants.uniform_classes import UniformClass
 from shared.constants.weapon_types import WeaponType
 from shared.events.bus import EventBus
+from shared.events.payloads import ThreatAssessmentPayload
 from shared.events.types import HumanReviewItemCreatedEvent, ThreatAssessmentEvent
 
 logger = logging.getLogger(__name__)
+_calibration_logger = get_stage_logger("calibration")
+_threat_engine_logger = get_stage_logger("threat_engine")
+_audit_logger = get_audit_logger()
+
+_AUDIT_WORTHY_THREAT_LEVELS = (ThreatLevel.HIGH, ThreatLevel.MEDIUM)
+"""Only HIGH/MEDIUM reach the operator-facing audit log -- per the RM-11.SIV
+approval's own examples ("Threat HIGH", "Threat MEDIUM"). LOW/OBSERVE/ALLY
+assessments happen at frame rate and would drown out genuinely major
+events; they remain visible on the threat_engine stage logger instead."""
 
 WeaponMapper = Callable[[DetectionObservation], WeaponType]
 UniformMapper = Callable[[DetectionObservation], UniformClass]
@@ -84,6 +97,7 @@ class ThreatEngineRuntimeAdapter:
         alarm_service: AlarmService,
         weapon_mapper: WeaponMapper = default_weapon_mapper,
         uniform_mapper: UniformMapper = default_uniform_mapper,
+        heartbeat: HeartbeatRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._bus = bus
@@ -91,6 +105,14 @@ class ThreatEngineRuntimeAdapter:
         self._weapon_mapper = weapon_mapper
         self._uniform_mapper = uniform_mapper
         self._threat_engine = ThreatEngine()
+        self._heartbeat = heartbeat
+        """RM-11.SIV Unified Heartbeat -- optional so existing/future
+        callers that don't need SIV visibility aren't forced to construct
+        one. None-safe throughout this class via _beat()."""
+
+    def _beat(self, component: str, *, reason: str | None = None) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.beat(component, reason=reason)
 
     async def on_frame_observation(self, observation: FrameObservation) -> None:
         """Threat assessment requires a stable track -- untracked detections
@@ -124,6 +146,15 @@ class ThreatEngineRuntimeAdapter:
                 )
                 return
 
+        self._beat("calibration", reason=f"zone={distance.zone.value}")
+        _calibration_logger.debug(
+            "Calibration result: camera=%s track=%d zone=%s distance=%.1fm",
+            observation.camera_id,
+            detection.track_id,
+            distance.zone.value,
+            distance.distance_meters,
+        )
+
         assert detection.track_id is not None  # narrowed by on_frame_observation's guard
         results = self._threat_engine.ingest(
             camera_id=observation.camera_id,
@@ -132,6 +163,13 @@ class ThreatEngineRuntimeAdapter:
             weapon_type=self._weapon_mapper(detection),
             zone=distance.zone,
             timestamp=observation.metadata_timestamp,
+        )
+        self._beat("threat_engine")
+        _threat_engine_logger.debug(
+            "Threat assessment: camera=%s track=%d results=%d",
+            observation.camera_id,
+            detection.track_id,
+            len(results),
         )
 
         for result in results:
@@ -142,8 +180,19 @@ class ThreatEngineRuntimeAdapter:
     ) -> None:
         if isinstance(result, EscalationSignal):
             await self._handle_escalation(result)
-        else:
-            await self._bus.publish(result)
+            return
+
+        if isinstance(result.payload, ThreatAssessmentPayload) and (
+            result.payload.threat_level in _AUDIT_WORTHY_THREAT_LEVELS
+        ):
+            _audit_logger.info(
+                "Threat %s: camera=%s track=%d rule=%s",
+                result.payload.threat_level.value,
+                result.payload.camera_id,
+                result.payload.track_id,
+                result.payload.rule_id,
+            )
+        await self._bus.publish(result)
 
     async def _handle_escalation(self, signal: EscalationSignal) -> None:
         """INCIDENT_ELIGIBLE and ALARM_ELIGIBLE both resolve to an incident
@@ -160,6 +209,15 @@ class ThreatEngineRuntimeAdapter:
                 timestamp=datetime.now(timezone.utc),
             )
             await session.commit()
+        self._beat("incident", reason=f"incident_id={incident.id}")
+        _audit_logger.info(
+            "Incident created: incident_id=%s camera=%s track=%d threat_level=%s reason=%s",
+            incident.id,
+            signal.camera_id,
+            signal.track_id,
+            signal.threat_level.value,
+            signal.reason,
+        )
 
         if signal.signal_type is EscalationSignalType.ALARM_ELIGIBLE:
             await self._alarm_service.trigger(
@@ -168,4 +226,12 @@ class ThreatEngineRuntimeAdapter:
                 incident_id=incident.id,
                 threat_level=signal.threat_level,
                 reason=signal.reason,
+            )
+            self._beat("alarm", reason=f"incident_id={incident.id}")
+            _audit_logger.info(
+                "Alarm triggered: incident_id=%s camera=%s track=%d threat_level=%s",
+                incident.id,
+                signal.camera_id,
+                signal.track_id,
+                signal.threat_level.value,
             )

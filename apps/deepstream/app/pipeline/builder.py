@@ -26,6 +26,7 @@ from typing import Any
 
 from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.models_config import ModelConfigResolver
 
@@ -71,10 +72,15 @@ class DeepStreamPipeline:
         on_bus_message: BusMessageHandler | None = None,
         on_inference_buffer: InferenceBufferHandler | None = None,
         model_config_resolver: ModelConfigResolver | None = None,
+        heartbeat: HeartbeatRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
         self._model_config_resolver = model_config_resolver or ModelConfigResolver()
+        self._heartbeat = heartbeat
+        """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
+        identical pattern. Fed by pad probes below (pgie/tracker/sgie
+        element-level liveness) and _count_frame_probe (rtsp)."""
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
         self._on_inference_buffer = on_inference_buffer
@@ -153,6 +159,16 @@ class DeepStreamPipeline:
         streammux_src_pad = streammux.get_static_pad("src")
         streammux_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._count_frame_probe)
 
+        # RM-11.SIV: element-level liveness only ("a buffer passed through
+        # this element just now") -- cheap, content-free, feeds the
+        # watchdog's per-stage staleness check. Deliberately not merged with
+        # the SGIE probe below: PGIE/tracker can be silently starved (e.g. a
+        # bad tracker config) while the pipeline still nominally runs.
+        pgie_src_pad = pgie.get_static_pad("src")
+        pgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._pgie_alive_probe)
+        tracker_src_pad = tracker.get_static_pad("src")
+        tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._tracker_alive_probe)
+
         # Phase 2: post-classification metadata (detections carry both
         # track IDs and, where applicable, SGIE classifier output by this
         # point). Extraction itself happens in RuntimeAdapter, not here --
@@ -175,8 +191,21 @@ class DeepStreamPipeline:
         candidate = Path(path)
         return candidate if candidate.is_absolute() else REPO_ROOT / candidate
 
+    def _beat(self, component: str) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.beat(component)
+
+    def _pgie_alive_probe(self, _pad: Any, _info: Any) -> Any:
+        self._beat("pgie")
+        return _import_gst().PadProbeReturn.OK
+
+    def _tracker_alive_probe(self, _pad: Any, _info: Any) -> Any:
+        self._beat("tracker")
+        return _import_gst().PadProbeReturn.OK
+
     def _count_frame_probe(self, _pad: Any, info: Any) -> Any:
         Gst = _import_gst()
+        self._beat("rtsp")
         for camera_id in self._sources:
             self._frame_counter.increment(camera_id)
             break
@@ -200,6 +229,7 @@ class DeepStreamPipeline:
 
     def _inference_buffer_probe(self, _pad: Any, info: Any) -> Any:
         Gst = _import_gst()
+        self._beat("sgie")
         if self._on_inference_buffer is not None:
             gst_buffer = info.get_buffer()
             if gst_buffer is not None:

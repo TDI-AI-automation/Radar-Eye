@@ -18,6 +18,7 @@ import pytest
 
 from apps.api.app.models.camera import Camera
 from apps.api.app.repositories.camera import CameraRepository
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.observations import BoundingBox, DetectionObservation, FrameObservation
 from apps.deepstream.app.threat_runtime_adapter import (
     ThreatEngineRuntimeAdapter,
@@ -166,6 +167,43 @@ class TestOrchestration:
             active_alarms = alarm_service.get_active_alarms()
             assert len(active_alarms) == 1
             assert active_alarms[0].incident_id == incident_event.payload.incident_id
+        finally:
+            await bus.stop()
+
+    async def test_full_chain_beats_expected_heartbeat_components(self, session_factory) -> None:
+        """RM-11.SIV Unified Heartbeat: calibration/threat_engine/incident/
+        alarm each beat once the FIRE fast-path runs the full chain."""
+        async with session_factory() as session:
+            camera = await _make_camera(session)
+            await CalibrationService(session).calibrate(
+                camera_id=camera.id,
+                reference_points=_CALIBRATION_POINTS,
+                calibrated_by="installer-1",
+            )
+            await session.commit()
+
+        bus = InProcessEventBus()
+        try:
+            incident_sink: asyncio.Queue = asyncio.Queue()
+            bus.subscribe("IncidentCreatedEvent", _collecting_handler(incident_sink))
+
+            heartbeat = HeartbeatRegistry()
+            adapter = ThreatEngineRuntimeAdapter(
+                session_factory=session_factory,
+                bus=bus,
+                alarm_service=AlarmService(bus=bus),
+                weapon_mapper=lambda _d: WeaponType.FIRE,
+                heartbeat=heartbeat,
+            )
+
+            observation = _observation(camera.id, detections=[_detection(track_id=42)])
+            await adapter.on_frame_observation(observation)
+            await asyncio.wait_for(incident_sink.get(), timeout=1.0)
+
+            for component in ("calibration", "threat_engine", "incident", "alarm"):
+                status = heartbeat.status(component, stale_after_seconds=5.0)
+                assert status.healthy is True, f"{component} did not beat"
+                assert status.counter == 1
         finally:
             await bus.stop()
 
