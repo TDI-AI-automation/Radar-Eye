@@ -209,11 +209,13 @@ class SIVFeatureFlags(BaseModel):
 
 class WatchdogStaleThresholds(BaseModel):
     camera: float = 5.0
+    rtsp: float = 5.0
     pipeline_fps: float = 5.0
     pgie: float = 5.0
     tracker: float = 5.0
     sgie: float = 5.0
     runtime_adapter: float = 5.0
+    threat_runtime_adapter: float = 5.0
     threat_engine: float = 10.0
     calibration: float = 10.0
     incident: float = 10.0

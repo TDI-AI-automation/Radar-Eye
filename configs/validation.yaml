@@ -15,11 +15,13 @@ watchdog:
   check_interval_seconds: 2.0
   stale_after_seconds:
     camera: 5.0
+    rtsp: 5.0
     pipeline_fps: 5.0
     pgie: 5.0
     tracker: 5.0
     sgie: 5.0
     runtime_adapter: 5.0
+    threat_runtime_adapter: 5.0
     threat_engine: 10.0
     calibration: 10.0
     incident: 10.0

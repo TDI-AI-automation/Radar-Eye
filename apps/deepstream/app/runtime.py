@@ -102,6 +102,12 @@ class DeepStreamRuntime:
         self._instrumentation = PerformanceInstrumentation(
             pgie_is_placeholder=not models.pgie.enabled
         )
+        self.instrumentation = self._instrumentation
+        """Public alias -- RM-11.SIV's siv/watchdog.py and siv/dashboard.py
+        (constructed externally by scripts/run_siv.py, never imported here
+        -- see apps/deepstream/app/siv/__init__.py) need direct read access
+        to call .snapshot() themselves, not just the periodic log line
+        _sample_metrics_forever already produces."""
         self._runtime_adapter = RuntimeAdapter(
             bus,
             instrumentation=self._instrumentation,

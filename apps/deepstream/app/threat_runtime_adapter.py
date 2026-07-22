@@ -121,6 +121,7 @@ class ThreatEngineRuntimeAdapter:
         """Threat assessment requires a stable track -- untracked detections
         (track_id is None; see DetectionObservation's docstring) are
         skipped, matching ThreatEngine's per-track escalation model."""
+        self._beat("threat_runtime_adapter")
         for detection in observation.detections:
             if detection.track_id is None:
                 continue
