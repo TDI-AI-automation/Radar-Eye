@@ -24,6 +24,7 @@ from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
 from apps.api.app.security.encryption import get_credential_encryption_provider
+from apps.deepstream.app.config import get_models_settings
 from apps.deepstream.app.config import get_settings as get_deepstream_settings
 from apps.deepstream.app.runtime import DeepStreamRuntime
 from shared.events.bus import InProcessEventBus
@@ -37,6 +38,7 @@ async def _run() -> None:
     logger.info("radar-eye-deepstream starting", extra={"environment": api_settings.environment})
 
     deepstream_settings = get_deepstream_settings()
+    models_settings = get_models_settings()
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(api_settings)
@@ -47,6 +49,7 @@ async def _run() -> None:
     runtime = DeepStreamRuntime(
         loop=loop,
         settings=deepstream_settings,
+        models=models_settings,
         session_factory=session_factory,
         bus=bus,
         encryption=encryption,

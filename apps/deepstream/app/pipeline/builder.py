@@ -24,9 +24,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from apps.deepstream.app.config import DeepStreamSettings
+from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter
 from apps.deepstream.app.ingestion.source import RtspSource
+from apps.deepstream.app.models_config import ModelConfigResolver
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,16 @@ class DeepStreamPipeline:
     def __init__(
         self,
         settings: DeepStreamSettings,
+        models: ModelsSettings,
         *,
         frame_counter: FrameCounter,
         on_bus_message: BusMessageHandler | None = None,
         on_inference_buffer: InferenceBufferHandler | None = None,
+        model_config_resolver: ModelConfigResolver | None = None,
     ) -> None:
         self._settings = settings
+        self._models = models
+        self._model_config_resolver = model_config_resolver or ModelConfigResolver()
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
         self._on_inference_buffer = on_inference_buffer
@@ -82,6 +87,12 @@ class DeepStreamPipeline:
         self._request_pads: dict[uuid.UUID, Any] = {}
         self._pad_index_to_camera_id: dict[int, uuid.UUID] = {}
         self._ingress_timestamps: dict[int, tuple[float, datetime]] = {}
+        self.pgie_is_placeholder = True
+        self.sgie_is_placeholder = True
+        """Set by build() from ModelConfigResolver's result -- exposed so
+        callers (runtime.py, RM-11.SIV's dashboard/report) can tell real
+        model results apart from placeholder-model results without
+        re-reading configs/models.yaml themselves."""
 
     def build(self) -> None:
         Gst = _import_gst()
@@ -101,7 +112,9 @@ class DeepStreamPipeline:
         pgie = Gst.ElementFactory.make("nvinfer", "pgie")
         if pgie is None:
             raise RuntimeError("Failed to create nvinfer (PGIE)")
-        pgie_config_path = self._resolve_config_path(self._settings.pgie_config_path)
+        resolved_pgie = self._model_config_resolver.resolve_pgie(self._models)
+        self.pgie_is_placeholder = resolved_pgie.is_placeholder
+        pgie_config_path = self._resolve_config_path(str(resolved_pgie.config_file_path))
         pgie.set_property("config-file-path", str(pgie_config_path))
         self._pipeline.add(pgie)
         self._pgie = pgie
@@ -119,7 +132,9 @@ class DeepStreamPipeline:
         sgie = Gst.ElementFactory.make("nvinfer", "sgie")
         if sgie is None:
             raise RuntimeError("Failed to create nvinfer (SGIE)")
-        sgie_config_path = self._resolve_config_path(self._settings.sgie_config_path)
+        resolved_sgie = self._model_config_resolver.resolve_sgie(self._models)
+        self.sgie_is_placeholder = resolved_sgie.is_placeholder
+        sgie_config_path = self._resolve_config_path(str(resolved_sgie.config_file_path))
         sgie.set_property("config-file-path", str(sgie_config_path))
         self._pipeline.add(sgie)
         self._sgie = sgie
@@ -205,7 +220,7 @@ class DeepStreamPipeline:
             raise RuntimeError("build() must be called before add_source()")
 
         pad_index = len(self._request_pads)
-        bin_ = source.build()
+        bin_ = source.build(latency_ms=self._settings.rtsp_default_latency_ms)
         self._pipeline.add(bin_)
 
         sink_pad = self._streammux.get_request_pad(f"sink_{pad_index}")

@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.bridge import AsyncBridge
-from apps.deepstream.app.config import DeepStreamSettings
+from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatScheduler
 from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
@@ -69,18 +69,25 @@ class DeepStreamRuntime:
         *,
         loop: asyncio.AbstractEventLoop,
         settings: DeepStreamSettings,
+        models: ModelsSettings,
         session_factory: async_sessionmaker[AsyncSession],
         bus: EventBus,
         encryption: Any,
     ) -> None:
         self._loop = loop
         self._settings = settings
+        self._models = models
         self._session_factory = session_factory
         self._bus = bus
         self._encryption = encryption
 
+        # RM-11.SIV Decision C: placeholder status now comes from
+        # configs/models.yaml (pgie.enabled/sgie.enabled), not
+        # DeepStreamSettings -- computed here rather than read off
+        # self._pipeline.pgie_is_placeholder because that attribute is only
+        # set once build() runs, later than this constructor.
         self._instrumentation = PerformanceInstrumentation(
-            pgie_is_placeholder=settings.pgie_is_placeholder
+            pgie_is_placeholder=not models.pgie.enabled
         )
         self._runtime_adapter = RuntimeAdapter(bus, instrumentation=self._instrumentation)
 
@@ -97,6 +104,7 @@ class DeepStreamRuntime:
         self._bridge = AsyncBridge(loop)
         self._pipeline = DeepStreamPipeline(
             settings,
+            models,
             frame_counter=self._frame_counter,
             on_bus_message=self._on_bus_message,
             on_inference_buffer=self._on_inference_buffer,

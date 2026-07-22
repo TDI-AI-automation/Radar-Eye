@@ -6,6 +6,16 @@ duplicated here -- camera ingestion reuses
 ``apps.api.app.config.get_settings()`` for those (RM-03's established
 pattern; ``services/calibration`` already imports ``apps.api.app.models`` /
 ``apps.api.app.repositories`` directly, per its RM-05 design review).
+
+RM-11.SIV Decision C superseded ``pgie_config_path``/``pgie_is_placeholder``/
+``sgie_config_path``/``sgie_is_placeholder`` (RM-11 Phase 1/2's mechanism) --
+model configuration now lives entirely in ``configs/models.yaml``
+(``ModelsSettings`` below) and is resolved by
+``apps.deepstream.app.models_config.ModelConfigResolver``, which falls back
+to the original placeholder configs itself when a stage is disabled. Those
+four fields were removed rather than kept alongside the new mechanism, per
+CLAUDE.md's "avoid backwards-compatibility hacks... if something is unused,
+delete it completely" -- ``models.yaml`` is now the only source of truth.
 """
 
 from __future__ import annotations
@@ -42,18 +52,12 @@ class DeepStreamSettings(BaseModel):
     streammux_width: int = 1920
     streammux_height: int = 1080
 
-    pgie_config_path: str = "apps/deepstream/configs/pgie_placeholder.txt"
-    """Relative to the repo root unless already absolute. Placeholder model
-    per RM-11 Phase 1 (Decision C) -- see the referenced file's header."""
-    pgie_is_placeholder: bool = True
-    """Logged/exposed alongside performance metrics so placeholder-model
-    results are never mistaken for production-model benchmarks."""
-
-    sgie_config_path: str = "apps/deepstream/configs/sgie_placeholder.txt"
-    """Relative to the repo root unless already absolute. Placeholder
-    classifier per RM-11 Phase 2 (Decision B) -- see the referenced file's
-    header."""
-    sgie_is_placeholder: bool = True
+    rtsp_default_latency_ms: int = 200
+    """RM-11.SIV Decision B: folded into this existing section rather than
+    a new configs/rtsp.yaml -- was previously hardcoded in
+    ingestion/source.py's build_source_bin. Per-camera transport already
+    comes from camera_stream_profiles.transport (DB); latency has no
+    per-camera column, so it's a single pipeline-wide default here."""
 
     tracker_ll_lib_path: str = (
         "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
