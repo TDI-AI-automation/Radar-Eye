@@ -620,3 +620,81 @@ Fire:
 Reason:
 
 Prevent unnecessary alarm activations.
+
+---
+
+# ADR-027
+
+Decision:
+
+DeepStream Runtime Adapter as Anti-Corruption Layer.
+
+Status:
+
+ACCEPTED
+
+Boundary:
+
+The Runtime Adapter (apps/deepstream/app/runtime_adapter.py) is the sole boundary between the NVIDIA DeepStream/GStreamer SDK and the application domain.
+
+Prohibited Beyond Runtime Adapter:
+
+- pyds
+- NvDsBatchMeta
+- NvDsFrameMeta
+- NvDsObjectMeta
+- NvDsClassifierMeta
+- NvDsUserMeta
+- Gst.Buffer
+- Gst.Sample
+- Any other DeepStream- or GStreamer-specific runtime type
+
+Permitted Beyond Runtime Adapter:
+
+Repository-native domain objects only.
+
+Examples:
+
+- FrameObservation
+- DetectionObservation
+- TrackObservation
+- DistanceEstimate
+- ThreatAssessmentEvent
+- HumanReviewItemCreatedEvent
+- CameraDisconnectedEvent
+- SystemEvent
+
+Runtime Adapter Owns:
+
+- Metadata extraction
+- Coordinate conversion
+- Timestamp normalization
+- Confidence normalization
+- Class mapping
+- SDK-specific error handling
+
+Application Services Own:
+
+- Business rules
+- Threat assessment
+- Calibration semantics
+- Incident creation
+- Alarm generation
+- Event publication
+
+Import Restriction:
+
+No subsystem outside apps/deepstream/ may import:
+
+- pyds
+- gi.repository.Gst
+- gi.repository.GLib
+- Any DeepStream helper library
+
+Scope:
+
+Applies to all present and future milestones and subsystems, not RM-11 alone.
+
+Reason:
+
+Isolates the application domain from a specific inference/runtime SDK. If the inference backend is replaced (TensorRT, Triton, ONNX Runtime, OpenVINO, CPU inference, simulation, recorded playback, etc.), only the Runtime Adapter requires modification; every other subsystem remains unchanged.
