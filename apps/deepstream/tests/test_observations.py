@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from apps.deepstream.app.observations import build_frame_observation
+from apps.deepstream.app.observations import RawDetection, build_frame_observation
 
 _CAMERA = uuid.uuid4()
 _INGRESS = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -53,7 +53,7 @@ class TestBuildFrameObservation:
             frame_num=2,
             ingress_timestamp=_INGRESS,
             metadata_timestamp=_METADATA,
-            raw_detections=[(3, "car", 0.87, (10.0, 20.0, 30.0, 40.0), 42)],
+            raw_detections=[(3, "car", 0.87, (10.0, 20.0, 30.0, 40.0), 42, None)],
         )
 
         assert len(observation.detections) == 1
@@ -66,6 +66,7 @@ class TestBuildFrameObservation:
         assert detection.bbox.width == 30.0
         assert detection.bbox.height == 40.0
         assert detection.track_id == 42
+        assert detection.secondary_label is None
 
     def test_detection_without_track_id_is_none(self) -> None:
         """Untracked detections (before NvDCF assigns an ID) carry track_id=None."""
@@ -74,16 +75,27 @@ class TestBuildFrameObservation:
             frame_num=3,
             ingress_timestamp=_INGRESS,
             metadata_timestamp=_METADATA,
-            raw_detections=[(0, "person", 0.5, (0.0, 0.0, 1.0, 1.0), None)],
+            raw_detections=[(0, "person", 0.5, (0.0, 0.0, 1.0, 1.0), None, None)],
         )
 
         assert observation.detections[0].track_id is None
 
+    def test_detection_carries_sgie_secondary_label(self) -> None:
+        observation = build_frame_observation(
+            camera_id=_CAMERA,
+            frame_num=5,
+            ingress_timestamp=_INGRESS,
+            metadata_timestamp=_METADATA,
+            raw_detections=[(0, "car", 0.9, (0.0, 0.0, 1.0, 1.0), 1, "coupe")],
+        )
+
+        assert observation.detections[0].secondary_label == "coupe"
+
     def test_multiple_detections_preserve_order(self) -> None:
-        raw = [
-            (0, "person", 0.9, (0.0, 0.0, 1.0, 1.0), 1),
-            (1, "car", 0.8, (1.0, 1.0, 1.0, 1.0), 2),
-            (2, "bicycle", 0.7, (2.0, 2.0, 1.0, 1.0), None),
+        raw: list[RawDetection] = [
+            (0, "person", 0.9, (0.0, 0.0, 1.0, 1.0), 1, None),
+            (1, "car", 0.8, (1.0, 1.0, 1.0, 1.0), 2, "sedan"),
+            (2, "bicycle", 0.7, (2.0, 2.0, 1.0, 1.0), None, None),
         ]
         observation = build_frame_observation(
             camera_id=_CAMERA,

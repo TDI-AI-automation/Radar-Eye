@@ -1,10 +1,11 @@
-"""Shared GStreamer pipeline: nvstreammux + per-camera source bins + PGIE/tracker.
+"""Shared GStreamer pipeline: nvstreammux + per-camera source bins + PGIE/tracker/SGIE.
 
 Source: DEEPSTREAM_PIPELINE_SPEC.md Stage 2 (StreamMux), Stage 3 (Primary
-GIE), Stage 4 (Tracking). Phase 1 scope (per the RM-11 Phase 1 approval):
-PGIE (placeholder model, see apps/deepstream/configs/pgie_placeholder.txt)
-and NvDCF tracker attach between streammux and the tail sink. SGIE remains
-Phase 2 scope.
+GIE), Stage 4 (Tracking), Stage 5 (Secondary GIE). Phase 1 (PGIE, placeholder
+model, see apps/deepstream/configs/pgie_placeholder.txt; NvDCF tracker) and
+Phase 2 (SGIE, placeholder classifier, see
+apps/deepstream/configs/sgie_placeholder.txt) both attach between streammux
+and the tail sink, per each phase's approval.
 
 Per ADR-027, this module builds and wires GStreamer/DeepStream *elements*
 only -- it never touches ``pyds`` or parses ``NvDsBatchMeta`` itself. The
@@ -76,6 +77,7 @@ class DeepStreamPipeline:
         self._streammux: Any = None
         self._pgie: Any = None
         self._tracker: Any = None
+        self._sgie: Any = None
         self._sources: dict[uuid.UUID, RtspSource] = {}
         self._request_pads: dict[uuid.UUID, Any] = {}
         self._pad_index_to_camera_id: dict[int, uuid.UUID] = {}
@@ -114,24 +116,34 @@ class DeepStreamPipeline:
         self._pipeline.add(tracker)
         self._tracker = tracker
 
+        sgie = Gst.ElementFactory.make("nvinfer", "sgie")
+        if sgie is None:
+            raise RuntimeError("Failed to create nvinfer (SGIE)")
+        sgie_config_path = self._resolve_config_path(self._settings.sgie_config_path)
+        sgie.set_property("config-file-path", str(sgie_config_path))
+        self._pipeline.add(sgie)
+        self._sgie = sgie
+
         fakesink = Gst.ElementFactory.make("fakesink", "tail-sink")
         fakesink.set_property("sync", 0)
         self._pipeline.add(fakesink)
 
         streammux.link(pgie)
         pgie.link(tracker)
-        tracker.link(fakesink)
+        tracker.link(sgie)
+        sgie.link(fakesink)
 
         # Heartbeat FPS counting (Phase 0, RM-09 integration) -- unchanged,
         # still counts every batched frame regardless of inference result.
         streammux_src_pad = streammux.get_static_pad("src")
         streammux_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._count_frame_probe)
 
-        # Phase 1: post-tracking metadata (detections carry track IDs by
-        # this point). Extraction itself happens in RuntimeAdapter, not here
-        # -- see the module docstring and ADR-027.
-        tracker_src_pad = tracker.get_static_pad("src")
-        tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._inference_buffer_probe)
+        # Phase 2: post-classification metadata (detections carry both
+        # track IDs and, where applicable, SGIE classifier output by this
+        # point). Extraction itself happens in RuntimeAdapter, not here --
+        # see the module docstring and ADR-027.
+        sgie_src_pad = sgie.get_static_pad("src")
+        sgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._inference_buffer_probe)
 
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()

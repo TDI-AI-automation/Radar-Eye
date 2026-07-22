@@ -45,6 +45,12 @@ class DeepStreamSettings(BaseModel):
     """Logged/exposed alongside performance metrics so placeholder-model
     results are never mistaken for production-model benchmarks."""
 
+    sgie_config_path: str = "apps/deepstream/configs/sgie_placeholder.txt"
+    """Relative to the repo root unless already absolute. Placeholder
+    classifier per RM-11 Phase 2 (Decision B) -- see the referenced file's
+    header."""
+    sgie_is_placeholder: bool = True
+
     tracker_ll_lib_path: str = (
         "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
     )
