@@ -51,6 +51,16 @@ This document reflects the **operational implementation state** as last recorded
 
 ---
 
+## Repository Milestones
+
+Durable log of significant whole-repository achievements — distinct from `Milestone Status` below (per-`RM-XX` roadmap progress) and from `Recently Completed`/`Changelog` (chronological work logs). An entry here marks a repository-wide state worth remembering on its own, not tied to one milestone's completion.
+
+| Date | Milestone |
+|---|---|
+| 2026-07-22 | **First fully green repository validation achieved**: 278 passed, 0 failed, 49 skipped (DB-dependent tests skipping without reachable PostgreSQL, not failures), ruff/black clean repo-wide, on `develop`. Reached after fixing the repository's last remaining test failure — a test-only async event-delivery race in `tests/services/recording/test_service.py::test_disk_usage_warning_threshold` (RM-08), not a production defect. See the Snapshot "Quality gates" row and the corresponding Recently Completed entry for full detail. |
+
+---
+
 ## Next Immediate Action
 
 **Current Milestone:**
@@ -206,6 +216,7 @@ Note: `docs/TASKS.md` (a different file from root `TASKS.md`) is a candidate for
 
 | Date | Change | By |
 |---|---|---|
+| 2026-07-22 | Added a new "Repository Milestones" section recording the first fully green repository validation as a durable, standalone entry, per explicit request | Claude |
 | 2026-07-22 | RM-08 async event-delivery test race fixed on `feature/recording` and merged into `develop` following Principal Engineer review approval (no production code changed); repository quality gates now fully green (278 passed, 0 failed, 49 skipped) for the first time; new Snapshot "Quality gates" row and Recently Completed updated | Claude |
 | 2026-07-22 | RM-11 Phase 2 merged into `develop` following Principal Engineer review approval (one required follow-up, completed before merge); post-merge quality gates re-verified; Next Immediate Action (now Phase 3), Milestone Status, Subsystem Status, and Recently Completed updated | Claude |
 | 2026-07-22 | RM-11 Phase 2's required latency-instrumentation follow-up completed on `feature/deepstream`: root-caused via a real-hardware PTS-based diagnostic, fixed (rolling-average latency, no application behavior change), re-verified on hardware; Design note (RM-11, Phase 2), Next Immediate Action, and Recently Completed updated | Claude |
