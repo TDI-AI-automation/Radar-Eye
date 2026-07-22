@@ -38,6 +38,30 @@ class DeepStreamSettings(BaseModel):
     streammux_width: int = 1920
     streammux_height: int = 1080
 
+    pgie_config_path: str = "apps/deepstream/configs/pgie_placeholder.txt"
+    """Relative to the repo root unless already absolute. Placeholder model
+    per RM-11 Phase 1 (Decision C) -- see the referenced file's header."""
+    pgie_is_placeholder: bool = True
+    """Logged/exposed alongside performance metrics so placeholder-model
+    results are never mistaken for production-model benchmarks."""
+
+    tracker_ll_lib_path: str = (
+        "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
+    )
+    tracker_ll_config_path: str = (
+        "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml"
+    )
+    """Standard DeepStream SDK install paths (``deepstream`` symlinks to the
+    installed version, e.g. ``deepstream-7.0``) -- not vendored into this
+    repo, matching the same reasoning as the PGIE model files themselves."""
+    tracker_width: int = 640
+    tracker_height: int = 384
+
+    metrics_sample_interval_seconds: float = 2.0
+    """How often system-level metrics (GPU/CPU/memory) are sampled via
+    subprocess/``/proc`` -- deliberately not per-frame, so instrumentation
+    stays lightweight (RM-11 Phase 1 approval's instrumentation constraint)."""
+
 
 def _load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:

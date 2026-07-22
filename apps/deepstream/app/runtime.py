@@ -1,11 +1,12 @@
-"""DeepStream runtime composition and lifecycle (Phase 0).
+"""DeepStream runtime composition and lifecycle (Phase 0 + Phase 1).
 
 Wires together everything RM-11 owns: the camera roster (DB), the GStreamer
-pipeline, the GLib<->asyncio bridge, the Runtime Adapter, and the heartbeat
-scheduler. Per the RM-11 design review's Decision A, this all lives in one
-OS process sharing one asyncio loop -- ``DeepStreamRuntime`` does not start
-its own competing loop; callers (see ``main.py``) pass in the loop they are
-already running.
+pipeline (streammux/PGIE/tracker as of Phase 1), the GLib<->asyncio bridge,
+the Runtime Adapter, the heartbeat scheduler, and (Phase 1) performance
+instrumentation. Per the RM-11 design review's Decision A, this all lives
+in one OS process sharing one asyncio loop -- ``DeepStreamRuntime`` does not
+start its own competing loop; callers (see ``main.py``) pass in the loop
+they are already running.
 
 Reconnect orchestration lives here (not in ``ingestion/source.py``, which
 only builds/tears down GStreamer elements): a bus ERROR/EOS message for a
@@ -20,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,6 +34,7 @@ from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatSchedule
 from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from shared.events.bus import EventBus
@@ -64,21 +68,29 @@ class DeepStreamRuntime:
         self._bus = bus
         self._encryption = encryption
 
-        self._runtime_adapter = RuntimeAdapter(bus)
+        self._instrumentation = PerformanceInstrumentation(
+            pgie_is_placeholder=settings.pgie_is_placeholder
+        )
+        self._runtime_adapter = RuntimeAdapter(bus, instrumentation=self._instrumentation)
         self._frame_counter = FrameCounter()
         self._bridge = AsyncBridge(loop)
         self._pipeline = DeepStreamPipeline(
-            settings, frame_counter=self._frame_counter, on_bus_message=self._on_bus_message
+            settings,
+            frame_counter=self._frame_counter,
+            on_bus_message=self._on_bus_message,
+            on_inference_buffer=self._on_inference_buffer,
         )
         self._policies: dict[uuid.UUID, ReconnectPolicy] = {}
         self._heartbeat: HeartbeatScheduler | None = None
         self._health_collector: Any | None = None
+        self._metrics_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         async with self._session_factory() as session:
             registry = CameraRegistry(session, self._encryption)
             camera_sources = await registry.load_camera_sources()
 
+        self._instrumentation.mark_pipeline_build_start()
         self._pipeline.build()
         self._bridge.start()
 
@@ -107,6 +119,8 @@ class DeepStreamRuntime:
         )
         self._heartbeat.start()
 
+        self._metrics_task = asyncio.get_event_loop().create_task(self._sample_metrics_forever())
+
     def set_health_collector(self, health_collector: Any) -> None:
         """Injects the shared apps.api ``HealthCollector`` instance (RM-11
         design review, Decision A: single process, shared in-process state).
@@ -115,14 +129,69 @@ class DeepStreamRuntime:
         load time."""
         self._health_collector = health_collector
 
+    def get_metrics_snapshot(self) -> PerformanceSnapshot:
+        """RM-11 Phase 1 approval: 'collect and expose' performance
+        metrics. Exposed here as a plain getter (also periodically logged,
+        see ``_sample_metrics_forever``) -- a REST/WebSocket surface is
+        RM-12's job, out of RM-11 Phase 1's scope."""
+        return self._instrumentation.snapshot()
+
+    async def _sample_metrics_forever(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._settings.metrics_sample_interval_seconds)
+                self._instrumentation.sample_system_metrics()
+                logger.info("DeepStream performance snapshot: %s", self.get_metrics_snapshot())
+        except asyncio.CancelledError:
+            pass
+
     async def stop(self) -> None:
+        if self._metrics_task is not None:
+            self._metrics_task.cancel()
+            self._metrics_task = None
         if self._heartbeat is not None:
             self._heartbeat.stop()
         self._pipeline.stop()
         self._bridge.stop()
 
+    def _on_inference_buffer(
+        self,
+        gst_buffer: Any,
+        camera_id_for_pad_index: dict[int, uuid.UUID],
+        ingress_monotonic_seconds: float,
+        ingress_wallclock: datetime,
+    ) -> None:
+        """Runs on a GStreamer streaming thread (the tracker's src pad
+        probe). Extraction happens synchronously, still inside
+        RuntimeAdapter (ADR-027) -- see extract_frame_observations's
+        docstring for why this cannot be deferred onto the asyncio loop.
+        Only the resulting plain FrameObservation values cross the bridge.
+
+        ``metadata_monotonic_seconds`` is captured immediately after
+        extraction returns (still synchronous, same thread) -- close enough
+        to "when metadata became available" for instrumentation purposes.
+        """
+        observations = self._runtime_adapter.extract_frame_observations(
+            gst_buffer,
+            camera_id_for_pad_index=camera_id_for_pad_index,
+            ingress_timestamp=ingress_wallclock,
+        )
+        metadata_monotonic_seconds = time.monotonic()
+        for observation in observations:
+            self._bridge.schedule(
+                self._runtime_adapter.on_frame_observation(
+                    observation,
+                    ingress_monotonic_seconds=ingress_monotonic_seconds,
+                    metadata_monotonic_seconds=metadata_monotonic_seconds,
+                )
+            )
+
     def _on_bus_message(self, message: Any) -> None:
         """Runs on the GLib main-loop thread (bus signal watch dispatch)."""
+        if self._pipeline.is_pipeline_state_changed_to_playing(message):
+            self._instrumentation.mark_pipeline_playing()
+            return
+
         source = self._pipeline.source_for_message(message)
         if source is None:
             return
