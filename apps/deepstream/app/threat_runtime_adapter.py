@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import DetectionObservation, FrameObservation
 from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
@@ -100,6 +101,7 @@ class ThreatEngineRuntimeAdapter:
         uniform_mapper: UniformMapper = default_uniform_mapper,
         heartbeat: HeartbeatRegistry | None = None,
         tracer: PipelineTracer | None = None,
+        instrumentation: PerformanceInstrumentation | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._bus = bus
@@ -112,6 +114,8 @@ class ThreatEngineRuntimeAdapter:
         callers that don't need SIV visibility aren't forced to construct
         one. None-safe throughout this class via _beat()."""
         self._tracer = tracer or PipelineTracer(enabled=False)
+        self._instrumentation = instrumentation
+        """RM-11.SIV Task 7 throughput counters -- optional, None-safe."""
 
     def _beat(self, component: str, *, reason: str | None = None) -> None:
         if self._heartbeat is not None:
@@ -196,6 +200,8 @@ class ThreatEngineRuntimeAdapter:
             return
 
         if isinstance(result.payload, ThreatAssessmentPayload):
+            if self._instrumentation is not None:
+                self._instrumentation.record_threat_assessment()
             if self._tracer.enabled:
                 self._tracer.threat_assessment(
                     frame_correlation_id,
@@ -212,6 +218,8 @@ class ThreatEngineRuntimeAdapter:
                 )
         if self._tracer.enabled:
             self._tracer.event_published(frame_correlation_id, event_type=result.event_type)
+        if self._instrumentation is not None:
+            self._instrumentation.record_event_published()
         await self._bus.publish(result)
 
     async def _handle_escalation(self, signal: EscalationSignal, frame_correlation_id: str) -> None:
@@ -230,6 +238,8 @@ class ThreatEngineRuntimeAdapter:
             )
             await session.commit()
         self._beat("incident", reason=f"incident_id={incident.id}")
+        if self._instrumentation is not None:
+            self._instrumentation.record_incident()
         _audit_logger.info(
             "Incident created: incident_id=%s camera=%s track=%d threat_level=%s reason=%s",
             incident.id,
@@ -250,6 +260,8 @@ class ThreatEngineRuntimeAdapter:
                 reason=signal.reason,
             )
             self._beat("alarm", reason=f"incident_id={incident.id}")
+            if self._instrumentation is not None:
+                self._instrumentation.record_alarm()
             _audit_logger.info(
                 "Alarm triggered: incident_id=%s camera=%s track=%d threat_level=%s",
                 incident.id,

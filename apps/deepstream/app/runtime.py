@@ -126,6 +126,7 @@ class DeepStreamRuntime:
             alarm_service=self._alarm_service,
             heartbeat=self.heartbeat_registry,
             tracer=self._tracer,
+            instrumentation=self._instrumentation,
         )
 
         self._frame_counter = FrameCounter()
@@ -137,6 +138,7 @@ class DeepStreamRuntime:
             on_bus_message=self._on_bus_message,
             on_inference_buffer=self._on_inference_buffer,
             heartbeat=self.heartbeat_registry,
+            instrumentation=self._instrumentation,
         )
         self._policies: dict[uuid.UUID, ReconnectPolicy] = {}
         self._heartbeat: HeartbeatScheduler | None = None

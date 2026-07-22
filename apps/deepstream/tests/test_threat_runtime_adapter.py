@@ -19,6 +19,7 @@ import pytest
 from apps.api.app.models.camera import Camera
 from apps.api.app.repositories.camera import CameraRepository
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import BoundingBox, DetectionObservation, FrameObservation
 from apps.deepstream.app.threat_runtime_adapter import (
     ThreatEngineRuntimeAdapter,
@@ -188,22 +189,38 @@ class TestOrchestration:
             bus.subscribe("IncidentCreatedEvent", _collecting_handler(incident_sink))
 
             heartbeat = HeartbeatRegistry()
+            instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
             adapter = ThreatEngineRuntimeAdapter(
                 session_factory=session_factory,
                 bus=bus,
                 alarm_service=AlarmService(bus=bus),
                 weapon_mapper=lambda _d: WeaponType.FIRE,
                 heartbeat=heartbeat,
+                instrumentation=instrumentation,
             )
 
             observation = _observation(camera.id, detections=[_detection(track_id=42)])
             await adapter.on_frame_observation(observation)
             await asyncio.wait_for(incident_sink.get(), timeout=1.0)
 
-            for component in ("calibration", "threat_engine", "incident", "alarm"):
+            for component in (
+                "threat_runtime_adapter",
+                "calibration",
+                "threat_engine",
+                "incident",
+                "alarm",
+            ):
                 status = heartbeat.status(component, stale_after_seconds=5.0)
                 assert status.healthy is True, f"{component} did not beat"
                 assert status.counter == 1
+
+            # RM-11.SIV Task 7: instrumentation wiring exercised through the
+            # real orchestration path (rate math itself is unit-tested
+            # SDK-free in test_instrumentation.py -- a single frame can't
+            # produce a rate, since _RollingRateCounter needs 2+ samples).
+            snapshot = instrumentation.snapshot()
+            assert snapshot.threat_throughput_per_sec is None
+            assert snapshot.event_throughput_per_sec is None
         finally:
             await bus.stop()
 

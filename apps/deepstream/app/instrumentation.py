@@ -67,6 +67,12 @@ class PerformanceSnapshot:
     system_memory_used_pct: float | None
     frames_processed: int
     pgie_is_placeholder: bool
+    pgie_fps: float | None
+    sgie_fps: float | None
+    event_throughput_per_sec: float | None
+    threat_throughput_per_sec: float | None
+    alarm_throughput_per_sec: float | None
+    incident_throughput_per_sec: float | None
 
 
 @dataclass
@@ -139,8 +145,34 @@ def _read_system_memory_used_pct() -> float | None:
         return None
 
 
+class _RollingRateCounter:
+    """Counts calls within a rolling time window and reports a per-second
+    rate -- the same rolling-window principle as _FPS_WINDOW_SIZE/
+    _LATENCY_WINDOW_SIZE above, generalized here (RM-11.SIV Task 7) rather
+    than duplicating that arithmetic six more times for pgie/sgie fps and
+    event/threat/alarm/incident throughput. The pre-existing FPS/latency
+    fields are left exactly as they were (already hardware-verified in
+    RM-11 Phase 1/2) -- this class is additive, used only by the new
+    metrics below."""
+
+    def __init__(self, *, window_size: int = 120) -> None:
+        self._timestamps: deque[float] = deque(maxlen=window_size)
+
+    def record(self) -> None:
+        self._timestamps.append(time.monotonic())
+
+    def rate_per_second(self) -> float | None:
+        if len(self._timestamps) < 2:
+            return None
+        span = self._timestamps[-1] - self._timestamps[0]
+        if span <= 0:
+            return None
+        return (len(self._timestamps) - 1) / span
+
+
 class PerformanceInstrumentation:
-    """Owns every metric named in the RM-11 Phase 1 approval."""
+    """Owns every metric named in the RM-11 Phase 1 approval, plus
+    RM-11.SIV's PGIE/SGIE fps and event/threat/alarm/incident throughput."""
 
     def __init__(self, *, pgie_is_placeholder: bool) -> None:
         self._pgie_is_placeholder = pgie_is_placeholder
@@ -158,6 +190,13 @@ class PerformanceInstrumentation:
         self._cpu_utilization_pct: float | None = None
         self._system_memory_used_pct: float | None = None
 
+        self._pgie_rate = _RollingRateCounter()
+        self._sgie_rate = _RollingRateCounter()
+        self._event_rate = _RollingRateCounter()
+        self._threat_rate = _RollingRateCounter()
+        self._alarm_rate = _RollingRateCounter()
+        self._incident_rate = _RollingRateCounter()
+
     def mark_pipeline_build_start(self) -> None:
         self._build_started_at = time.monotonic()
 
@@ -173,6 +212,24 @@ class PerformanceInstrumentation:
         self._frame_timestamps.append(metadata_seconds)
         self._latency_samples_ms.append(max(0.0, (metadata_seconds - ingress_seconds) * 1000.0))
         self._frames_processed += 1
+
+    def record_pgie_frame(self) -> None:
+        self._pgie_rate.record()
+
+    def record_sgie_frame(self) -> None:
+        self._sgie_rate.record()
+
+    def record_event_published(self) -> None:
+        self._event_rate.record()
+
+    def record_threat_assessment(self) -> None:
+        self._threat_rate.record()
+
+    def record_alarm(self) -> None:
+        self._alarm_rate.record()
+
+    def record_incident(self) -> None:
+        self._incident_rate.record()
 
     def sample_system_metrics(self) -> None:
         """Expensive (subprocess + file I/O) -- call on a slow periodic
@@ -222,4 +279,10 @@ class PerformanceInstrumentation:
             system_memory_used_pct=self._system_memory_used_pct,
             frames_processed=self._frames_processed,
             pgie_is_placeholder=self._pgie_is_placeholder,
+            pgie_fps=self._pgie_rate.rate_per_second(),
+            sgie_fps=self._sgie_rate.rate_per_second(),
+            event_throughput_per_sec=self._event_rate.rate_per_second(),
+            threat_throughput_per_sec=self._threat_rate.rate_per_second(),
+            alarm_throughput_per_sec=self._alarm_rate.rate_per_second(),
+            incident_throughput_per_sec=self._incident_rate.rate_per_second(),
         )

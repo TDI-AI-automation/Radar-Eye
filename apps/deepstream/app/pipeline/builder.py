@@ -28,6 +28,7 @@ from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.source import RtspSource
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.models_config import ModelConfigResolver
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,13 @@ class DeepStreamPipeline:
         on_inference_buffer: InferenceBufferHandler | None = None,
         model_config_resolver: ModelConfigResolver | None = None,
         heartbeat: HeartbeatRegistry | None = None,
+        instrumentation: PerformanceInstrumentation | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
+        self._instrumentation = instrumentation
+        """RM-11.SIV Task 7 -- optional, feeds record_pgie_frame()/
+        record_sgie_frame() from the alive probes below."""
         self._model_config_resolver = model_config_resolver or ModelConfigResolver()
         self._heartbeat = heartbeat
         """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
@@ -197,6 +202,8 @@ class DeepStreamPipeline:
 
     def _pgie_alive_probe(self, _pad: Any, _info: Any) -> Any:
         self._beat("pgie")
+        if self._instrumentation is not None:
+            self._instrumentation.record_pgie_frame()
         return _import_gst().PadProbeReturn.OK
 
     def _tracker_alive_probe(self, _pad: Any, _info: Any) -> Any:
@@ -230,6 +237,8 @@ class DeepStreamPipeline:
     def _inference_buffer_probe(self, _pad: Any, info: Any) -> Any:
         Gst = _import_gst()
         self._beat("sgie")
+        if self._instrumentation is not None:
+            self._instrumentation.record_sgie_frame()
         if self._on_inference_buffer is not None:
             gst_buffer = info.get_buffer()
             if gst_buffer is not None:
