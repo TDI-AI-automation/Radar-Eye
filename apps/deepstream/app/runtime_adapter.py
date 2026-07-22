@@ -39,6 +39,7 @@ from typing import Any, Literal
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import FrameObservation, RawDetection, build_frame_observation
+from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from shared.events.bus import EventBus
 from shared.events.payloads import CameraDisconnectedPayload, SystemEventPayload
@@ -67,12 +68,14 @@ class RuntimeAdapter:
         *,
         instrumentation: PerformanceInstrumentation | None = None,
         heartbeat: HeartbeatRegistry | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> None:
         self._bus = bus
         self._instrumentation = instrumentation
         self._heartbeat = heartbeat
         """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
         identical pattern."""
+        self._tracer = tracer or PipelineTracer(enabled=False)
         self._status: dict[uuid.UUID, CameraConnectionStatus] = {}
         self._observation_count = 0
         self.last_observation: FrameObservation | None = None
@@ -182,17 +185,41 @@ class RuntimeAdapter:
             frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
             camera_id = camera_id_for_pad_index.get(frame_meta.pad_index)
             if camera_id is not None:
-                observations.append(
-                    build_frame_observation(
-                        camera_id=camera_id,
-                        frame_num=frame_meta.frame_num,
-                        ingress_timestamp=ingress_timestamp,
-                        metadata_timestamp=metadata_timestamp,
-                        raw_detections=self._extract_raw_detections(frame_meta),
-                    )
+                observation = build_frame_observation(
+                    camera_id=camera_id,
+                    frame_num=frame_meta.frame_num,
+                    ingress_timestamp=ingress_timestamp,
+                    metadata_timestamp=metadata_timestamp,
+                    raw_detections=self._extract_raw_detections(frame_meta),
                 )
+                observations.append(observation)
+                if self._tracer.enabled:
+                    self._trace_observation(observation)
             l_frame = l_frame.next
         return observations
+
+    def _trace_observation(self, observation: FrameObservation) -> None:
+        """RM-11.SIV frame trace -- only called when tracer.enabled is
+        already True (see the call site), so this method's own cost never
+        applies to the default (disabled) path."""
+        correlation_id = self._tracer.frame_id(observation.camera_id, observation.frame_num)
+        self._tracer.frame_received(correlation_id)
+        for detection in observation.detections:
+            self._tracer.object_detected(
+                correlation_id,
+                class_label=detection.label,
+                confidence=detection.confidence,
+                bbox=detection.bbox,
+            )
+            if detection.track_id is not None:
+                self._tracer.track_updated(correlation_id, track_id=detection.track_id)
+            if detection.secondary_label is not None:
+                self._tracer.secondary_classification(
+                    correlation_id, label=detection.secondary_label
+                )
+        self._tracer.frame_observation_created(
+            correlation_id, detection_count=len(observation.detections)
+        )
 
     @staticmethod
     def _extract_raw_detections(frame_meta: Any) -> list[RawDetection]:

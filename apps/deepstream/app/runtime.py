@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.bridge import AsyncBridge
-from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
+from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings, ValidationSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatScheduler
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
@@ -46,6 +46,7 @@ from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
+from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from apps.deepstream.app.stage_logging import get_audit_logger
 from apps.deepstream.app.threat_runtime_adapter import ThreatEngineRuntimeAdapter
@@ -73,6 +74,7 @@ class DeepStreamRuntime:
         loop: asyncio.AbstractEventLoop,
         settings: DeepStreamSettings,
         models: ModelsSettings,
+        validation: ValidationSettings,
         session_factory: async_sessionmaker[AsyncSession],
         bus: EventBus,
         encryption: Any,
@@ -90,6 +92,7 @@ class DeepStreamRuntime:
         # taken by the RM-09 HeartbeatScheduler below) so scripts/run_siv.py
         # can wire them up without reaching into private state.
         self.heartbeat_registry = HeartbeatRegistry()
+        self._tracer = PipelineTracer(enabled=validation.frame_trace.enabled)
 
         # RM-11.SIV Decision C: placeholder status now comes from
         # configs/models.yaml (pgie.enabled/sgie.enabled), not
@@ -100,7 +103,10 @@ class DeepStreamRuntime:
             pgie_is_placeholder=not models.pgie.enabled
         )
         self._runtime_adapter = RuntimeAdapter(
-            bus, instrumentation=self._instrumentation, heartbeat=self.heartbeat_registry
+            bus,
+            instrumentation=self._instrumentation,
+            heartbeat=self.heartbeat_registry,
+            tracer=self._tracer,
         )
 
         # Phase 2: AlarmService is a long-lived singleton (its in-memory
@@ -113,6 +119,7 @@ class DeepStreamRuntime:
             bus=bus,
             alarm_service=self._alarm_service,
             heartbeat=self.heartbeat_registry,
+            tracer=self._tracer,
         )
 
         self._frame_counter = FrameCounter()

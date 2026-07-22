@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.observations import DetectionObservation, FrameObservation
+from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from services.calibration.service import CalibrationService
 from services.calibration.types import CalibrationNotFoundError
@@ -98,6 +99,7 @@ class ThreatEngineRuntimeAdapter:
         weapon_mapper: WeaponMapper = default_weapon_mapper,
         uniform_mapper: UniformMapper = default_uniform_mapper,
         heartbeat: HeartbeatRegistry | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._bus = bus
@@ -109,6 +111,7 @@ class ThreatEngineRuntimeAdapter:
         """RM-11.SIV Unified Heartbeat -- optional so existing/future
         callers that don't need SIV visibility aren't forced to construct
         one. None-safe throughout this class via _beat()."""
+        self._tracer = tracer or PipelineTracer(enabled=False)
 
     def _beat(self, component: str, *, reason: str | None = None) -> None:
         if self._heartbeat is not None:
@@ -154,6 +157,13 @@ class ThreatEngineRuntimeAdapter:
             distance.zone.value,
             distance.distance_meters,
         )
+        frame_correlation_id = self._tracer.frame_id(observation.camera_id, observation.frame_num)
+        if self._tracer.enabled:
+            self._tracer.calibration_result(
+                frame_correlation_id,
+                zone=distance.zone.value,
+                distance_meters=distance.distance_meters,
+            )
 
         assert detection.track_id is not None  # narrowed by on_frame_observation's guard
         results = self._threat_engine.ingest(
@@ -173,28 +183,37 @@ class ThreatEngineRuntimeAdapter:
         )
 
         for result in results:
-            await self._route_result(result)
+            await self._route_result(result, frame_correlation_id)
 
     async def _route_result(
-        self, result: ThreatAssessmentEvent | HumanReviewItemCreatedEvent | EscalationSignal
+        self,
+        result: ThreatAssessmentEvent | HumanReviewItemCreatedEvent | EscalationSignal,
+        frame_correlation_id: str,
     ) -> None:
         if isinstance(result, EscalationSignal):
-            await self._handle_escalation(result)
+            await self._handle_escalation(result, frame_correlation_id)
             return
 
-        if isinstance(result.payload, ThreatAssessmentPayload) and (
-            result.payload.threat_level in _AUDIT_WORTHY_THREAT_LEVELS
-        ):
-            _audit_logger.info(
-                "Threat %s: camera=%s track=%d rule=%s",
-                result.payload.threat_level.value,
-                result.payload.camera_id,
-                result.payload.track_id,
-                result.payload.rule_id,
-            )
+        if isinstance(result.payload, ThreatAssessmentPayload):
+            if self._tracer.enabled:
+                self._tracer.threat_assessment(
+                    frame_correlation_id,
+                    threat_level=result.payload.threat_level.value,
+                    rule_id=result.payload.rule_id,
+                )
+            if result.payload.threat_level in _AUDIT_WORTHY_THREAT_LEVELS:
+                _audit_logger.info(
+                    "Threat %s: camera=%s track=%d rule=%s",
+                    result.payload.threat_level.value,
+                    result.payload.camera_id,
+                    result.payload.track_id,
+                    result.payload.rule_id,
+                )
+        if self._tracer.enabled:
+            self._tracer.event_published(frame_correlation_id, event_type=result.event_type)
         await self._bus.publish(result)
 
-    async def _handle_escalation(self, signal: EscalationSignal) -> None:
+    async def _handle_escalation(self, signal: EscalationSignal, frame_correlation_id: str) -> None:
         """INCIDENT_ELIGIBLE and ALARM_ELIGIBLE both resolve to an incident
         first (handle_escalation() is idempotent create-or-return, per
         ADR-025's dedup policy) -- ALARM_ELIGIBLE always arrives at or after
@@ -218,6 +237,8 @@ class ThreatEngineRuntimeAdapter:
             signal.threat_level.value,
             signal.reason,
         )
+        if self._tracer.enabled:
+            self._tracer.incident_created(frame_correlation_id, incident_id=incident.id)
 
         if signal.signal_type is EscalationSignalType.ALARM_ELIGIBLE:
             await self._alarm_service.trigger(
@@ -235,3 +256,5 @@ class ThreatEngineRuntimeAdapter:
                 signal.track_id,
                 signal.threat_level.value,
             )
+            if self._tracer.enabled:
+                self._tracer.alarm_generated(frame_correlation_id)
