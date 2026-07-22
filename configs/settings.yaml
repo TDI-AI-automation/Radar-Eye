@@ -10,3 +10,12 @@ recording:
 
 threat_engine:
   enabled: true
+
+deepstream:
+  reconnect_initial_backoff_seconds: 1.0
+  reconnect_max_backoff_seconds: 30.0
+  reconnect_backoff_multiplier: 2.0
+  heartbeat_interval_seconds: 1.0
+  streammux_batch_size: 20
+  streammux_width: 1920
+  streammux_height: 1080
