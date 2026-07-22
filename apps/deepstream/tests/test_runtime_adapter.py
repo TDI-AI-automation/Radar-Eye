@@ -112,7 +112,7 @@ def _make_observation(frame_num: int = 1) -> FrameObservation:
         frame_num=frame_num,
         ingress_timestamp=_NOW,
         metadata_timestamp=_NOW,
-        raw_detections=[(0, "person", 0.9, (0.0, 0.0, 1.0, 1.0), 7)],
+        raw_detections=[(0, "person", 0.9, (0.0, 0.0, 1.0, 1.0), 7, None)],
     )
 
 

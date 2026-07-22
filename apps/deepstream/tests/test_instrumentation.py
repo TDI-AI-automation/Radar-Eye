@@ -70,11 +70,47 @@ class TestFrameRecording:
 
         assert instrumentation.snapshot().pgie_init_seconds == pytest.approx(1.0)
 
-    def test_latency_ms_from_ingress_to_metadata(self) -> None:
+    def test_latency_ms_from_ingress_to_metadata_single_sample(self) -> None:
         instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
         instrumentation.record_frame(ingress_seconds=10.0, metadata_seconds=10.025)
 
         assert instrumentation.snapshot().end_to_end_latency_ms == pytest.approx(25.0)
+
+    def test_latency_ms_is_a_rolling_average_not_the_last_sample(self) -> None:
+        """RM-11 Phase 2 Principal Engineer review's latency-instrumentation
+        follow-up: a real-hardware diagnostic confirmed the ingress/egress
+        buffer correlation itself is reliable (PTS-verified, 15/15 matches);
+        the actual defect was reporting only the single most-recent sample,
+        which is highly sensitive to exactly when snapshot() happens to be
+        called (e.g. during a startup transient vs. steady state)."""
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        instrumentation.record_frame(ingress_seconds=0.0, metadata_seconds=0.120)  # 120ms
+        instrumentation.record_frame(ingress_seconds=1.0, metadata_seconds=1.002)  # 2ms
+        instrumentation.record_frame(ingress_seconds=2.0, metadata_seconds=2.002)  # 2ms
+
+        # Average of [120, 2, 2] ms, not just the last (2ms).
+        assert instrumentation.snapshot().end_to_end_latency_ms == pytest.approx(
+            (120.0 + 2.0 + 2.0) / 3, rel=1e-6
+        )
+
+    def test_latency_window_evicts_oldest_samples_once_full(self) -> None:
+        """The window is bounded (not an ever-growing/all-time average) --
+        entirely fresh samples eventually push every old sample out."""
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        window_size = instrumentation._latency_samples_ms.maxlen  # noqa: SLF001
+        assert window_size is not None
+
+        for i in range(window_size):
+            instrumentation.record_frame(ingress_seconds=float(i), metadata_seconds=float(i) + 0.1)
+        assert instrumentation.snapshot().end_to_end_latency_ms == pytest.approx(100.0, rel=1e-3)
+
+        # A full window's worth of new, much lower-latency samples --
+        # every original 100ms sample has now been evicted.
+        for i in range(window_size):
+            t = 1000.0 + i
+            instrumentation.record_frame(ingress_seconds=t, metadata_seconds=t + 0.001)
+
+        assert instrumentation.snapshot().end_to_end_latency_ms == pytest.approx(1.0, rel=1e-3)
 
     def test_frames_processed_increments(self) -> None:
         instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)

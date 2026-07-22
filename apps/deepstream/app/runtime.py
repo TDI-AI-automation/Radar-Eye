@@ -1,12 +1,21 @@
-"""DeepStream runtime composition and lifecycle (Phase 0 + Phase 1).
+"""DeepStream runtime composition and lifecycle (Phase 0 + Phase 1 + Phase 2).
 
 Wires together everything RM-11 owns: the camera roster (DB), the GStreamer
-pipeline (streammux/PGIE/tracker as of Phase 1), the GLib<->asyncio bridge,
-the Runtime Adapter, the heartbeat scheduler, and (Phase 1) performance
-instrumentation. Per the RM-11 design review's Decision A, this all lives
+pipeline (streammux/PGIE/tracker/SGIE as of Phase 2), the GLib<->asyncio
+bridge, the Runtime Adapter, the heartbeat scheduler, performance
+instrumentation (Phase 1), and the ThreatEngineRuntimeAdapter orchestration
+layer (Phase 2). Per the RM-11 design review's Decision A, this all lives
 in one OS process sharing one asyncio loop -- ``DeepStreamRuntime`` does not
 start its own competing loop; callers (see ``main.py``) pass in the loop
 they are already running.
+
+Every processed ``FrameObservation`` reaches two independent consumers,
+scheduled separately onto the asyncio loop: ``RuntimeAdapter`` (Phase 0/1 --
+instrumentation and logging) and ``ThreatEngineRuntimeAdapter`` (Phase 2 --
+threat assessment orchestration). Keeping them as separate scheduled calls,
+rather than nesting one inside the other, preserves the architecture the
+Phase 2 design review approved: DeepStream Runtime -> Runtime Adapter ->
+FrameObservation -> ThreatEngineRuntimeAdapter -> application services.
 
 Reconnect orchestration lives here (not in ``ingestion/source.py``, which
 only builds/tears down GStreamer elements): a bus ERROR/EOS message for a
@@ -37,6 +46,8 @@ from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
+from apps.deepstream.app.threat_runtime_adapter import ThreatEngineRuntimeAdapter
+from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
 
 logger = logging.getLogger(__name__)
@@ -72,6 +83,16 @@ class DeepStreamRuntime:
             pgie_is_placeholder=settings.pgie_is_placeholder
         )
         self._runtime_adapter = RuntimeAdapter(bus, instrumentation=self._instrumentation)
+
+        # Phase 2: AlarmService is a long-lived singleton (its in-memory
+        # _records state must persist across escalation calls, unlike
+        # IncidentService/CalibrationService which are constructed fresh
+        # per short-lived session -- see threat_runtime_adapter.py).
+        self._alarm_service = AlarmService(bus=bus)
+        self._threat_runtime_adapter = ThreatEngineRuntimeAdapter(
+            session_factory=session_factory, bus=bus, alarm_service=self._alarm_service
+        )
+
         self._frame_counter = FrameCounter()
         self._bridge = AsyncBridge(loop)
         self._pipeline = DeepStreamPipeline(
@@ -153,6 +174,7 @@ class DeepStreamRuntime:
             self._heartbeat.stop()
         self._pipeline.stop()
         self._bridge.stop()
+        await self._alarm_service.stop()  # ADR-012/026 fail-safe shutdown
 
     def _on_inference_buffer(
         self,
@@ -161,11 +183,12 @@ class DeepStreamRuntime:
         ingress_monotonic_seconds: float,
         ingress_wallclock: datetime,
     ) -> None:
-        """Runs on a GStreamer streaming thread (the tracker's src pad
-        probe). Extraction happens synchronously, still inside
-        RuntimeAdapter (ADR-027) -- see extract_frame_observations's
-        docstring for why this cannot be deferred onto the asyncio loop.
-        Only the resulting plain FrameObservation values cross the bridge.
+        """Runs on a GStreamer streaming thread (the SGIE src pad probe).
+        Extraction happens synchronously, still inside RuntimeAdapter
+        (ADR-027) -- see extract_frame_observations's docstring for why
+        this cannot be deferred onto the asyncio loop. Only the resulting
+        plain FrameObservation values cross the bridge, to two independent
+        consumers (see the module docstring).
 
         ``metadata_monotonic_seconds`` is captured immediately after
         extraction returns (still synchronous, same thread) -- close enough
@@ -185,6 +208,7 @@ class DeepStreamRuntime:
                     metadata_monotonic_seconds=metadata_monotonic_seconds,
                 )
             )
+            self._bridge.schedule(self._threat_runtime_adapter.on_frame_observation(observation))
 
     def _on_bus_message(self, message: Any) -> None:
         """Runs on the GLib main-loop thread (bus signal watch dispatch)."""

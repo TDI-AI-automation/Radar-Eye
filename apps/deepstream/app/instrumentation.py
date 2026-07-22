@@ -1,8 +1,10 @@
 """Performance instrumentation -- RM-11 Phase 1 approval.
 
 Collects: pipeline startup time, PGIE initialization time, inference FPS,
-end-to-end latency (frame ingress -> metadata available), GPU utilization,
-GPU memory utilization, CPU utilization, system memory utilization.
+end-to-end latency (frame ingress -> metadata available, reported as a
+rolling average -- see ``_LATENCY_WINDOW_SIZE``'s docstring), GPU
+utilization, GPU memory utilization, CPU utilization, system memory
+utilization.
 
 "Instrumentation shall be lightweight and must not alter pipeline
 behavior" (Phase 1 approval): per-frame recording (``record_frame``) is
@@ -29,6 +31,27 @@ logger = logging.getLogger(__name__)
 
 _FPS_WINDOW_SIZE = 120
 """Rolling window of recent frame intervals used for the FPS estimate."""
+
+_LATENCY_WINDOW_SIZE = 120
+"""Rolling window of recent per-frame latencies used for the reported
+end-to-end latency figure.
+
+Source: RM-11 Phase 2 Principal Engineer review's required latency-
+instrumentation follow-up. A real-hardware diagnostic
+(hash(gst_buffer)/id(gst_buffer) compared against buffer PTS at the
+ingress and egress probes) confirmed the buffer-identity correlation
+mechanism itself is completely reliable -- 15/15 matches, GStreamer's
+zero-copy in-place processing (ADR-005) holds through PGIE/tracker/SGIE as
+expected. The actual root cause of the Phase 1 vs. Phase 2 latency
+figures looking inconsistent (~25ms vs. ~1.6ms) was this class reporting
+only the single most-recently-recorded frame's latency rather than a
+representative window: true per-frame latency on this hardware ranges from
+~120ms during the first few frames after PLAYING (draining the initial
+RTSP/decode queue backlog) down to a stable ~2ms once steady-state
+streaming begins -- so a single-sample reading is highly sensitive to
+exactly when it happens to be taken. Fixed by windowing latency the same
+way FPS was already windowed, rather than changing the (confirmed correct)
+correlation mechanism itself."""
 
 
 @dataclass
@@ -125,7 +148,7 @@ class PerformanceInstrumentation:
         self._playing_at: float | None = None
         self._pgie_init_seconds: float | None = None
         self._frame_timestamps: deque[float] = deque(maxlen=_FPS_WINDOW_SIZE)
-        self._latest_latency_ms: float | None = None
+        self._latency_samples_ms: deque[float] = deque(maxlen=_LATENCY_WINDOW_SIZE)
         self._frames_processed = 0
 
         self._prev_proc_stat: _ProcStatSample | None = None
@@ -148,7 +171,7 @@ class PerformanceInstrumentation:
             self._pgie_init_seconds = max(0.0, metadata_seconds - self._playing_at)
 
         self._frame_timestamps.append(metadata_seconds)
-        self._latest_latency_ms = max(0.0, (metadata_seconds - ingress_seconds) * 1000.0)
+        self._latency_samples_ms.append(max(0.0, (metadata_seconds - ingress_seconds) * 1000.0))
         self._frames_processed += 1
 
     def sample_system_metrics(self) -> None:
@@ -174,6 +197,14 @@ class PerformanceInstrumentation:
             return None
         return (len(self._frame_timestamps) - 1) / span
 
+    def _average_latency_ms(self) -> float | None:
+        """Rolling average over the last _LATENCY_WINDOW_SIZE frames -- see
+        that constant's docstring for why a single most-recent sample is
+        not representative."""
+        if not self._latency_samples_ms:
+            return None
+        return sum(self._latency_samples_ms) / len(self._latency_samples_ms)
+
     def snapshot(self) -> PerformanceSnapshot:
         pipeline_startup_seconds = None
         if self._build_started_at is not None and self._playing_at is not None:
@@ -183,7 +214,7 @@ class PerformanceInstrumentation:
             pipeline_startup_seconds=pipeline_startup_seconds,
             pgie_init_seconds=self._pgie_init_seconds,
             inference_fps=self._inference_fps(),
-            end_to_end_latency_ms=self._latest_latency_ms,
+            end_to_end_latency_ms=self._average_latency_ms(),
             gpu_utilization_pct=self._gpu_utilization_pct,
             gpu_memory_used_mb=self._gpu_memory_used_mb,
             gpu_memory_total_mb=self._gpu_memory_total_mb,

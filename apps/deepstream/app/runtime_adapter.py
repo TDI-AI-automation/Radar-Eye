@@ -195,10 +195,29 @@ class RuntimeAdapter:
                     obj_meta.confidence,
                     (rect.left, rect.top, rect.width, rect.height),
                     None if track_id == untracked_id else int(track_id),
+                    RuntimeAdapter._extract_secondary_label(obj_meta),
                 )
             )
             l_obj = l_obj.next
         return raw
+
+    @staticmethod
+    def _extract_secondary_label(obj_meta: Any) -> str | None:
+        """Raw SGIE classifier output (Phase 2), if any -- the first result
+        label of the first classifier that ran on this detection. Returns
+        ``None`` if SGIE hasn't classified this object (e.g. it doesn't
+        match the classifier's ``operate-on-class-ids`` filter)."""
+        import pyds  # noqa: PLC0415
+
+        l_classifier = obj_meta.classifier_meta_list
+        if l_classifier is None:
+            return None
+        classifier_meta = pyds.NvDsClassifierMeta.cast(l_classifier.data)
+        l_label = classifier_meta.label_info_list
+        if l_label is None:
+            return None
+        label_info = pyds.NvDsLabelInfo.cast(l_label.data)
+        return str(label_info.result_label)
 
     async def on_frame_observation(
         self,

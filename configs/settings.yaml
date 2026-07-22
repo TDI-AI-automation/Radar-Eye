@@ -21,6 +21,8 @@ deepstream:
   streammux_height: 1080
   pgie_config_path: apps/deepstream/configs/pgie_placeholder.txt
   pgie_is_placeholder: true
+  sgie_config_path: apps/deepstream/configs/sgie_placeholder.txt
+  sgie_is_placeholder: true
   tracker_ll_lib_path: /opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so
   tracker_ll_config_path: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
   tracker_width: 640
