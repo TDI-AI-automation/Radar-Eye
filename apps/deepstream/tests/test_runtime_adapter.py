@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
 
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
+from apps.deepstream.app.observations import FrameObservation, build_frame_observation
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from shared.events.bus import InProcessEventBus
 
 _CAMERA = uuid.uuid4()
+_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 @pytest_asyncio.fixture
@@ -100,3 +104,67 @@ class TestEventPublication:
         event = await asyncio.wait_for(sink.get(), timeout=1.0)
         assert event.payload.severity == "CRITICAL"
         assert event.payload.message == "nvstreammux negotiation failed"
+
+
+def _make_observation(frame_num: int = 1) -> FrameObservation:
+    return build_frame_observation(
+        camera_id=_CAMERA,
+        frame_num=frame_num,
+        ingress_timestamp=_NOW,
+        metadata_timestamp=_NOW,
+        raw_detections=[(0, "person", 0.9, (0.0, 0.0, 1.0, 1.0), 7)],
+    )
+
+
+@pytest.mark.asyncio
+class TestFrameObservation:
+    """extract_frame_observations itself needs real pyds/NvDsBatchMeta and
+    is only verifiable on real DeepStream hardware (see the RM-11 Phase 1
+    hardware verification note) -- on_frame_observation's own logic
+    (instrumentation recording, last_observation tracking) has no pyds
+    dependency and is fully testable here."""
+
+    async def test_records_last_observation(self, bus: InProcessEventBus) -> None:
+        adapter = RuntimeAdapter(bus)
+        observation = _make_observation()
+
+        await adapter.on_frame_observation(
+            observation, ingress_monotonic_seconds=10.0, metadata_monotonic_seconds=10.02
+        )
+
+        assert adapter.last_observation is observation
+
+    async def test_forwards_timing_to_instrumentation(self, bus: InProcessEventBus) -> None:
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        adapter = RuntimeAdapter(bus, instrumentation=instrumentation)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=10.0, metadata_monotonic_seconds=10.02
+        )
+
+        snapshot = instrumentation.snapshot()
+        assert snapshot.end_to_end_latency_ms == pytest.approx(20.0)
+        assert snapshot.frames_processed == 1
+
+    async def test_without_instrumentation_does_not_raise(self, bus: InProcessEventBus) -> None:
+        adapter = RuntimeAdapter(bus)  # instrumentation=None (default)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )  # must not raise
+
+        assert adapter.last_observation is not None
+
+    async def test_does_not_publish_business_events(self, bus: InProcessEventBus) -> None:
+        """Phase 1 explicitly excludes Threat Engine/Incident/Calibration
+        integration -- no ThreatAssessmentEvent or similar should appear."""
+        sink: asyncio.Queue = asyncio.Queue()
+        bus.subscribe("ThreatAssessmentEvent", _collecting_handler(sink))
+        adapter = RuntimeAdapter(bus)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sink.get(), timeout=0.2)
