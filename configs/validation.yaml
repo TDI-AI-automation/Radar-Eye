@@ -1,0 +1,31 @@
+# RM-11.SIV -- validation-run switches, watchdog thresholds, frame trace.
+#
+# feature_flags are global for this SIV run (RM-11.SIV Decision A2) -- NOT
+# per-camera, NOT a database schema change. A real per-camera equivalent
+# would be a RM-03-owned camera_stream_profiles migration, out of scope here.
+
+feature_flags:
+  enable_recording: true
+  enable_detection: true
+  enable_tracking: true
+  enable_classification: true
+  enable_calibration: true
+
+watchdog:
+  check_interval_seconds: 2.0
+  stale_after_seconds:
+    camera: 5.0
+    pipeline_fps: 5.0
+    pgie: 5.0
+    tracker: 5.0
+    sgie: 5.0
+    runtime_adapter: 5.0
+    threat_engine: 10.0
+    calibration: 10.0
+    incident: 10.0
+    alarm: 10.0
+    event_bus: 10.0
+    heartbeat: 3.0
+
+frame_trace:
+  enabled: false

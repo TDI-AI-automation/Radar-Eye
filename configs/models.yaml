@@ -1,0 +1,40 @@
+# RM-11.SIV -- external model configuration (Decision C).
+#
+# The real PGIE (weapon detection) and SGIE (uniform classification) models
+# are NOT part of this repository -- see docs/MODEL_REGISTRY.md. Swapping
+# either model requires editing ONLY this file; no Python change is needed.
+# Paths below are examples -- point them at wherever the real model files
+# actually live on this machine (typically /mnt/models or /opt/radar-eye/models
+# on the Jetson target). ModelConfigResolver validates every path at pipeline
+# build time and fails fast, naming exactly which key is invalid, if a file
+# is missing -- it never silently falls back to a placeholder.
+#
+# Set enabled: false to fall back to the RM-11 Phase 1/2 placeholder configs
+# (apps/deepstream/configs/pgie_placeholder.txt / sgie_placeholder.txt) --
+# useful for hardware verification without the real models present.
+
+pgie:
+  enabled: false
+  model_file: /mnt/models/yolo26m_weapon.onnx
+  engine_file: /mnt/models/yolo26m_weapon_fp16.engine
+  labels: /mnt/models/weapon_labels.txt
+  batch_size: 1
+  precision: fp16
+  interval: 0
+  confidence_threshold: 0.5
+  gpu_id: 0
+  unique_id: 1
+  nms_iou_threshold: 0.5
+
+sgie:
+  enabled: false
+  model_file: /mnt/models/vit_binary.onnx
+  engine_file: /mnt/models/vit_binary_fp16.engine
+  labels: /mnt/models/uniform_labels.txt
+  batch_size: 1
+  precision: fp16
+  interval: 0
+  confidence_threshold: 0.5
+  gpu_id: 0
+  unique_id: 2
+  nms_iou_threshold: 0.5

@@ -36,3 +36,12 @@ coverage.xml
 # OS
 .DS_Store
 Thumbs.db
+
+# RM-11.SIV -- camera.yaml is a bootstrap input containing credentials
+# (see scripts/siv_register_camera.py); never tracked, even with env-var
+# substitution support. Generated nvinfer configs and per-run SIV reports
+# are machine-generated artifacts, not source.
+configs/camera.yaml
+!configs/camera.yaml.example
+apps/deepstream/configs/generated/
+siv_reports/
