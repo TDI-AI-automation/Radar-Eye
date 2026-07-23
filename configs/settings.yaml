@@ -17,14 +17,15 @@ deepstream:
   reconnect_backoff_multiplier: 2.0
   heartbeat_interval_seconds: 1.0
   streammux_batch_size: 20
+  streammux_batched_push_timeout_us: 40000
   streammux_width: 1920
   streammux_height: 1080
-  pgie_config_path: apps/deepstream/configs/pgie_placeholder.txt
-  pgie_is_placeholder: true
-  sgie_config_path: apps/deepstream/configs/sgie_placeholder.txt
-  sgie_is_placeholder: true
+  rtsp_default_latency_ms: 200
   tracker_ll_lib_path: /opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so
   tracker_ll_config_path: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
   tracker_width: 640
   tracker_height: 384
   metrics_sample_interval_seconds: 2.0
+  # PGIE/SGIE model configuration moved to configs/models.yaml (RM-11.SIV
+  # Decision C) -- pgie_config_path/pgie_is_placeholder/sgie_config_path/
+  # sgie_is_placeholder no longer exist here.

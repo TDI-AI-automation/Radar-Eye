@@ -67,12 +67,18 @@ class HeartbeatScheduler:
         camera_ids: list[uuid.UUID],
         status_provider: StatusProvider,
         interval_seconds: float = 1.0,
+        on_tick: Callable[[], None] | None = None,
     ) -> None:
         self._health_collector = health_collector
         self._frame_counter = frame_counter
         self._camera_ids = camera_ids
         self._status_provider = status_provider
         self._interval_seconds = interval_seconds
+        self._on_tick = on_tick
+        """RM-11.SIV: optional hook, called at the end of every tick() --
+        lets runtime.py record a "heartbeat" liveness beat on the shared
+        HeartbeatRegistry without this (RM-09) module needing to know that
+        registry exists."""
         self._task: asyncio.Task[None] | None = None
 
     def tick(self) -> None:
@@ -88,6 +94,8 @@ class HeartbeatScheduler:
             self._health_collector.record_camera_heartbeat(
                 camera_id, status=status, fps=fps, timestamp=now
             )
+        if self._on_tick is not None:
+            self._on_tick()
 
     async def _run(self) -> None:
         try:

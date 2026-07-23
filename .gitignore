@@ -36,3 +36,21 @@ coverage.xml
 # OS
 .DS_Store
 Thumbs.db
+
+# RM-11.SIV -- camera.yaml is a bootstrap input containing credentials
+# (see scripts/siv_register_camera.py); never tracked, even with env-var
+# substitution support. Generated nvinfer configs and per-run SIV reports
+# are machine-generated artifacts, not source.
+configs/camera.yaml
+!configs/camera.yaml.example
+apps/deepstream/configs/generated/
+siv_reports/
+# Real model paths for local hardware verification only -- never committed,
+# since MODEL_REGISTRY.md's models remain unbenchmarked (see configs/models.yaml).
+configs/models.local.yaml
+
+# apps/deepstream/native/ -- vendored parser source is tracked, its compiled
+# build output is not (rebuilt per-machine via scripts/build_yolo_parser.sh).
+apps/deepstream/native/**/*.o
+apps/deepstream/native/**/*.so
+apps/deepstream/native/**/*.d
