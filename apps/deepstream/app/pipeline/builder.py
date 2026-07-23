@@ -189,6 +189,16 @@ class DeepStreamPipeline:
             # and this metadata-queue are built here; everything downstream
             # of the tee's second pad is VisualizationPipelineBuilder's
             # exclusive responsibility (see visualization/pipeline_builder.py).
+            #
+            # buffer-pool-size: nvstreammux's own default (4) is tuned for
+            # this pipeline's single original consumer -- raised for a
+            # second consumer's extra headroom. Not, on its own, the fix for
+            # the real corruption bug found during RM-11.SIV Phase 5
+            # hardware verification (see pipeline_builder.py's
+            # disable-passthrough comment for the actual root cause and fix)
+            # -- kept anyway since two consumers genuinely do need more
+            # pool headroom than one.
+            streammux.set_property("buffer-pool-size", 16)
             tee = Gst.ElementFactory.make("tee", "viz-tee")
             if tee is None:
                 raise RuntimeError("Failed to create tee (viz-tee)")

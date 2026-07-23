@@ -84,13 +84,30 @@ class VisualizationPipelineBuilder:
         queue.set_property("max-size-bytes", 0)
         queue.set_property("max-size-time", 0)
 
+        # disable-passthrough is required, not optional, on both converts.
+        # Root cause (found via RM-11.SIV Phase 5 real-hardware verification,
+        # confirmed against a documented NVIDIA forum report of the identical
+        # symptom -- "NVMM memory is corrupted by nvosd after tee"): when a
+        # tee'd NVMM buffer's format already matches nvvideoconvert's
+        # requested output format (which happens here, since sgie's real
+        # output and this branch's intermediate formats can coincide),
+        # nvvideoconvert silently enters passthrough mode -- it hands the
+        # *same* underlying buffer through instead of allocating a new one.
+        # nvdsosd then composites onto that buffer in place, corrupting the
+        # shared/pooled memory (observed as solid green or gray frames,
+        # depending on timing) rather than only annotating this branch's own
+        # copy. Forcing disable-passthrough=true guarantees a real copy.
         convert_in = self._make(Gst, "nvvideoconvert", "viz-convert-in")
+        convert_in.set_property("nvbuf-memory-type", 2)
+        convert_in.set_property("disable-passthrough", True)
         caps_rgba = self._make(Gst, "capsfilter", "viz-caps-rgba")
         caps_rgba.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
 
         osd = self._make(Gst, "nvdsosd", "viz-osd")
 
         convert_out = self._make(Gst, "nvvideoconvert", "viz-convert-out")
+        convert_out.set_property("nvbuf-memory-type", 2)
+        convert_out.set_property("disable-passthrough", True)
         caps_nv12 = self._make(Gst, "capsfilter", "viz-caps-nv12")
         caps_nv12.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"))
 

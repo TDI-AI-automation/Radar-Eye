@@ -62,8 +62,16 @@ class RtspStreamServer:
         server.set_service(str(self._rtsp_port))
 
         factory = GstRtspServer.RTSPMediaFactory()
+        # name=pay0 is required, not cosmetic -- GstRtspServer's SDP
+        # generation specifically looks for an element named pay0 (or
+        # pay%d for multiple streams) to identify the payload source; a
+        # bare unnamed udpsrc attaches successfully (attach() only proves
+        # the server bound its port) but a real client's DESCRIBE/SETUP
+        # then fails with "SDP contains no streams" -- caught via a real
+        # gst-launch-1.0 RTSP client during Phase 5 hardware verification,
+        # not visible in the manager-level smoke tests from Phase 3.
         factory.set_launch(
-            f'( udpsrc port={self._udp_port} caps="application/x-rtp, media=video, '
+            f'( udpsrc name=pay0 port={self._udp_port} caps="application/x-rtp, media=video, '
             f'clock-rate=90000, encoding-name=H264, payload=96" )'
         )
         factory.set_shared(True)
