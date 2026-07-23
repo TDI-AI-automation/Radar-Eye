@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import FrameObservation, build_frame_observation
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
@@ -168,3 +169,66 @@ class TestFrameObservation:
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sink.get(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+class TestHeartbeatRegistry:
+    """RM-11.SIV Unified Heartbeat -- heartbeat is optional (None-safe) and,
+    when provided, beats the expected component name on each lifecycle
+    event/observation."""
+
+    async def test_heartbeat_is_optional(self, bus: InProcessEventBus) -> None:
+        adapter = RuntimeAdapter(bus)  # no heartbeat= passed
+
+        await adapter.on_camera_connected(_CAMERA)  # must not raise
+
+    async def test_camera_connected_beats_camera_component(self, bus: InProcessEventBus) -> None:
+        heartbeat = HeartbeatRegistry()
+        adapter = RuntimeAdapter(bus, heartbeat=heartbeat)
+
+        await adapter.on_camera_connected(_CAMERA)
+
+        assert heartbeat.status("camera", stale_after_seconds=5.0).healthy is True
+
+    async def test_frame_observation_beats_runtime_adapter_component(
+        self, bus: InProcessEventBus
+    ) -> None:
+        heartbeat = HeartbeatRegistry()
+        adapter = RuntimeAdapter(bus, heartbeat=heartbeat)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )
+
+        status = heartbeat.status("runtime_adapter", stale_after_seconds=5.0)
+        assert status.healthy is True
+        assert status.counter == 1
+
+    async def test_frame_observation_also_beats_camera_and_pipeline_fps(
+        self, bus: InProcessEventBus
+    ) -> None:
+        """RM-11.SIV real-hardware finding: both must keep beating on every
+        frame, not just once at on_camera_connected -- otherwise they go
+        stale within their threshold even while frames are actively
+        flowing (see runtime_adapter.py's on_frame_observation)."""
+        heartbeat = HeartbeatRegistry()
+        adapter = RuntimeAdapter(bus, heartbeat=heartbeat)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )
+
+        assert heartbeat.status("camera", stale_after_seconds=5.0).healthy is True
+        assert heartbeat.status("pipeline_fps", stale_after_seconds=5.0).healthy is True
+
+    async def test_camera_disconnected_does_not_beat(self, bus: InProcessEventBus) -> None:
+        """A disconnect is the opposite of liveness -- it must not extend
+        the camera component's healthy window."""
+        heartbeat = HeartbeatRegistry()
+        adapter = RuntimeAdapter(bus, heartbeat=heartbeat)
+        await adapter.on_camera_connected(_CAMERA)
+        counter_after_connect = heartbeat.status("camera", stale_after_seconds=5.0).counter
+
+        await adapter.on_camera_disconnected(_CAMERA, "RTSP timeout")
+
+        assert heartbeat.status("camera", stale_after_seconds=5.0).counter == counter_after_connect

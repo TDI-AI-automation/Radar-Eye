@@ -36,14 +36,20 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import FrameObservation, RawDetection, build_frame_observation
+from apps.deepstream.app.pipeline_trace import PipelineTracer
+from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from shared.events.bus import EventBus
 from shared.events.payloads import CameraDisconnectedPayload, SystemEventPayload
 from shared.events.types import CameraDisconnectedEvent, SystemEvent
 from shared.schemas.camera import CameraConnectionStatus
 
 logger = logging.getLogger(__name__)
+_camera_logger = get_stage_logger("camera")
+_runtime_adapter_logger = get_stage_logger("runtime_adapter")
+_audit_logger = get_audit_logger()
 
 _SOURCE_COMPONENT = "deepstream"
 _DEFAULT_STATUS: CameraConnectionStatus = "DISCONNECTED"
@@ -57,16 +63,29 @@ class RuntimeAdapter:
     bus and tracks per-camera connection status for the heartbeat scheduler."""
 
     def __init__(
-        self, bus: EventBus, *, instrumentation: PerformanceInstrumentation | None = None
+        self,
+        bus: EventBus,
+        *,
+        instrumentation: PerformanceInstrumentation | None = None,
+        heartbeat: HeartbeatRegistry | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> None:
         self._bus = bus
         self._instrumentation = instrumentation
+        self._heartbeat = heartbeat
+        """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
+        identical pattern."""
+        self._tracer = tracer or PipelineTracer(enabled=False)
         self._status: dict[uuid.UUID, CameraConnectionStatus] = {}
         self._observation_count = 0
         self.last_observation: FrameObservation | None = None
         """Most recently processed frame observation -- exposed for tests
         and manual inspection; not otherwise consumed in Phase 1 (no
         downstream service integration yet -- see Phase 1's Out of Scope)."""
+
+    def _beat(self, component: str, *, reason: str | None = None) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.beat(component, reason=reason)
 
     def status_for(self, camera_id: uuid.UUID) -> CameraConnectionStatus:
         """Synchronous, non-blocking read -- safe for HeartbeatScheduler's
@@ -76,6 +95,9 @@ class RuntimeAdapter:
 
     async def on_camera_connected(self, camera_id: uuid.UUID) -> None:
         self._status[camera_id] = "CONNECTED"
+        self._beat("camera")
+        _camera_logger.info("Camera %s connected", camera_id)
+        _audit_logger.info("Camera Connected: camera=%s", camera_id)
         await self._bus.publish(
             SystemEvent(
                 event_type="SystemEvent",
@@ -95,6 +117,8 @@ class RuntimeAdapter:
         """DEEPSTREAM_PIPELINE_SPEC.md 'Failure Handling' -> 'Camera Failure':
         generate CameraDisconnectedEvent."""
         self._status[camera_id] = "DISCONNECTED"
+        _camera_logger.warning("Camera %s disconnected: %s", camera_id, reason)
+        _audit_logger.warning("Camera Disconnected: camera=%s reason=%s", camera_id, reason)
         await self._bus.publish(
             CameraDisconnectedEvent(
                 event_type="CameraDisconnectedEvent",
@@ -110,7 +134,7 @@ class RuntimeAdapter:
         pipeline-level GStreamer error). Component-specific failures (model,
         calibration -- DEEPSTREAM_PIPELINE_SPEC.md's 'Failure Handling')
         arrive in Phase 1/2 once those stages exist."""
-        logger.error("DeepStream pipeline error: %s", message)
+        get_stage_logger("system").error("DeepStream pipeline error: %s", message)
         await self._bus.publish(
             SystemEvent(
                 event_type="SystemEvent",
@@ -161,17 +185,41 @@ class RuntimeAdapter:
             frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
             camera_id = camera_id_for_pad_index.get(frame_meta.pad_index)
             if camera_id is not None:
-                observations.append(
-                    build_frame_observation(
-                        camera_id=camera_id,
-                        frame_num=frame_meta.frame_num,
-                        ingress_timestamp=ingress_timestamp,
-                        metadata_timestamp=metadata_timestamp,
-                        raw_detections=self._extract_raw_detections(frame_meta),
-                    )
+                observation = build_frame_observation(
+                    camera_id=camera_id,
+                    frame_num=frame_meta.frame_num,
+                    ingress_timestamp=ingress_timestamp,
+                    metadata_timestamp=metadata_timestamp,
+                    raw_detections=self._extract_raw_detections(frame_meta),
                 )
+                observations.append(observation)
+                if self._tracer.enabled:
+                    self._trace_observation(observation)
             l_frame = l_frame.next
         return observations
+
+    def _trace_observation(self, observation: FrameObservation) -> None:
+        """RM-11.SIV frame trace -- only called when tracer.enabled is
+        already True (see the call site), so this method's own cost never
+        applies to the default (disabled) path."""
+        correlation_id = self._tracer.frame_id(observation.camera_id, observation.frame_num)
+        self._tracer.frame_received(correlation_id)
+        for detection in observation.detections:
+            self._tracer.object_detected(
+                correlation_id,
+                class_label=detection.label,
+                confidence=detection.confidence,
+                bbox=detection.bbox,
+            )
+            if detection.track_id is not None:
+                self._tracer.track_updated(correlation_id, track_id=detection.track_id)
+            if detection.secondary_label is not None:
+                self._tracer.secondary_classification(
+                    correlation_id, label=detection.secondary_label
+                )
+        self._tracer.frame_observation_created(
+            correlation_id, detection_count=len(observation.detections)
+        )
 
     @staticmethod
     def _extract_raw_detections(frame_meta: Any) -> list[RawDetection]:
@@ -238,6 +286,14 @@ class RuntimeAdapter:
         """
         self.last_observation = observation
         self._observation_count += 1
+        self._beat("runtime_adapter")
+        # RM-11.SIV real-hardware finding: "camera" and "pipeline_fps" must
+        # also beat continuously here, not just once at on_camera_connected
+        # -- otherwise both go stale within their threshold even while
+        # frames are actively flowing (caught by an actual hardware run,
+        # not by unit tests, which can't see this class of timing gap).
+        self._beat("camera")
+        self._beat("pipeline_fps")
 
         if self._instrumentation is not None:
             self._instrumentation.record_frame(
@@ -246,7 +302,7 @@ class RuntimeAdapter:
             )
 
         if self._observation_count % _OBSERVATION_LOG_INTERVAL == 1:
-            logger.info(
+            _runtime_adapter_logger.info(
                 "Frame observation: camera=%s frame_num=%d detections=%d (observation #%d)",
                 observation.camera_id,
                 observation.frame_num,

@@ -24,8 +24,14 @@ from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
 from apps.api.app.security.encryption import get_credential_encryption_provider
+from apps.deepstream.app.config import (
+    get_logging_settings,
+    get_models_settings,
+    get_validation_settings,
+)
 from apps.deepstream.app.config import get_settings as get_deepstream_settings
 from apps.deepstream.app.runtime import DeepStreamRuntime
+from apps.deepstream.app.stage_logging import configure_stage_logging
 from shared.events.bus import InProcessEventBus
 
 logger = logging.getLogger(__name__)
@@ -34,9 +40,12 @@ logger = logging.getLogger(__name__)
 async def _run() -> None:
     api_settings = get_api_settings()
     configure_logging(api_settings.log_level)
+    configure_stage_logging(get_logging_settings())  # RM-11.SIV -- radar_eye.stage.*/audit levels
     logger.info("radar-eye-deepstream starting", extra={"environment": api_settings.environment})
 
     deepstream_settings = get_deepstream_settings()
+    models_settings = get_models_settings()
+    validation_settings = get_validation_settings()
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(api_settings)
@@ -47,6 +56,8 @@ async def _run() -> None:
     runtime = DeepStreamRuntime(
         loop=loop,
         settings=deepstream_settings,
+        models=models_settings,
+        validation=validation_settings,
         session_factory=session_factory,
         bus=bus,
         encryption=encryption,

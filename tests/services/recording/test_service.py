@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -261,18 +262,25 @@ async def test_disk_usage_warning_threshold(
 
     monkeypatch.setattr("shutil.disk_usage", lambda _: MockUsage())
 
-    received_system_events = []
+    # InProcessEventBus.publish() only enqueues onto the subscriber's own
+    # background task (RM-04 design review -- best-effort, asynchronous
+    # delivery); asserting immediately after publish() returns races that
+    # task. Use the same asyncio.Queue + wait_for pattern already
+    # established elsewhere in this repo (e.g. tests/shared/test_event_bus.py)
+    # to wait for actual delivery instead.
+    sink: asyncio.Queue = asyncio.Queue()
 
     async def _on_system_event(evt: SystemEvent) -> None:
-        received_system_events.append(evt)
+        await sink.put(evt)
 
     bus.subscribe("SystemEvent", _on_system_event)
 
     await service.check_storage_and_purge(now=datetime.now(timezone.utc))
 
-    assert len(received_system_events) == 1
-    assert received_system_events[0].payload.severity == "CRITICAL"
-    assert "85.0%" in received_system_events[0].payload.message
+    event = await asyncio.wait_for(sink.get(), timeout=1.0)
+    assert event.payload.severity == "CRITICAL"
+    assert "85.0%" in event.payload.message
+    assert sink.empty()  # exactly one SystemEvent, not more
 
 
 @pytest.mark.asyncio

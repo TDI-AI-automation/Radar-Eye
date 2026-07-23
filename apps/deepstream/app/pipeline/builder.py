@@ -24,9 +24,12 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from apps.deepstream.app.config import DeepStreamSettings
+from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.source import RtspSource
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
+from apps.deepstream.app.models_config import ModelConfigResolver
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +67,25 @@ class DeepStreamPipeline:
     def __init__(
         self,
         settings: DeepStreamSettings,
+        models: ModelsSettings,
         *,
         frame_counter: FrameCounter,
         on_bus_message: BusMessageHandler | None = None,
         on_inference_buffer: InferenceBufferHandler | None = None,
+        model_config_resolver: ModelConfigResolver | None = None,
+        heartbeat: HeartbeatRegistry | None = None,
+        instrumentation: PerformanceInstrumentation | None = None,
     ) -> None:
         self._settings = settings
+        self._models = models
+        self._instrumentation = instrumentation
+        """RM-11.SIV Task 7 -- optional, feeds record_pgie_frame()/
+        record_sgie_frame() from the alive probes below."""
+        self._model_config_resolver = model_config_resolver or ModelConfigResolver()
+        self._heartbeat = heartbeat
+        """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
+        identical pattern. Fed by pad probes below (pgie/tracker/sgie
+        element-level liveness) and _count_frame_probe (rtsp)."""
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
         self._on_inference_buffer = on_inference_buffer
@@ -82,6 +98,12 @@ class DeepStreamPipeline:
         self._request_pads: dict[uuid.UUID, Any] = {}
         self._pad_index_to_camera_id: dict[int, uuid.UUID] = {}
         self._ingress_timestamps: dict[int, tuple[float, datetime]] = {}
+        self.pgie_is_placeholder = True
+        self.sgie_is_placeholder = True
+        """Set by build() from ModelConfigResolver's result -- exposed so
+        callers (runtime.py, RM-11.SIV's dashboard/report) can tell real
+        model results apart from placeholder-model results without
+        re-reading configs/models.yaml themselves."""
 
     def build(self) -> None:
         Gst = _import_gst()
@@ -95,13 +117,18 @@ class DeepStreamPipeline:
         streammux.set_property("width", self._settings.streammux_width)
         streammux.set_property("height", self._settings.streammux_height)
         streammux.set_property("live-source", 1)
+        streammux.set_property(
+            "batched-push-timeout", self._settings.streammux_batched_push_timeout_us
+        )
         self._pipeline.add(streammux)
         self._streammux = streammux
 
         pgie = Gst.ElementFactory.make("nvinfer", "pgie")
         if pgie is None:
             raise RuntimeError("Failed to create nvinfer (PGIE)")
-        pgie_config_path = self._resolve_config_path(self._settings.pgie_config_path)
+        resolved_pgie = self._model_config_resolver.resolve_pgie(self._models)
+        self.pgie_is_placeholder = resolved_pgie.is_placeholder
+        pgie_config_path = self._resolve_config_path(str(resolved_pgie.config_file_path))
         pgie.set_property("config-file-path", str(pgie_config_path))
         self._pipeline.add(pgie)
         self._pgie = pgie
@@ -119,7 +146,9 @@ class DeepStreamPipeline:
         sgie = Gst.ElementFactory.make("nvinfer", "sgie")
         if sgie is None:
             raise RuntimeError("Failed to create nvinfer (SGIE)")
-        sgie_config_path = self._resolve_config_path(self._settings.sgie_config_path)
+        resolved_sgie = self._model_config_resolver.resolve_sgie(self._models)
+        self.sgie_is_placeholder = resolved_sgie.is_placeholder
+        sgie_config_path = self._resolve_config_path(str(resolved_sgie.config_file_path))
         sgie.set_property("config-file-path", str(sgie_config_path))
         self._pipeline.add(sgie)
         self._sgie = sgie
@@ -137,6 +166,16 @@ class DeepStreamPipeline:
         # still counts every batched frame regardless of inference result.
         streammux_src_pad = streammux.get_static_pad("src")
         streammux_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._count_frame_probe)
+
+        # RM-11.SIV: element-level liveness only ("a buffer passed through
+        # this element just now") -- cheap, content-free, feeds the
+        # watchdog's per-stage staleness check. Deliberately not merged with
+        # the SGIE probe below: PGIE/tracker can be silently starved (e.g. a
+        # bad tracker config) while the pipeline still nominally runs.
+        pgie_src_pad = pgie.get_static_pad("src")
+        pgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._pgie_alive_probe)
+        tracker_src_pad = tracker.get_static_pad("src")
+        tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._tracker_alive_probe)
 
         # Phase 2: post-classification metadata (detections carry both
         # track IDs and, where applicable, SGIE classifier output by this
@@ -160,8 +199,23 @@ class DeepStreamPipeline:
         candidate = Path(path)
         return candidate if candidate.is_absolute() else REPO_ROOT / candidate
 
+    def _beat(self, component: str) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.beat(component)
+
+    def _pgie_alive_probe(self, _pad: Any, _info: Any) -> Any:
+        self._beat("pgie")
+        if self._instrumentation is not None:
+            self._instrumentation.record_pgie_frame()
+        return _import_gst().PadProbeReturn.OK
+
+    def _tracker_alive_probe(self, _pad: Any, _info: Any) -> Any:
+        self._beat("tracker")
+        return _import_gst().PadProbeReturn.OK
+
     def _count_frame_probe(self, _pad: Any, info: Any) -> Any:
         Gst = _import_gst()
+        self._beat("rtsp")
         for camera_id in self._sources:
             self._frame_counter.increment(camera_id)
             break
@@ -185,6 +239,9 @@ class DeepStreamPipeline:
 
     def _inference_buffer_probe(self, _pad: Any, info: Any) -> Any:
         Gst = _import_gst()
+        self._beat("sgie")
+        if self._instrumentation is not None:
+            self._instrumentation.record_sgie_frame()
         if self._on_inference_buffer is not None:
             gst_buffer = info.get_buffer()
             if gst_buffer is not None:
@@ -205,7 +262,7 @@ class DeepStreamPipeline:
             raise RuntimeError("build() must be called before add_source()")
 
         pad_index = len(self._request_pads)
-        bin_ = source.build()
+        bin_ = source.build(latency_ms=self._settings.rtsp_default_latency_ms)
         self._pipeline.add(bin_)
 
         sink_pad = self._streammux.get_request_pad(f"sink_{pad_index}")

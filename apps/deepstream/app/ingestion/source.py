@@ -35,9 +35,13 @@ def _import_gst() -> Any:
     return Gst
 
 
-def build_source_bin(source: CameraSource) -> Any:
+def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
     """Construct one camera's decode bin. Returns a ``Gst.Bin`` with a ghost
     src pad named ``src`` carrying decoded (NVMM) frames.
+
+    ``latency_ms`` -- RM-11.SIV Decision B: config-driven
+    (``DeepStreamSettings.rtsp_default_latency_ms``) rather than hardcoded;
+    defaults preserved for any direct caller (e.g. tests).
 
     Raises whatever the DeepStream/GStreamer SDK raises on missing plugins
     (e.g. ``nvv4l2decoder`` requires the Jetson multimedia API) -- there is
@@ -71,7 +75,7 @@ def build_source_bin(source: CameraSource) -> Any:
         # left unconstrained per DATABASE_SCHEMA.md -- no architecture document
         # defines camera_stream_profiles.transport's value set (RM-03 design note).
         rtspsrc.set_property("protocols", source.transport)
-    rtspsrc.set_property("latency", 200)
+    rtspsrc.set_property("latency", latency_ms)
 
     depay.link(parse)
     parse.link(decoder)
@@ -103,8 +107,8 @@ class RtspSource:
     def camera_id(self) -> uuid.UUID:
         return self.camera.camera_id
 
-    def build(self) -> Any:
-        self.bin = build_source_bin(self.camera)
+    def build(self, *, latency_ms: int = 200) -> Any:
+        self.bin = build_source_bin(self.camera, latency_ms=latency_ms)
         return self.bin
 
     def is_failure_message(self, message: Any) -> bool:
