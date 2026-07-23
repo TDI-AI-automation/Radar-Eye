@@ -287,6 +287,13 @@ class RuntimeAdapter:
         self.last_observation = observation
         self._observation_count += 1
         self._beat("runtime_adapter")
+        # RM-11.SIV real-hardware finding: "camera" and "pipeline_fps" must
+        # also beat continuously here, not just once at on_camera_connected
+        # -- otherwise both go stale within their threshold even while
+        # frames are actively flowing (caught by an actual hardware run,
+        # not by unit tests, which can't see this class of timing gap).
+        self._beat("camera")
+        self._beat("pipeline_fps")
 
         if self._instrumentation is not None:
             self._instrumentation.record_frame(

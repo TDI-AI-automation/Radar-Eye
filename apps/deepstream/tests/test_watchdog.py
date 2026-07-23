@@ -1,8 +1,8 @@
 """Tests for siv/watchdog.py -- RM-11.SIV Watchdog requirement.
 
 Visibility only: check_once() must never mutate pipeline state, only
-observe HeartbeatRegistry/PerformanceInstrumentation and log. Fully
-SDK-free -- no DeepStream/GStreamer/Postgres dependency.
+observe HeartbeatRegistry and log. Fully SDK-free -- no DeepStream/
+GStreamer/Postgres dependency.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import pytest
 
 from apps.deepstream.app.config import WatchdogSettings
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
-from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.siv.watchdog import Watchdog
 from shared.events.bus import InProcessEventBus
 from shared.events.envelope import EventEnvelope
@@ -30,7 +29,6 @@ def _make_watchdog(
 ) -> Watchdog:
     return Watchdog(
         heartbeat_registry=heartbeat or HeartbeatRegistry(),
-        instrumentation=PerformanceInstrumentation(pgie_is_placeholder=True),
         settings=settings or WatchdogSettings(),
         bus=bus,
     )
@@ -42,16 +40,25 @@ class TestNoActivityIsUnhealthy:
 
         statuses = watchdog.check_once()
 
-        for component in ("camera", "rtsp", "pgie", "tracker", "sgie", "incident", "alarm"):
+        for component in (
+            "camera",
+            "rtsp",
+            "pgie",
+            "tracker",
+            "sgie",
+            "incident",
+            "alarm",
+            "pipeline_fps",
+        ):
             assert statuses[component].healthy is False
 
-    def test_pipeline_fps_unhealthy_before_any_frame(self) -> None:
+    def test_pipeline_fps_unhealthy_before_any_beat(self) -> None:
         watchdog = _make_watchdog()
 
         statuses = watchdog.check_once()
 
         assert statuses["pipeline_fps"].healthy is False
-        assert statuses["pipeline_fps"].reason == "no frames processed yet"
+        assert statuses["pipeline_fps"].reason == "no activity recorded yet"
 
 
 class TestBeatComponentsBecomeHealthy:
@@ -64,14 +71,15 @@ class TestBeatComponentsBecomeHealthy:
 
         assert statuses["pgie"].healthy is True
 
-    def test_pipeline_fps_healthy_once_frames_are_recorded(self) -> None:
-        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
-        instrumentation.record_frame(ingress_seconds=1.0, metadata_seconds=1.01)
-        watchdog = Watchdog(
-            heartbeat_registry=HeartbeatRegistry(),
-            instrumentation=instrumentation,
-            settings=WatchdogSettings(),
-        )
+    def test_pipeline_fps_healthy_once_beaten(self) -> None:
+        """pipeline_fps is beaten by RuntimeAdapter.on_frame_observation --
+        see runtime_adapter.py -- reading through the same shared
+        HeartbeatRegistry as every other component (Unified Heartbeat's
+        one source of truth; a real hardware run caught a prior version of
+        this class deriving it separately, which the dashboard couldn't see)."""
+        heartbeat = HeartbeatRegistry()
+        heartbeat.beat("pipeline_fps")
+        watchdog = _make_watchdog(heartbeat=heartbeat)
 
         statuses = watchdog.check_once()
 

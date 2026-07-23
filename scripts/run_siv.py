@@ -76,7 +76,6 @@ async def _run() -> None:
 
     watchdog = Watchdog(
         heartbeat_registry=runtime.heartbeat_registry,
-        instrumentation=runtime.instrumentation,
         settings=validation_settings.watchdog,
         bus=bus,
     )
