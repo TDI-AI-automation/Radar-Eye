@@ -47,6 +47,7 @@ def test_stale_component_reports_unhealthy_with_age_in_reason() -> None:
     status = registry.status("tracker", stale_after_seconds=5.0, now=last_seen + 10.0)
 
     assert status.healthy is False
+    assert status.reason is not None
     assert "stale for" in status.reason
 
 

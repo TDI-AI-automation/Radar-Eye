@@ -91,7 +91,10 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     """
     path = settings_path or DEFAULT_SETTINGS_PATH
     raw = _load_yaml(path)
-    env = EnvSettings()
+    # Required fields are sourced from RADAR_EYE_* env vars / .env at runtime
+    # by pydantic-settings -- mypy has no way to see that without the fields
+    # becoming Optional, so the zero-arg call is a known false positive.
+    env = EnvSettings()  # type: ignore[call-arg]
 
     db_section = raw.get("database", {})
     database = DatabaseSettings(

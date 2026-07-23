@@ -33,6 +33,7 @@ Flow per tracked detection:
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 
@@ -187,16 +188,23 @@ class ThreatEngineRuntimeAdapter:
             len(results),
         )
 
+        # FIRE's fast-path can yield both an INCIDENT_ELIGIBLE and an
+        # ALARM_ELIGIBLE EscalationSignal for this same detection, and both
+        # resolve (idempotently) to the same incident -- tracked here so the
+        # "incident" heartbeat beats once per frame it was engaged, not once
+        # per signal that happened to touch it.
+        beaten_incident_ids: set[uuid.UUID] = set()
         for result in results:
-            await self._route_result(result, frame_correlation_id)
+            await self._route_result(result, frame_correlation_id, beaten_incident_ids)
 
     async def _route_result(
         self,
         result: ThreatAssessmentEvent | HumanReviewItemCreatedEvent | EscalationSignal,
         frame_correlation_id: str,
+        beaten_incident_ids: set[uuid.UUID],
     ) -> None:
         if isinstance(result, EscalationSignal):
-            await self._handle_escalation(result, frame_correlation_id)
+            await self._handle_escalation(result, frame_correlation_id, beaten_incident_ids)
             return
 
         if isinstance(result.payload, ThreatAssessmentPayload):
@@ -222,7 +230,12 @@ class ThreatEngineRuntimeAdapter:
             self._instrumentation.record_event_published()
         await self._bus.publish(result)
 
-    async def _handle_escalation(self, signal: EscalationSignal, frame_correlation_id: str) -> None:
+    async def _handle_escalation(
+        self,
+        signal: EscalationSignal,
+        frame_correlation_id: str,
+        beaten_incident_ids: set[uuid.UUID],
+    ) -> None:
         """INCIDENT_ELIGIBLE and ALARM_ELIGIBLE both resolve to an incident
         first (handle_escalation() is idempotent create-or-return, per
         ADR-025's dedup policy) -- ALARM_ELIGIBLE always arrives at or after
@@ -237,9 +250,11 @@ class ThreatEngineRuntimeAdapter:
                 timestamp=datetime.now(timezone.utc),
             )
             await session.commit()
-        self._beat("incident", reason=f"incident_id={incident.id}")
-        if self._instrumentation is not None:
-            self._instrumentation.record_incident()
+        if incident.id not in beaten_incident_ids:
+            beaten_incident_ids.add(incident.id)
+            self._beat("incident", reason=f"incident_id={incident.id}")
+            if self._instrumentation is not None:
+                self._instrumentation.record_incident()
         _audit_logger.info(
             "Incident created: incident_id=%s camera=%s track=%d threat_level=%s reason=%s",
             incident.id,
