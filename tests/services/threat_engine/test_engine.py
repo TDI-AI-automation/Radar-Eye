@@ -73,7 +73,7 @@ class TestHighEscalationDebounceAndTimers:
             0.2,
         )
         assert len(events) == 1
-        assert isinstance(events[0], ThreatAssessmentEvent)
+        assert type(events[0]) is ThreatAssessmentEvent
         assert events[0].payload.threat_level is ThreatLevel.HIGH
         assert events[0].payload.rule_id == "RANGED_LETHAL_ZONE_1"
 
@@ -114,7 +114,7 @@ class TestHighEscalationDebounceAndTimers:
             4.3,
         )
         assert len(events) == 1
-        assert isinstance(events[0], ThreatAssessmentEvent)
+        assert type(events[0]) is ThreatAssessmentEvent
         assert events[0].payload.threat_level is ThreatLevel.HIGH
         assert events[0].payload.rule_id == "RANGED_LETHAL_ZONE_1"
 
@@ -141,7 +141,7 @@ class TestHighEscalationDebounceAndTimers:
             14.4,
         )
         assert len(events) == 1
-        assert isinstance(events[0], ThreatAssessmentEvent)
+        assert type(events[0]) is ThreatAssessmentEvent
         assert events[0].payload.threat_level is ThreatLevel.OBSERVE
         assert events[0].payload.rule_id == "NO_WEAPON_OBSERVE"
 
@@ -326,7 +326,7 @@ class TestFire:
         )
 
         assert len(events) == 3
-        threat_events = [e for e in events if isinstance(e, ThreatAssessmentEvent)]
+        threat_events = [e for e in events if type(e) is ThreatAssessmentEvent]
         signals = [e for e in events if isinstance(e, EscalationSignal)]
         assert len(threat_events) == 1
         assert threat_events[0].payload.threat_level is ThreatLevel.HIGH
@@ -360,7 +360,7 @@ class TestFire:
         )
 
         assert len(events) == 1
-        assert isinstance(events[0], ThreatAssessmentEvent)
+        assert type(events[0]) is ThreatAssessmentEvent
 
     def test_fire_resignals_after_track_reset(self) -> None:
         engine = ThreatEngine()

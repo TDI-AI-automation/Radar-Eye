@@ -87,7 +87,7 @@ class TestSkipsUntrackedDetections:
             adapter = ThreatEngineRuntimeAdapter(
                 session_factory=AsyncMock(), bus=bus, alarm_service=AlarmService(bus=bus)
             )
-            adapter._process_detection = AsyncMock()  # noqa: SLF001 -- spy for this test only
+            adapter._process_detection = AsyncMock()  # type: ignore[method-assign] # noqa: SLF001 -- spy for this test only
 
             observation = _observation(
                 uuid.uuid4(),

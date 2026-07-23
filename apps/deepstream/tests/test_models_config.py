@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from apps.deepstream.app.config import ModelsSettings
+from apps.deepstream.app.config import ModelsSettings, ModelStageSettings
 from apps.deepstream.app.models_config import ModelConfigError, ModelConfigResolver
 
 
@@ -35,7 +35,7 @@ def _models_settings(tmp_path: Path, **overrides) -> ModelsSettings:
         "unique_id": 2,
         **overrides.get("sgie", {}),
     }
-    return ModelsSettings(pgie=pgie, sgie=sgie)
+    return ModelsSettings(pgie=ModelStageSettings(**pgie), sgie=ModelStageSettings(**sgie))
 
 
 class TestDisabledStagesFallBackToPlaceholder:

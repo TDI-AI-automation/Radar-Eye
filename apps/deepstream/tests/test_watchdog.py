@@ -142,11 +142,16 @@ class TestAuditLogOnFallingEdge:
 
         with caplog.at_level(logging.WARNING, logger="radar_eye.audit"):
             watchdog.check_once()  # healthy -- just beaten, default threshold
-            # Force staleness without sleeping: lower the threshold below
-            # the (tiny but nonzero) time elapsed since the beat above.
-            watchdog._settings.stale_after_seconds.pgie = 0.0  # noqa: SLF001 -- test-only override
-            watchdog.check_once()  # falling edge: healthy -> stale, must log
-            watchdog.check_once()  # still stale -- must not log again
+            # Force staleness deterministically via an injected clock
+            # reading rather than lowering the threshold and racing real
+            # elapsed time: on a fast/coarse-clock runner, the elapsed time
+            # since the beat above can measure as exactly 0.0s, which never
+            # exceeds a 0.0s threshold (age <= stale_after_seconds) and the
+            # falling edge silently never fires.
+            last_seen = heartbeat.status("pgie", stale_after_seconds=5.0).last_seen_monotonic
+            stale_now = last_seen + 10.0  # default pgie threshold is 5.0s
+            watchdog.check_once(now=stale_now)  # falling edge: healthy -> stale, must log
+            watchdog.check_once(now=stale_now)  # still stale -- must not log again
 
         warnings = [r for r in caplog.records if "pgie stalled" in r.getMessage()]
         assert len(warnings) == 1

@@ -28,6 +28,7 @@ from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.models.camera import Camera, CameraStreamProfile
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
 from apps.api.app.security.encryption import get_credential_encryption_provider
+from apps.deepstream.app.camera_yaml import build_rtsp_url, require_keys
 from apps.deepstream.app.env_yaml import load_yaml_with_env_substitution
 
 logger = logging.getLogger(__name__)
@@ -36,27 +37,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAMERA_YAML = REPO_ROOT / "configs" / "camera.yaml"
 
 
-def _build_rtsp_url(raw: dict) -> str:
-    """``camera_stream_profiles.rtsp_url_encrypted`` is the single encrypted
-    field ``CameraRegistry`` decrypts and hands straight to ``rtspsrc``'s
-    ``location`` property (``ingestion/source.py``) -- there is no separate
-    username/password column in the schema. ``rtspsrc`` itself supports
-    embedded credentials (``rtsp://user:pass@host/...``), so that is where
-    ``camera.yaml``'s ``username``/``password`` actually end up, rather than
-    as new, otherwise-unused database columns."""
-    url = raw["rtsp_url"]
-    username = raw.get("username")
-    password = raw.get("password")
-    if username and password and "@" not in url:
-        scheme, _, rest = url.partition("://")
-        url = f"{scheme}://{username}:{password}@{rest}"
-    return url
-
-
 async def register_camera(camera_yaml_path: Path) -> None:
     raw = load_yaml_with_env_substitution(camera_yaml_path)
+    require_keys(raw)
     camera_slug = raw["camera_id"]
-    rtsp_url = _build_rtsp_url(raw)
+    rtsp_url = build_rtsp_url(raw)
     transport = raw.get("transport", "tcp")
 
     settings = get_settings()
