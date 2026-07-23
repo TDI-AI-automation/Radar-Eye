@@ -144,6 +144,55 @@ class ModelStageSettings(BaseModel):
     gpu_id: int = 0
     unique_id: int
     nms_iou_threshold: float = 0.5
+    topk: int = 20
+
+    # -- Fields below exist for custom-trained models whose output nvinfer
+    # cannot decode natively (e.g. a custom YOLO export) -- see
+    # apps/deepstream/native/README.md. All optional; a stage that needs
+    # none of them (the RM-11 Phase 1/2 placeholder path, still the default
+    # via enabled=false) renders identically to before these were added.
+
+    model_color_format: int = 0
+    """0=RGB, 1=BGR."""
+    cluster_mode: int = 2
+    """1=DBSCAN, 2=NMS, 3=DBSCAN+NMS Hybrid, 4=None. Default matches
+    nvinfer's own built-in NMS behavior. A custom parse_bbox_func_name that
+    already performs its own NMS typically needs 4 -- leaving nvinfer's
+    default (2) in that case double-NMS-es and silently drops valid
+    detections."""
+    network_type: int | None = None
+    """0=detector, 1=classifier, 2=segmentation, 100=other. None leaves
+    nvinfer's own default (0, detector) in effect -- set explicitly for a
+    classifier stage."""
+    maintain_aspect_ratio: bool | None = None
+    symmetric_padding: bool | None = None
+    custom_lib_path: str | None = None
+    """Path to a compiled custom bbox-parser plugin (e.g.
+    apps/deepstream/native/nvdsinfer_custom_impl_Yolo/
+    libnvdsinfer_custom_impl_Yolo.so, built via
+    scripts/build_yolo_parser.sh). None means no custom parser -- nvinfer's
+    built-in decoding is used, correct for the placeholder/stock-model
+    path."""
+    parse_bbox_func_name: str | None = None
+    """Symbol name custom_lib_path exports (e.g. NvDsInferParseYolo).
+    Only meaningful together with custom_lib_path."""
+    operate_on_class_ids: str | None = None
+    """SGIE only -- semicolon-separated PGIE class ids to classify,
+    nvinfer's own operate-on-class-ids format (e.g. "3" for a single
+    class). None means classify every detected object."""
+    input_object_min_width: int | None = None
+    """SGIE only -- skip classifying detections narrower/shorter than this
+    many pixels."""
+    input_object_min_height: int | None = None
+    infer_dims: str | None = None
+    """"channels;height;width" (e.g. "3;640;640"). None (the default) omits
+    this property entirely, so nvinfer auto-detects it from the ONNX
+    model's own input tensor shape -- confirmed against a real working
+    config during RM-11.SIV's DeepStream-Yolo integration review to be the
+    *correct* default, not merely a fallback: a hardcoded guess here can
+    silently mismatch the real model's trained input size, which
+    auto-detection cannot get wrong. Only set this explicitly if a specific
+    model genuinely requires overriding nvinfer's own detection."""
 
 
 class ModelsSettings(BaseModel):

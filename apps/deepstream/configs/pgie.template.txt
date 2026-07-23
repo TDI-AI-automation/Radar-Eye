@@ -7,15 +7,22 @@
 # templated keys below) is substituted at pipeline-build time. Never edit this file to
 # point at a specific model -- edit configs/models.yaml instead.
 #
-# infer-dims is NOT templated: docs/MODEL_REGISTRY.md lists the real
-# weapon-detection model's input size as an explicit Unknown ("Input size:
-# Unknown" under yolo26m_weapon.pt) -- per CLAUDE.md's "Unknowns remain
-# unknown until validated. Avoid assumptions", this repo does not guess a
-# real value here. The placeholder below MUST be corrected to the model's
-# actual expected input shape once that is established (see
-# BENCHMARK_ACCEPTANCE_CRITERIA.md) -- pipeline construction will otherwise
-# proceed with a shape nvinfer accepts syntactically but that may not match
-# the real model's trained input size.
+# infer-dims is NOT set here (and not templated unconditionally): omitting
+# it lets nvinfer auto-detect the model's input shape from the ONNX graph
+# itself, confirmed against a real working DeepStream-Yolo config to be the
+# *correct* default -- a hardcoded guess here (docs/MODEL_REGISTRY.md lists
+# the real weapon-detection model's input size as an explicit Unknown) could
+# silently mismatch the real model's trained input size, which
+# auto-detection cannot get wrong. Set configs/models.yaml's
+# pgie.infer_dims explicitly only if a specific model genuinely needs to
+# override nvinfer's own detection -- see ModelStageSettings in config.py.
+#
+# The RM11SIV_EXTRA_PROPERTIES marker below is where ModelConfigResolver
+# inserts optional properties only a custom-trained model needs (custom
+# bbox parser, aspect-ratio/padding, network-type) -- see
+# apps/deepstream/native/README.md and ModelStageSettings in config.py.
+# Absent for the placeholder/stock-model path (nothing is inserted, the
+# marker line is simply removed).
 ####################################################################################################
 
 [property]
@@ -26,19 +33,18 @@ model-engine-file=$engine_file
 labelfile-path=$labels_file
 batch-size=$batch_size
 process-mode=1
-model-color-format=0
+model-color-format=$model_color_format
 ## 0=FP32, 1=INT8, 2=FP16 mode
 network-mode=$network_mode
 num-detected-classes=$num_detected_classes
 interval=$interval
 gie-unique-id=$unique_id
-force-implicit-batch-dim=1
-## UNVALIDATED -- see header comment. Correct before production use.
-infer-dims=3;544;960
-## 1=DBSCAN, 2=NMS, 3=DBSCAN+NMS Hybrid, 4=None
-cluster-mode=2
+## 1=DBSCAN, 2=NMS, 3=DBSCAN+NMS Hybrid, 4=None -- 4 is required when a
+## custom parse-bbox-func-name already performs its own NMS.
+cluster-mode=$cluster_mode
+# RM11SIV_EXTRA_PROPERTIES
 
 [class-attrs-all]
-topk=20
+topk=$topk
 nms-iou-threshold=$nms_iou_threshold
 pre-cluster-threshold=$confidence_threshold

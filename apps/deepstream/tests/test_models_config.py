@@ -127,3 +127,100 @@ class TestRenderedConfig:
 
         assert resolved.config_file_path.parent == generated_dir
         assert resolved.config_file_path.is_file()
+
+    def test_default_stage_has_no_extra_properties(self, tmp_path: Path) -> None:
+        """The placeholder/stock-model path (nothing set) must render with
+        none of the custom-model-only properties present at all."""
+        models = _models_settings(tmp_path)
+        resolver = ModelConfigResolver(generated_dir=tmp_path / "generated")
+
+        resolved = resolver.resolve_pgie(models)
+
+        contents = resolved.config_file_path.read_text(encoding="utf-8")
+        for prop in (
+            "custom-lib-path",
+            "parse-bbox-func-name",
+            "network-type",
+            "maintain-aspect-ratio",
+            "symmetric-padding",
+            "operate-on-class-ids",
+            "input-object-min-width",
+            "infer-dims",
+        ):
+            # "=" form only -- some of these names also appear in prose
+            # comments explaining what the marker inserts.
+            assert f"{prop}=" not in contents
+
+
+class TestCustomModelProperties:
+    """RM-11.SIV Decision C extension -- custom-trained models (e.g. a
+    custom YOLO export via a vendored bbox parser plugin, see
+    apps/deepstream/native/README.md) need properties the stock/placeholder
+    path never uses."""
+
+    def test_custom_lib_path_must_exist(self, tmp_path: Path) -> None:
+        models = _models_settings(
+            tmp_path,
+            pgie={
+                "custom_lib_path": str(tmp_path / "missing.so"),
+                "parse_bbox_func_name": "NvDsInferParseYolo",
+            },
+        )
+        resolver = ModelConfigResolver(generated_dir=tmp_path / "generated")
+
+        with pytest.raises(ModelConfigError, match="pgie.custom_lib_path"):
+            resolver.resolve_pgie(models)
+
+    def test_custom_parser_properties_appear_when_configured(self, tmp_path: Path) -> None:
+        custom_lib = tmp_path / "libnvdsinfer_custom_impl_Yolo.so"
+        custom_lib.write_bytes(b"fake-so")
+        models = _models_settings(
+            tmp_path,
+            pgie={
+                "custom_lib_path": str(custom_lib),
+                "parse_bbox_func_name": "NvDsInferParseYolo",
+                "cluster_mode": 4,
+                "network_type": 0,
+                "maintain_aspect_ratio": True,
+                "symmetric_padding": True,
+                "topk": 300,
+                "infer_dims": "3;640;640",
+            },
+        )
+        resolver = ModelConfigResolver(generated_dir=tmp_path / "generated")
+
+        resolved = resolver.resolve_pgie(models)
+
+        contents = resolved.config_file_path.read_text(encoding="utf-8")
+        assert f"custom-lib-path={custom_lib}" in contents
+        assert "parse-bbox-func-name=NvDsInferParseYolo" in contents
+        assert "cluster-mode=4" in contents
+        assert "network-type=0" in contents
+        assert "maintain-aspect-ratio=1" in contents
+        assert "symmetric-padding=1" in contents
+        assert "infer-dims=3;640;640" in contents
+        assert "topk=300" in contents
+
+    def test_sgie_operate_on_class_ids_and_min_size(self, tmp_path: Path) -> None:
+        models = _models_settings(
+            tmp_path,
+            sgie={
+                "operate_on_class_ids": "3",
+                "input_object_min_width": 32,
+                "input_object_min_height": 64,
+                "model_color_format": 0,
+                "network_type": 1,
+                "maintain_aspect_ratio": False,
+            },
+        )
+        resolver = ModelConfigResolver(generated_dir=tmp_path / "generated")
+
+        resolved = resolver.resolve_sgie(models)
+
+        contents = resolved.config_file_path.read_text(encoding="utf-8")
+        assert "operate-on-class-ids=3" in contents
+        assert "input-object-min-width=32" in contents
+        assert "input-object-min-height=64" in contents
+        assert "model-color-format=0" in contents
+        assert "network-type=1" in contents
+        assert "maintain-aspect-ratio=0" in contents

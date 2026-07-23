@@ -43,6 +43,11 @@ _DEFAULT_GENERATED_DIR = Path(__file__).resolve().parents[1] / "configs" / "gene
 _PGIE_PLACEHOLDER_PATH = "apps/deepstream/configs/pgie_placeholder.txt"
 _SGIE_PLACEHOLDER_PATH = "apps/deepstream/configs/sgie_placeholder.txt"
 
+_EXTRA_PROPERTIES_MARKER = "# RM11SIV_EXTRA_PROPERTIES"
+"""Matches the marker line in pgie.template.txt/sgie.template.txt --
+replaced with zero or more optional nvinfer properties, or removed
+entirely (a custom-trained-model stage that needs none of them)."""
+
 
 class ModelConfigError(RuntimeError):
     """A configs/models.yaml entry references a file that does not exist.
@@ -70,6 +75,40 @@ def _require_file(*, stage: str, key: str, path_str: str) -> Path:
 def _count_labels(labels_path: Path) -> int:
     lines = labels_path.read_text(encoding="utf-8").splitlines()
     return len([line for line in lines if line.strip()])
+
+
+def _bool_to_nvinfer(value: bool) -> int:
+    return 1 if value else 0
+
+
+def _extra_property_lines(stage: ModelStageSettings, *, stage_name: str) -> list[str]:
+    """Optional properties only a custom-trained model needs -- see
+    ModelStageSettings' docstrings. Only emitted when actually configured,
+    so the placeholder/stock-model path (nothing set) renders no extra
+    lines at all."""
+    lines: list[str] = []
+    if stage.infer_dims is not None:
+        lines.append(f"infer-dims={stage.infer_dims}")
+    if stage.network_type is not None:
+        lines.append(f"network-type={stage.network_type}")
+    if stage.maintain_aspect_ratio is not None:
+        lines.append(f"maintain-aspect-ratio={_bool_to_nvinfer(stage.maintain_aspect_ratio)}")
+    if stage.symmetric_padding is not None:
+        lines.append(f"symmetric-padding={_bool_to_nvinfer(stage.symmetric_padding)}")
+    if stage.custom_lib_path is not None:
+        custom_lib_path = _require_file(
+            stage=stage_name, key="custom_lib_path", path_str=stage.custom_lib_path
+        )
+        lines.append(f"custom-lib-path={custom_lib_path}")
+    if stage.parse_bbox_func_name is not None:
+        lines.append(f"parse-bbox-func-name={stage.parse_bbox_func_name}")
+    if stage.operate_on_class_ids is not None:
+        lines.append(f"operate-on-class-ids={stage.operate_on_class_ids}")
+    if stage.input_object_min_width is not None:
+        lines.append(f"input-object-min-width={stage.input_object_min_width}")
+    if stage.input_object_min_height is not None:
+        lines.append(f"input-object-min-height={stage.input_object_min_height}")
+    return lines
 
 
 class ModelConfigResolver:
@@ -114,13 +153,17 @@ class ModelConfigResolver:
             engine_file=stage.engine_file,
             labels_file=labels_file,
             batch_size=stage.batch_size,
+            model_color_format=stage.model_color_format,
             network_mode=_PRECISION_TO_NETWORK_MODE[stage.precision],
             num_detected_classes=_count_labels(labels_file),
             interval=stage.interval,
             unique_id=stage.unique_id,
+            cluster_mode=stage.cluster_mode,
+            topk=stage.topk,
             nms_iou_threshold=stage.nms_iou_threshold,
             confidence_threshold=stage.confidence_threshold,
         )
+        rendered = self._insert_extra_properties(rendered, stage, stage_name="pgie")
         return self._write_generated("pgie_resolved.txt", rendered)
 
     def _render_sgie(self, stage: ModelStageSettings, *, pgie: ModelStageSettings) -> Path:
@@ -134,12 +177,22 @@ class ModelConfigResolver:
             engine_file=stage.engine_file,
             labels_file=labels_file,
             batch_size=stage.batch_size,
+            model_color_format=stage.model_color_format,
             network_mode=_PRECISION_TO_NETWORK_MODE[stage.precision],
             confidence_threshold=stage.confidence_threshold,
             operate_on_gie_id=pgie.unique_id,
             unique_id=stage.unique_id,
         )
+        rendered = self._insert_extra_properties(rendered, stage, stage_name="sgie")
         return self._write_generated("sgie_resolved.txt", rendered)
+
+    @staticmethod
+    def _insert_extra_properties(
+        rendered: str, stage: ModelStageSettings, *, stage_name: str
+    ) -> str:
+        extra_lines = _extra_property_lines(stage, stage_name=stage_name)
+        replacement = "\n".join(extra_lines) if extra_lines else ""
+        return rendered.replace(_EXTRA_PROPERTIES_MARKER, replacement)
 
     def _write_generated(self, filename: str, contents: str) -> Path:
         self._generated_dir.mkdir(parents=True, exist_ok=True)
