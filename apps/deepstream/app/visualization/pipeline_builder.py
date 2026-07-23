@@ -113,6 +113,16 @@ class VisualizationPipelineBuilder:
 
         encoder = self._make(Gst, "nvv4l2h264enc", "viz-encoder")
         encoder.set_property("bitrate", self._settings.output_bitrate)
+        # iframeinterval: default is large enough that a client joining
+        # mid-stream can wait a long time for its first real keyframe,
+        # decoding only P-frames against a reference it never received in
+        # the meantime -- the classic "solid green/gray until the first
+        # IDR arrives" artifact (confirmed via RM-11.SIV Phase 5 hardware
+        # verification: a raw-frame dump taken at the exact same pipeline
+        # stage, bypassing encode/RTSP/decode entirely, showed a correct
+        # image every time -- the corruption was never in convert/OSD).
+        # One keyframe per second matches config-interval=1 below.
+        encoder.set_property("iframeinterval", self._settings.output_fps)
 
         parser = self._make(Gst, "h264parse", "viz-parse")
 
