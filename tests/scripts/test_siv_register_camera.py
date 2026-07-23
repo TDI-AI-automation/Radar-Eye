@@ -44,14 +44,14 @@ class TestRegisterCamera:
 
         await register_camera(camera_yaml)
 
-        result = await db_session.execute(select(Camera).where(Camera.name == "test-cam-01"))
-        camera = result.scalar_one()
+        camera_result = await db_session.execute(select(Camera).where(Camera.name == "test-cam-01"))
+        camera = camera_result.scalar_one()
         assert camera.status == "DISCONNECTED"
 
-        result = await db_session.execute(
+        profile_result = await db_session.execute(
             select(CameraStreamProfile).where(CameraStreamProfile.camera_id == camera.id)
         )
-        profile = result.scalar_one()
+        profile = profile_result.scalar_one()
         assert profile.transport == "tcp"
 
         from apps.api.app.config import get_settings

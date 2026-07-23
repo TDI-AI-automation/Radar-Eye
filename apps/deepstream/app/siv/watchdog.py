@@ -103,20 +103,27 @@ class Watchdog:
     async def _on_any_event(self, _event: EventEnvelope) -> None:
         self._heartbeat.beat(_EVENT_BUS_COMPONENT)
 
-    def check_once(self) -> dict[str, HeartbeatStatus]:
+    def check_once(self, *, now: float | None = None) -> dict[str, HeartbeatStatus]:
         """Runs one full check across every monitored component and logs
         (once, on the falling edge) when a component transitions from
         healthy to stale. Public -- tests and the dashboard call this
-        directly without waiting on the real interval."""
+        directly without waiting on the real interval.
+
+        ``now`` mirrors ``HeartbeatRegistry.status``'s injectable clock
+        reading -- defaults to the real monotonic clock; tests use it to
+        force staleness deterministically instead of racing real elapsed
+        time against a near-zero threshold."""
         thresholds = self._settings.stale_after_seconds
         statuses: dict[str, HeartbeatStatus] = {}
 
         for component in _HEARTBEAT_COMPONENTS:
             threshold = getattr(thresholds, component)
-            statuses[component] = self._heartbeat.status(component, stale_after_seconds=threshold)
+            statuses[component] = self._heartbeat.status(
+                component, stale_after_seconds=threshold, now=now
+            )
 
         statuses["event_bus"] = self._heartbeat.status(
-            _EVENT_BUS_COMPONENT, stale_after_seconds=thresholds.event_bus
+            _EVENT_BUS_COMPONENT, stale_after_seconds=thresholds.event_bus, now=now
         )
 
         for component, status in statuses.items():

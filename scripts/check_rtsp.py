@@ -26,6 +26,7 @@ import argparse
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from apps.deepstream.app.camera_yaml import CameraYamlError, build_rtsp_url, require_keys
@@ -37,6 +38,12 @@ from apps.deepstream.app.env_yaml import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAMERA_YAML = REPO_ROOT / "configs" / "camera.yaml"
 DEFAULT_TIMEOUT_SECONDS = 15.0
+
+
+@dataclass
+class _ConnectResult:
+    reached_playing: bool = False
+    error: str | None = None
 
 
 def _import_gst():  # noqa: ANN202 -- returns the gi.repository.Gst module
@@ -86,21 +93,21 @@ def check_rtsp(camera_yaml_path: Path, *, timeout_seconds: float) -> bool:
         "rtph264depay ! h264parse ! fakesink name=sink sync=0"
     )
 
-    result = {"reached_playing": False, "error": None, "caps": None}
+    result = _ConnectResult()
     done = threading.Event()
 
     def _on_message(_bus, message) -> None:  # noqa: ANN001
         if message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            result["error"] = f"{err} ({debug})"
+            result.error = f"{err} ({debug})"
             done.set()
         elif message.type == Gst.MessageType.EOS:
-            result["error"] = "Stream ended (EOS) before PLAYING was confirmed"
+            result.error = "Stream ended (EOS) before PLAYING was confirmed"
             done.set()
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == pipeline:
             _old, new, _pending = message.parse_state_changed()
             if new == Gst.State.PLAYING:
-                result["reached_playing"] = True
+                result.reached_playing = True
                 done.set()
 
     bus = pipeline.get_bus()
@@ -121,11 +128,11 @@ def check_rtsp(camera_yaml_path: Path, *, timeout_seconds: float) -> bool:
     pipeline.set_state(Gst.State.NULL)
     loop.quit()
 
-    if result["reached_playing"]:
+    if result.reached_playing:
         print(f"PASS: reached PLAYING in {elapsed:.1f}s")
         return True
-    if result["error"]:
-        print(f"FAIL: {result['error']}")
+    if result.error:
+        print(f"FAIL: {result.error}")
         return False
     print(f"FAIL: timed out after {timeout_seconds}s without reaching PLAYING or an error")
     return False

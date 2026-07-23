@@ -25,13 +25,30 @@ import threading
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from apps.api.app.health import HealthCollector
     from shared.schemas.camera import CameraConnectionStatus
 
 logger = logging.getLogger(__name__)
+
+
+class HealthCollectorLike(Protocol):
+    """Structural interface HeartbeatScheduler needs from RM-09's HealthCollector.
+
+    Kept local (rather than importing apps.api.app.health.HealthCollector) so
+    this module never takes a runtime or static dependency on apps.api --
+    matching this file's existing in-process-but-decoupled design. Also lets
+    tests satisfy the interface with a plain fake instead of the real class.
+    """
+
+    def record_camera_heartbeat(
+        self,
+        camera_id: uuid.UUID,
+        status: CameraConnectionStatus = ...,
+        fps: float | None = ...,
+        timestamp: datetime | None = ...,
+    ) -> None: ...
 
 
 class FrameCounter:
@@ -62,7 +79,7 @@ class HeartbeatScheduler:
     def __init__(
         self,
         *,
-        health_collector: HealthCollector,
+        health_collector: HealthCollectorLike,
         frame_counter: FrameCounter,
         camera_ids: list[uuid.UUID],
         status_provider: StatusProvider,
