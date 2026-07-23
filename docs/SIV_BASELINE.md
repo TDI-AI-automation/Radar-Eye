@@ -69,8 +69,55 @@ RM-11 risk note on 20-camera Jetson sizing being unmeasured.
 
 ---
 
+## Visualization Subsystem: OFF vs. ON (2026-07-23)
+
+Source: RM-11.SIV Phase 5 hardware verification, `feature/RM-11-SIV-visualization`,
+same real camera, real production models (`configs/models.local.yaml` — real
+PGIE/SGIE weights, not the placeholder ResNet18 pair used in the 1-camera
+table above), one run with `visualization.enabled: false`, one with `true`
+(`rtsp_output_enabled: true`, RTSP client connected to
+`rtsp://<host>:8554/radar-eye`). Each figure below is the mean of 10
+`DeepStream performance snapshot` log samples taken at ~2s intervals after a
+~60s steady-state warm-up, not a single point-in-time read.
+
+| Metric | OFF | ON | Delta |
+|---|---|---|---|
+| Inference (PGIE/SGIE) FPS | 24.76 | 24.75 | −0.01 (noise-level; visualization branch never applies backpressure onto inference — see `viz-queue`'s `leaky=2`/`max-size-buffers=4` policy in `docs/DEEPSTREAM_PIPELINE_SPEC.md`) |
+| End-to-end latency | 4.52 ms | 4.75 ms | +0.23 ms (+5%) |
+| GPU utilization | 12.4% | 17.1% | +4.7 pts — cost of `nvvideoconvert` ×2 + `nvdsosd` + `nvv4l2h264enc` |
+| GPU memory | 1442 MB | 2436 MB | +994 MB (+69%) — encoder + OSD + convert buffer pools (`buffer-pool-size=16` when enabled) |
+| CPU utilization | 5.2% | 5.0% | ~0 (visualization is GPU-side only; RTSP payloading/UDP relay is negligible CPU) |
+| Visualization/Encoder/RTSP Publish FPS | N/A | 24.75 | — (one honestly-measured rate; nothing in the OSD→encode→pay→udpsink chain drops or re-batches frames after the renderer, so encoder consumption and RTSP publish rate are the same physical rate — see plan §9) |
+| Average overlay render time | N/A | 0.089 ms | — (per-frame cost inside `DeepStreamOverlayRenderer.probe_callback`, well under one frame period at 25fps) |
+| Object count per frame | Not tracked | Not tracked | `PerformanceSnapshot` has no object-count field today; not fabricated here |
+
+**Conclusion**: enabling visualization costs ~1 GB of GPU memory and ~5 GPU
+utilization points, with no measurable inference FPS impact and a small
+(~0.23ms) latency increase. Safe to leave enabled during SIV bench sessions
+on this hardware (RTX 3060, 12 GB — real Jetson AGX Orin 32GB numbers are
+expected to differ and are not yet measured, consistent with this file's
+existing placeholder-vs-production-model caveat above).
+
+**Failure isolation, verified on real hardware**: with `visualization.enabled:
+true` and RTSP port 8554 deliberately pre-bound by another process,
+`RtspStreamServer.start()` raised as designed; `builder.py`'s failure-isolation
+`try/except` caught it, logged `"Visualization failed to start -- continuing
+without it (inference is unaffected)"`, and `VisualizationManager.health()`
+correctly reported `enabled=True, running=False, reason=...`. Inference
+continued unaffected — 24.76 FPS, 420 frames processed by the time of
+inspection, GPU/CPU nominal, matching the healthy baseline above. (The
+construction-time failure path — `ElementFactory.make()` returning `None` or
+`link()` returning `False` — raises through the identical `try/except` but was
+not independently reproduced on real hardware for this run, since every
+element factory name in `VisualizationPipelineBuilder` is hardcoded and
+confirmed present on this machine; forcing that path would require editing
+frozen implementation code, out of scope for this milestone.)
+
+---
+
 ## Changelog
 
 | Date | Change |
 |---|---|
 | 2026-07-23 | Initial version. Records the 1-camera placeholder-model baseline from RM-11.SIV's hardware verification. |
+| 2026-07-23 | Adds Visualization Subsystem OFF vs. ON comparison (real camera, real models) and the real-hardware failure-isolation verification result. |
