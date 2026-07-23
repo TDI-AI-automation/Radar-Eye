@@ -22,6 +22,78 @@ gitignored — creating/editing it never touches version control.
 
 ---
 
+## Decision Tree
+
+Every step below gates the next one. If a step fails, stop, resolve the
+reported issue, and restart from `check_environment.py` — don't skip ahead
+on the assumption a later step will "probably still work."
+
+```
+Start
+  |
+  v
+check_environment.py
+  |
+  v
+PASS? --NO--> STOP: resolve the reported issue, restart from
+  |                 check_environment.py
+ YES
+  |
+  v
+check_models.py
+  |
+  v
+PASS? --NO--> STOP: fix configs/models.yaml, restart from
+  |                 check_environment.py
+ YES
+  |
+  v
+siv_register_camera.py
+  |
+  v
+PASS? --NO--> STOP: fix configs/camera.yaml / .env, restart from
+  |                 check_environment.py
+ YES
+  |
+  v
+show_registered_cameras.py
+  |
+  v
+PASS? --NO--> STOP: registration didn't commit, restart from
+  |                 check_environment.py
+ YES
+  |
+  v
+check_rtsp.py
+  |
+  v
+PASS? --NO--> STOP: fix camera network/credentials, restart from
+  |                 check_environment.py
+ YES
+  |
+  v
+run_siv.py
+  |
+  v
+Dashboard (live monitoring)
+  |
+  v
+Physical Validation (operator observes real detections)
+  |
+  v
+Generate Reports (siv_report.json + SIV_VALIDATION_REPORT.md)
+  |
+  v
+SIV Complete
+```
+
+If **any** step fails, the operator must stop, resolve the reported issue,
+and restart from `check_environment.py` — not from the step that failed.
+An environment problem (driver, disk space, a stale `.env`) can silently
+invalidate an earlier "PASS" from before it changed.
+
+---
+
 ## 0. Prerequisites (one-time, verify don't assume)
 
 0.1. `cd` to the repository root. Every command below assumes you're there
@@ -40,7 +112,7 @@ assumes it already is (see `docs/IMPLEMENTATION_STATUS.md`'s "Reference
 environment (RM-11)" row for how it was set up here).
 
 0.3. Create `.env` if it doesn't already exist (every DB-touching command
-below — steps 6, 7, 8 — needs `RADAR_EYE_DB_USER`/`RADAR_EYE_DB_PASSWORD`/
+below — steps 1, 7, 8, 9 — needs `RADAR_EYE_DB_USER`/`RADAR_EYE_DB_PASSWORD`/
 `RADAR_EYE_ENCRYPTION_KEY`; without it they fail with a pydantic
 `ValidationError` before even attempting a connection, not a clearer
 "can't connect" message):
@@ -50,15 +122,16 @@ test -f .env || cp .env.example .env
 # then edit .env and fill in real values
 ```
 If you'll use `${RADAR_CAMERA_USERNAME}`/`${RADAR_CAMERA_PASSWORD}`-style
-substitution in `configs/camera.yaml` (step 3), add those two variables to
+substitution in `configs/camera.yaml` (step 4), add those two variables to
 `.env` as well, then `set -a; source .env; set +a` in your shell before
-steps 4/6/8 — `.env` is only auto-loaded by the DB/encryption settings
+steps 5/7/9 — `.env` is only auto-loaded by the DB/encryption settings
 class, not by the plain `os.environ` lookup `configs/camera.yaml`'s
 substitution uses.
 
 0.4. Confirm PostgreSQL is reachable (required for camera registration and
 for Calibration/Threat Engine/Incident/Alarm — not for the two pre-flight
-checks in steps 2 and 4):
+checks in steps 3 and 5; step 1's `check_environment.py` also checks this
+automatically, this manual version is only useful before `.env` exists):
 
 ```bash
 python -c "
@@ -77,11 +150,74 @@ asyncio.run(main())
 **Expected:** `POSTGRES REACHABLE`. **If it raises a `ValidationError`
 instead:** step 0.3 wasn't completed — `.env` is missing or incomplete.
 **If it prints `NOT REACHABLE: ...`:** `.env` is read correctly but the
-database itself isn't up/reachable — fix that before step 6.
+database itself isn't up/reachable — fix that before step 7.
 
 ---
 
-## 1. Edit `configs/models.yaml`
+## 1. Validate the environment — `check_environment.py`
+
+The very first command of every SIV session, before anything else in this
+runbook:
+
+```bash
+python scripts/check_environment.py
+```
+(Works under either interpreter for the checks that don't need `gi`/`pyds`;
+GPU/driver/CUDA/TensorRT/DeepStream/GStreamer checks need the real
+DeepStream environment — run it under the system interpreter, step 0.2, for
+a fully meaningful result.)
+
+**Expected output (PASS):**
+```
+✓ Python version: 3.10.12
+✓ Python packages: requirements.txt satisfied
+✓ Environment variables: RADAR_EYE_DB_USER, RADAR_EYE_DB_PASSWORD, RADAR_EYE_ENCRYPTION_KEY
+✓ GPU: GPU 0: NVIDIA ...
+✓ NVIDIA Driver: 535.xx
+✓ CUDA: 12.2
+✓ TensorRT: 8.6.1
+✓ DeepStream: Version: 7.0.0
+✓ GStreamer: GStreamer 1.20.3
+✓ PostgreSQL: localhost:5432/radar_eye
+✓ Model directory: exists
+✓ Engine files: present
+✓ Label files: present
+✓ Disk space: 210.4 GB free at storage
+✓ Writable output directories: storage, storage/snapshots, storage/recordings
+
+RESULT: PASS
+```
+
+**On FAIL**, every failing check is listed by name with its exact reason, e.g.:
+```
+✗ PostgreSQL
+✗ TensorRT
+
+FAIL
+
+PostgreSQL:
+  [Errno 111] Connection refused
+
+TensorRT:
+  import tensorrt failed: No module named 'tensorrt'
+
+Do not continue to the next SIV step until every check above passes.
+```
+
+**Pass/fail criteria:** exit code `0` and `RESULT: PASS` — **every** listed
+check must pass, not just the ones relevant to what you're about to do next.
+`configs/models.yaml`'s Model directory/Engine files/Label files checks
+report PASS automatically when both `pgie`/`sgie` are `enabled: false`
+(placeholder mode) — nothing to validate yet in that case.
+
+**Do not proceed to step 2 (or any later step) until this is `RESULT: PASS`.**
+If something about the environment changes mid-session (disk fills up,
+`.env` gets edited, a cable gets unplugged), re-run this step before
+trusting any later step's result.
+
+---
+
+## 2. Edit `configs/models.yaml`
 
 Open `configs/models.yaml`. For each of `pgie:`/`sgie:`:
 - Set `enabled: true` and fill in `model_file`/`engine_file`/`labels` with
@@ -106,7 +242,7 @@ DeepStream SDK headers aren't where the Makefile expects
 
 ---
 
-## 2. Validate `configs/models.yaml` — `check_models.py`
+## 3. Validate `configs/models.yaml` — `check_models.py`
 
 ```bash
 python -m scripts.check_models
@@ -144,11 +280,11 @@ Fix that path in `configs/models.yaml` and re-run. Add `--show-config` to
 print the exact rendered `nvinfer` config for a resolved stage — useful for
 double-checking `cluster-mode`/`operate-on-class-ids`/etc. before a full run.
 
-**Do not proceed to step 6 until this is `RESULT: PASS`.**
+**Do not proceed to step 7 until this is `RESULT: PASS`.**
 
 ---
 
-## 3. Create and edit `configs/camera.yaml`
+## 4. Create and edit `configs/camera.yaml`
 
 ```bash
 cp configs/camera.yaml.example configs/camera.yaml
@@ -168,7 +304,7 @@ or accidentally get committed.
 
 ---
 
-## 4. Validate RTSP connectivity — `check_rtsp.py`
+## 5. Validate RTSP connectivity — `check_rtsp.py`
 
 ```bash
 python3.10 -m scripts.check_rtsp
@@ -197,11 +333,11 @@ Credentials are always masked in the printed URL, even on success.
 
 Increase the timeout for a slow/high-latency camera: `--timeout 30`.
 
-**Do not proceed to step 6 until this is `RESULT: PASS`.**
+**Do not proceed to step 7 until this is `RESULT: PASS`.**
 
 ---
 
-## 5. (Optional) Adjust `configs/validation.yaml` / `configs/logging.yaml`
+## 6. (Optional) Adjust `configs/validation.yaml` / `configs/logging.yaml`
 
 - `configs/validation.yaml`: `frame_trace.enabled: true` turns on the full
   per-frame stage trace (FRAME RECEIVED → ... → EVENT PUBLISHED) on the
@@ -218,7 +354,7 @@ defaults are safe.
 
 ---
 
-## 6. Register the camera — `siv_register_camera.py`
+## 7. Register the camera — `siv_register_camera.py`
 
 ```bash
 python -m scripts.siv_register_camera
@@ -243,7 +379,7 @@ wasn't actually satisfied — re-check it.
 
 ---
 
-## 7. Confirm registration — `show_registered_cameras.py`
+## 8. Confirm registration — `show_registered_cameras.py`
 
 ```bash
 python -m scripts.show_registered_cameras
@@ -257,15 +393,15 @@ camera_id                            name           status        transport  rts
 ```
 Credentials are never shown, even though this script had to decrypt the
 stored URL to get this far. `status` will read `DISCONNECTED` here — it
-only updates to `CONNECTED` once `run_siv.py` actually connects (step 8).
+only updates to `CONNECTED` once `run_siv.py` actually connects (step 9).
 
 **Pass/fail:** your camera's slug appears in the table with the expected
-`rtsp_host`. **On FAIL (empty table):** step 6 didn't actually commit —
+`rtsp_host`. **On FAIL (empty table):** step 7 didn't actually commit —
 re-run it and check for errors.
 
 ---
 
-## 8. Start the SIV session — `run_siv.py`
+## 9. Start the SIV session — `run_siv.py`
 
 ```bash
 python3.10 -m scripts.run_siv 2>&1 | tee siv_run_$(date +%Y%m%d_%H%M%S).log
@@ -283,7 +419,7 @@ but recommended — see "Logs" below for why.)
 
 **Stop it** with a single `Ctrl+C` (SIGINT) — **not** `kill -9` / a second
 Ctrl+C, which skips the graceful-shutdown path and the automatic
-`siv_report.json` (step 9) never gets written. One Ctrl+C triggers:
+`siv_report.json` (step 10) never gets written. One Ctrl+C triggers:
 `RM-11.SIV run stopping` → pipeline/watchdog/dashboard stopped cleanly →
 `SIV report written to siv_reports/siv_report_<timestamp>.json`.
 
@@ -337,17 +473,17 @@ grep '"name": "radar_eye.stage.pgie"' siv_run_<timestamp>.log  # one subsystem's
 | Symptom | Meaning | What to check |
 |---|---|---|
 | `Watchdog Warning: camera stalled` (or any component) | That component hasn't produced output within its threshold | Corresponding dashboard row shows `✗ STALLED` with a `reason:` line — start there |
-| `rtsp`/`pgie`/`tracker`/`sgie` all `✗ STALLED`, `Pipeline FPS: n/a` | No frames flowing at all | Re-run step 4 (`check_rtsp.py`) — the camera may have dropped, or `nvstreammux`/`batched-push-timeout` needs adjusting in `configs/settings.yaml` if you have far more or fewer cameras than this was tuned for |
+| `rtsp`/`pgie`/`tracker`/`sgie` all `✗ STALLED`, `Pipeline FPS: n/a` | No frames flowing at all | Re-run step 5 (`check_rtsp.py`) — the camera may have dropped, or `nvstreammux`/`batched-push-timeout` needs adjusting in `configs/settings.yaml` if you have far more or fewer cameras than this was tuned for |
 | `pgie`/`sgie` `✗ STALLED` but `rtsp`/`camera` `✓ Alive` | Frames are arriving but not reaching inference | Check `Load new model` succeeded in the startup log for that stage — an engine-build failure would show as a `WARN`/`ERROR` from `nvinfer` right after startup |
 | `calibration`/`threat_engine`/`incident`/`alarm` `✗ STALLED` | No tracked detections have reached that stage yet | Expected until the detector actually reports objects with track IDs, or the camera hasn't been calibrated (RM-05 — this runbook doesn't cover calibration; a camera with no calibration row will never produce a distance estimate) |
 | Bus `ERROR` message in the log | A real GStreamer/DeepStream pipeline fault | The message itself names the failing element — report it verbatim |
 
 ---
 
-## 9. Generate the final artifacts
+## 10. Generate the final artifacts
 
 `siv_reports/siv_report_<timestamp>.json` and `siv_reports/siv_report_latest.json`
-are written **automatically** on a clean shutdown (step 8's single
+are written **automatically** on a clean shutdown (step 9's single
 Ctrl+C) — no separate command. Confirm it exists:
 ```bash
 cat siv_reports/siv_report_latest.json
@@ -380,6 +516,7 @@ captured log to whoever/whatever is completing the checklist):
 python3.10 -c "import gi; gi.require_version('Gst','1.0'); from gi.repository import Gst; print('OK')"
 
 # Per-session
+python3.10 -m scripts.check_environment               # must PASS -- always first
 cp configs/camera.yaml.example configs/camera.yaml   # first time only
 # edit configs/models.yaml, configs/camera.yaml
 python -m scripts.check_models                       # must PASS
@@ -391,3 +528,7 @@ python3.10 -m scripts.run_siv 2>&1 | tee siv_run_$(date +%Y%m%d_%H%M%S).log
 cat siv_reports/siv_report_latest.json
 # fill in docs/SIV_VALIDATION_REPORT.md, optionally add a row to docs/SIV_BASELINE.md
 ```
+
+If any command above fails, stop and restart the whole session from
+`check_environment.py` once the reported issue is resolved — see the
+Decision Tree at the top of this document.
