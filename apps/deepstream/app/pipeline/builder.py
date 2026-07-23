@@ -117,6 +117,9 @@ class DeepStreamPipeline:
         streammux.set_property("width", self._settings.streammux_width)
         streammux.set_property("height", self._settings.streammux_height)
         streammux.set_property("live-source", 1)
+        streammux.set_property(
+            "batched-push-timeout", self._settings.streammux_batched_push_timeout_us
+        )
         self._pipeline.add(streammux)
         self._streammux = streammux
 

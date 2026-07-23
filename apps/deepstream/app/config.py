@@ -49,6 +49,17 @@ class DeepStreamSettings(BaseModel):
     reconnect_backoff_multiplier: float = 2.0
     heartbeat_interval_seconds: float = 1.0
     streammux_batch_size: int = 20
+    streammux_batched_push_timeout_us: int = 40000
+    """RM-11.SIV real-hardware finding: without this, nvstreammux waits
+    indefinitely to fill a full batch (streammux_batch_size) before pushing
+    anything downstream. With fewer active sources than batch-size --
+    exactly RM-11.SIV's one-camera case, and every case before RM-11 Phase
+    3 reaches 20 cameras -- the pipeline reached PAUSED and never left it;
+    zero frames ever flowed. Pre-existing gap since RM-11 Phase 0 (not
+    something RM-11.SIV's instrumentation introduced), only ever exercised
+    on real hardware here for the first time with a single-camera pipeline,
+    which is exactly what RM-11.SIV's real-hardware run first caught it.
+    40ms matches this value's common DeepStream reference-app default."""
     streammux_width: int = 1920
     streammux_height: int = 1080
 

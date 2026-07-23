@@ -17,6 +17,7 @@ deepstream:
   reconnect_backoff_multiplier: 2.0
   heartbeat_interval_seconds: 1.0
   streammux_batch_size: 20
+  streammux_batched_push_timeout_us: 40000
   streammux_width: 1920
   streammux_height: 1080
   rtsp_default_latency_ms: 200
