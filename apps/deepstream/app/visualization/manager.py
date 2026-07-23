@@ -1,9 +1,9 @@
 """VisualizationManager -- the single visualization subsystem boundary,
 RM-11.SIV.
 
-Owns ``VisualizationPipelineBuilder``, ``TrackAnnotationRegistry``, and (from
-Phase 3) ``RtspStreamServer`` as internal collaborators -- nothing outside
-this package touches those classes directly. ``apps/deepstream/app/
+Owns ``VisualizationPipelineBuilder``, ``TrackAnnotationRegistry``, and
+``RtspStreamServer`` as internal collaborators -- nothing outside this
+package touches those classes directly. ``apps/deepstream/app/
 pipeline/builder.py`` and ``runtime.py`` only ever call the five members
 exposed here: ``initialize()``, ``start()``, ``stop()``, ``health()``, and
 the ``track_annotations`` accessor. Future additions (recording, snapshots,
@@ -28,6 +28,7 @@ from apps.deepstream.app.config import VisualizationSettings
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.stage_logging import get_stage_logger
 from apps.deepstream.app.visualization.pipeline_builder import VisualizationPipelineBuilder
+from apps.deepstream.app.visualization.stream_server import RtspStreamServer
 from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry
 
 _logger = get_stage_logger("visualization")
@@ -54,6 +55,7 @@ class VisualizationManager:
             ttl_seconds=settings.annotation_ttl_seconds
         )
         self._pipeline_builder: VisualizationPipelineBuilder | None = None
+        self._rtsp_server: RtspStreamServer | None = None
         self._pipeline: Any = None
         self._running = False
         self._reason: str | None = None
@@ -87,24 +89,40 @@ class VisualizationManager:
             track_annotations=self._track_annotations,
             instrumentation=instrumentation,
         )
-        self._pipeline_builder.build(pipeline, tee)
+        udp_port = self._pipeline_builder.build(pipeline, tee)
+        if self._settings.rtsp_output_enabled:
+            self._rtsp_server = RtspStreamServer(
+                udp_port=udp_port,
+                rtsp_port=self._settings.rtsp_port,
+                stream_name=self._settings.stream_name,
+            )
         self._reason = None
 
     def start(self) -> None:
         """No-op if ``initialize()`` was never called or failed (disabled,
-        or the failure-isolation path already caught something) -- matches
-        ``RtspStreamServer.start()``'s own None-safety, added in Phase 3."""
+        or the failure-isolation path already caught something). Raises on
+        RTSP-server startup failure (e.g. ``rtsp_port`` already bound) --
+        the caller's failure-isolation ``try/except`` handles it, same
+        shared path as an ``initialize()`` failure."""
         if self._pipeline_builder is None:
             return
+        if self._rtsp_server is not None:
+            self._rtsp_server.start()
         self._running = True
 
     def stop(self) -> None:
-        """Deterministic shutdown -- delegates the GStreamer branch
-        teardown to ``VisualizationPipelineBuilder.teardown()`` (element/
-        probe/pad release sequence documented there). Safe to call
-        multiple times and safe to call when never initialized."""
+        """Deterministic shutdown, RTSP first: ``RtspStreamServer.stop()``
+        (stop accepting clients / remove the mount point) before the
+        GStreamer elements it depends on go away via
+        ``VisualizationPipelineBuilder.teardown()`` (probe removal -> NULL
+        -> remove from pipeline -> release tee pad, documented there).
+        Safe to call multiple times and safe to call when never
+        initialized."""
+        if self._rtsp_server is not None:
+            self._rtsp_server.stop()
         if self._pipeline_builder is not None and self._pipeline is not None:
             self._pipeline_builder.teardown(self._pipeline)
+        self._rtsp_server = None
         self._pipeline_builder = None
         self._pipeline = None
         self._running = False
@@ -116,6 +134,7 @@ class VisualizationManager:
         back out of the caller's exception handler."""
         _logger.error("Visualization failed to start: %s", reason)
         self._pipeline_builder = None
+        self._rtsp_server = None
         self._running = False
         self._reason = reason
 
@@ -127,6 +146,15 @@ class VisualizationManager:
                 bound_port=None,
                 stream_name=self._settings.stream_name,
                 reason=None,
+            )
+        if self._rtsp_server is not None:
+            rtsp_health = self._rtsp_server.health()
+            return VisualizationHealth(
+                enabled=True,
+                running=rtsp_health.running,
+                bound_port=rtsp_health.bound_port,
+                stream_name=rtsp_health.stream_name,
+                reason=rtsp_health.reason or self._reason,
             )
         return VisualizationHealth(
             enabled=True,
