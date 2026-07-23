@@ -32,6 +32,7 @@ DEFAULT_SETTINGS_PATH = REPO_ROOT / "configs" / "settings.yaml"
 DEFAULT_MODELS_PATH = REPO_ROOT / "configs" / "models.yaml"
 DEFAULT_LOGGING_PATH = REPO_ROOT / "configs" / "logging.yaml"
 DEFAULT_VALIDATION_PATH = REPO_ROOT / "configs" / "validation.yaml"
+DEFAULT_VISUALIZATION_PATH = REPO_ROOT / "configs" / "visualization.yaml"
 
 
 class DeepStreamSettings(BaseModel):
@@ -229,12 +230,14 @@ STAGE_LOGGER_NAMES = (
     "event_bus",
     "performance",
     "system",
+    "visualization",
 )
-"""The 17 stage loggers named in the RM-11.SIV approval's Pipeline
-Instrumentation task -- the fixed, known set of ``radar_eye.stage.<name>``
-loggers that configs/logging.yaml's ``loggers:`` mapping may configure.
-Kept here (rather than duplicated in stage_logging.py) as the single list
-both config validation and logger setup read from."""
+"""The stage loggers named in the RM-11.SIV approval's Pipeline
+Instrumentation task, plus ``visualization`` (RM-11.SIV visualization
+subsystem) -- the fixed, known set of ``radar_eye.stage.<name>`` loggers
+that configs/logging.yaml's ``loggers:`` mapping may configure. Kept here
+(rather than duplicated in stage_logging.py) as the single list both config
+validation and logger setup read from."""
 
 
 class LoggingSettings(BaseModel):
@@ -310,3 +313,84 @@ def load_validation_settings(validation_path: Path | None = None) -> ValidationS
 @lru_cache
 def get_validation_settings() -> ValidationSettings:
     return load_validation_settings()
+
+
+class ColorSchemeSettings(BaseModel):
+    """RGBA hex colors (``#RRGGBB`` or ``#RRGGBBAA``, alpha defaults to
+    fully opaque) for the visualization overlay -- see
+    apps/deepstream/app/visualization/overlay.py, which is the only code
+    that parses these. PGIE class names match the real label set
+    (configs/models.yaml's pgie.labels), not a generic placeholder set --
+    this model has no "vehicle" class, so none is defined here."""
+
+    fire: str = "#FFA500FF"
+    metal: str = "#FF0000FF"
+    ranged_metal: str = "#FF0000FF"
+    non_metal: str = "#808080FF"
+    person: str = "#00FF00FF"
+    civilian: str = "#00FFFFFF"
+    military: str = "#800080FF"
+    threat_high: str = "#FF0000FF"
+    threat_medium: str = "#FFFF00FF"
+    threat_low: str = "#00FF00FF"
+    default: str = "#FFFFFFFF"
+    """Fallback for a PGIE class not otherwise listed above."""
+
+
+class VisualizationPerformanceSettings(BaseModel):
+    enable_overlay_cache: bool = True
+    """Reserved -- overlay.py implements no caching yet. Exists so a future
+    caching change is additive config, not a new field."""
+
+
+class VisualizationSettings(BaseModel):
+    """RM-11.SIV visualization subsystem -- see
+    apps/deepstream/app/visualization/. Off by default, matching this
+    repo's convention for new/heavy optional subsystems (configs/
+    models.yaml's enabled: false, frame_trace.enabled: false)."""
+
+    version: int = 1
+    enabled: bool = False
+    stream_output_enabled: bool = True
+    rtsp_output_enabled: bool = True
+    draw_bbox: bool = True
+    draw_labels: bool = True
+    draw_tracker: bool = True
+    draw_sgie: bool = True
+    draw_distance: bool = True
+    draw_zone: bool = True
+    draw_threat: bool = True
+    draw_fps: bool = True
+    draw_latency: bool = True
+    draw_timestamp: bool = True
+    draw_camera_name: bool = True
+    draw_gpu: bool = True
+    draw_system_status: bool = False
+    font_size: int = 12
+    line_thickness: int = 3
+    color_scheme: ColorSchemeSettings = ColorSchemeSettings()
+    output_codec: Literal["h264"] = "h264"
+    """Only h264 (via nvv4l2h264enc) is implemented -- a Literal, not a
+    free string, so an unsupported value fails validation immediately
+    rather than surfacing as a confusing GStreamer element-creation error
+    later."""
+    output_bitrate: int = 4_000_000
+    output_fps: int = 30
+    rtsp_port: int = 8554
+    stream_name: str = "radar-eye"
+    annotation_ttl_seconds: float = 5.0
+    """How long a track's calibration/threat-engine annotation (zone,
+    distance, threat level) stays valid for overlay purposes after its last
+    update -- see visualization/track_annotations.py."""
+    performance: VisualizationPerformanceSettings = VisualizationPerformanceSettings()
+
+
+def load_visualization_settings(visualization_path: Path | None = None) -> VisualizationSettings:
+    path = visualization_path or DEFAULT_VISUALIZATION_PATH
+    raw = _load_yaml(path)
+    return VisualizationSettings(**raw)
+
+
+@lru_cache
+def get_visualization_settings() -> VisualizationSettings:
+    return load_visualization_settings()
