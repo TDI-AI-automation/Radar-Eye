@@ -250,30 +250,41 @@ Event Clip Extraction
 
 # Repository
 
-Primary Branch:
+Branch Hierarchy:
 
-master
+```
+main (production)
+    ↑
+develop (integration)
+    ↑
+long-lived subsystem branches
+    ↑
+optional short-lived ticket branches
+```
 
-Direct commits to master are prohibited.
+- `main` — production only. Never developed on directly. Only receives merges from `develop`, and only once the full Production Release Gate (see CLAUDE.md's Git Branching & Merge Strategy) is satisfied.
+- `develop` — the primary integration branch. Every completed, reviewed subsystem milestone merges here. Continuous integration runs against `develop`; it always reflects the latest integrated engineering build.
+- Direct commits to `main` or `develop` are prohibited outside of reviewed subsystem-branch merges.
 
 Branching Model:
 
-Long-lived subsystem branches are the primary integration branches. Each owns one logical part of the architecture:
+Long-lived subsystem branches are the primary integration branches, each owning one logical part of the architecture:
 
-- feature/api — apps/api (FastAPI service: persistence, event bus, auth/audit, lightweight health monitoring)
+- feature/api — apps/api (FastAPI service: persistence, auth/audit, lightweight health monitoring)
 - feature/deepstream — apps/deepstream
 - feature/threat-engine — services/threat_engine
 - feature/incident-service — services/incident_service (also owns the Alarm Service until it warrants its own subsystem)
 - feature/recording — services/recording
 - feature/calibration — services/calibration
-- feature/shared-contracts — shared/
+- feature/shared-contracts — shared/ (events, schemas, constants, and the internal event bus transport)
 - feature/frontend-integration — radar-eye-command integration
 - feature/deployment — deployments/, scripts/
-- feature/testing — developer tooling and validation/benchmarking, ongoing
+- feature/developer-infrastructure — formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow
+- feature/testing — validation, regression testing, benchmarking, soak testing, and evaluation, ongoing throughout the project
 
 Short-lived ticket branches may branch from a subsystem branch for large or parallelizable work, and merge back into it.
 
-Subsystem branches merge into master at a reviewed, approved integration point — not automatically after every milestone.
+Subsystem branches merge into `develop` at a reviewed, approved integration point — not automatically after every milestone. `develop` merges into `main` only at a full production release.
 
 Milestones (RM-XX, see docs/IMPLEMENTATION_ROADMAP.md) describe implementation sequencing only. They are not Git branch names.
 

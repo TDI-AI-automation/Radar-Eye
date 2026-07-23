@@ -1,0 +1,48 @@
+####################################################################################################
+# PLACEHOLDER PGIE CONFIG -- NOT the project's approved weapon-detection model.
+#
+# Source: RM-11 Phase 1 approval, Decision C (RM-11 design review) --
+# "Phase 0 and Phase 1 shall use placeholder model configuration... No
+# production assumptions shall be made regarding: labels / confidence
+# thresholds / TensorRT engines / benchmark numbers."
+#
+# References the DeepStream SDK's own bundled sample detector
+# (resnet18_trafficcamnet, a 4-class traffic-camera model shipped with every
+# standard DeepStream install) purely to exercise the PGIE integration
+# mechanics end-to-end -- NOT for its detection output to be treated as
+# meaningful. models/yolo26m_weapon.pt remains absent and unbenchmarked
+# per MODEL_REGISTRY.md; this file must be replaced (path swapped via
+# configs/settings.yaml's deepstream.pgie_config_path) once that model is
+# approved. Do not map this model's 4 traffic classes to WeaponType --
+# apps/deepstream/app/runtime_adapter.py deliberately keeps detection
+# class_id/label as raw passthrough values for this reason.
+####################################################################################################
+
+[property]
+gpu-id=0
+net-scale-factor=0.00392156862745098
+tlt-model-key=tlt_encode
+tlt-encoded-model=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet.etlt
+model-engine-file=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet.etlt_b1_gpu0_int8_rm11_placeholder.engine
+labelfile-path=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/labels.txt
+int8-calib-file=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/cal_trt.bin
+batch-size=1
+process-mode=1
+model-color-format=0
+## 0=FP32, 1=INT8, 2=FP16 mode
+network-mode=1
+num-detected-classes=4
+interval=0
+gie-unique-id=1
+uff-input-order=0
+uff-input-blob-name=input_1
+output-blob-names=output_cov/Sigmoid;output_bbox/BiasAdd
+force-implicit-batch-dim=1
+## 1=DBSCAN, 2=NMS, 3=DBSCAN+NMS Hybrid, 4=None
+cluster-mode=2
+infer-dims=3;544;960
+
+[class-attrs-all]
+topk=20
+nms-iou-threshold=0.5
+pre-cluster-threshold=0.2

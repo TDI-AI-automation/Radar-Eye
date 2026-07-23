@@ -16,6 +16,13 @@ Typical import patterns::
 from shared.schemas.alarm import AlarmSchema
 from shared.schemas.api import ApiResponse
 from shared.schemas.camera import CameraConnectionStatus, CameraHealthSchema, CameraSchema
+from shared.schemas.health import (
+    CameraHealthSummarySchema,
+    GPUHealthSchema,
+    HealthStatus,
+    StorageHealthSchema,
+    SystemHealthSchema,
+)
 from shared.schemas.incident import (
     IncidentCreatedSchema,
     IncidentSchema,
@@ -43,6 +50,12 @@ __all__ = [
     "CameraConnectionStatus",
     "CameraHealthSchema",
     "CameraSchema",
+    # health
+    "CameraHealthSummarySchema",
+    "GPUHealthSchema",
+    "HealthStatus",
+    "StorageHealthSchema",
+    "SystemHealthSchema",
     # alarm
     "AlarmSchema",
 ]
