@@ -23,6 +23,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from apps.api.app.audit import AuditLogger
 from apps.api.app.config import get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     health_collector = HealthCollector()
+    audit_logger = AuditLogger()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -78,6 +80,7 @@ def create_app() -> FastAPI:
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
     app.state.health_collector = health_collector
+    app.state.audit_logger = audit_logger
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:

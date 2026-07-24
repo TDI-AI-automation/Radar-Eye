@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.app.audit import AuditLogger
 from apps.api.app.config import Settings
 from apps.api.app.models.user import ROLE_RANK
 from apps.api.app.security.auth import DecodedToken, TokenError, decode_token
@@ -40,6 +41,10 @@ async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_audit_logger(request: Request) -> AuditLogger:
+    return request.app.state.audit_logger
 
 
 async def get_current_user(

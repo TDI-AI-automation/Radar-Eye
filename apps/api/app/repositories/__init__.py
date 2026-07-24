@@ -7,6 +7,7 @@ calls them.
 
 from __future__ import annotations
 
+from apps.api.app.repositories.audit_log import AuditLogRepository
 from apps.api.app.repositories.base import Repository
 from apps.api.app.repositories.camera import (
     CameraCalibrationRepository,
@@ -20,6 +21,7 @@ from apps.api.app.repositories.system_event import SystemEventRepository
 from apps.api.app.repositories.user import UserRepository
 
 __all__ = [
+    "AuditLogRepository",
     "CameraCalibrationRepository",
     "CameraRepository",
     "CameraStreamProfileRepository",
