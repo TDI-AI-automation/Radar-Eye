@@ -14,7 +14,8 @@ Typical import patterns::
 """
 
 from shared.schemas.alarm import AlarmSchema
-from shared.schemas.api import ApiResponse
+from shared.schemas.api import ApiError, ApiResponse
+from shared.schemas.auth import LoginRequestSchema, RefreshRequestSchema, TokenResponseSchema
 from shared.schemas.camera import CameraConnectionStatus, CameraHealthSchema, CameraSchema
 from shared.schemas.health import (
     CameraHealthSummarySchema,
@@ -34,7 +35,12 @@ from shared.schemas.threat import ActiveThreatSchema, ThreatAssessmentSchema
 
 __all__ = [
     # api
+    "ApiError",
     "ApiResponse",
+    # auth
+    "LoginRequestSchema",
+    "RefreshRequestSchema",
+    "TokenResponseSchema",
     # threat
     "ActiveThreatSchema",
     "ThreatAssessmentSchema",

@@ -49,6 +49,21 @@ class ThreatEngineSettings(BaseModel):
     enabled: bool
 
 
+class AuthSettings(BaseModel):
+    """JWT signing/expiry configuration (RM-12, docs/RM-12_ARCHITECTURE.md
+    §3.2). ``jwt_secret`` is environment-only, like ``encryption_key`` --
+    never written to configs/settings.yaml. TTLs have safe defaults so a
+    fresh checkout without explicit env overrides still works."""
+
+    jwt_secret: SecretStr
+    access_token_ttl_seconds: int = 900
+    """15 minutes -- short-lived by design; a compromised access token has
+    a small blast-radius window. Refresh tokens are what carry a session
+    forward, not a long-lived access token."""
+    refresh_token_ttl_seconds: int = 604800
+    """7 days."""
+
+
 class EnvSettings(BaseSettings):
     """Values that must come from the environment, never from settings.yaml."""
 
@@ -61,6 +76,7 @@ class EnvSettings(BaseSettings):
     db_user: str
     db_password: SecretStr
     encryption_key: SecretStr
+    jwt_secret: SecretStr
     log_level: str = "INFO"
 
 
@@ -69,6 +85,7 @@ class Settings(BaseModel):
     database: DatabaseSettings
     recording: RecordingSettings
     threat_engine: ThreatEngineSettings
+    auth: AuthSettings
     encryption_key: SecretStr
     log_level: str
 
@@ -105,11 +122,15 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         password=env.db_password,
     )
 
+    auth_section = raw.get("auth", {})
+    auth = AuthSettings(jwt_secret=env.jwt_secret, **auth_section)
+
     return Settings(
         environment=raw.get("environment", "development"),
         database=database,
         recording=RecordingSettings(**raw.get("recording", {})),
         threat_engine=ThreatEngineSettings(**raw.get("threat_engine", {})),
+        auth=auth,
         encryption_key=env.encryption_key,
         log_level=env.log_level,
     )
