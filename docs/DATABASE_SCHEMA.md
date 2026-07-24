@@ -244,6 +244,36 @@ created_at
 
 ---
 
+# audit_log
+
+## Description
+
+User action audit history (ADR-008). Distinct from ``incident_events``
+(incident-lifecycle history, scoped to a single incident) and
+``system_events`` (operational/runtime events, not tied to a user action).
+``audit_log`` records who did what: every operator/admin-initiated
+mutation across the system, independent of whether it relates to an
+incident at all (e.g. a camera update, a config change, a user-management
+action).
+
+### Fields
+
+id (UUID)
+
+actor_user_id (FK -> users.id, nullable for system-generated actions)
+
+action
+
+resource_type
+
+resource_id
+
+details (JSONB)
+
+timestamp
+
+---
+
 # Relationships
 
 camera
@@ -256,6 +286,9 @@ incident
 ├── incident_events
 ├── snapshots
 └── recordings
+
+user
+└── audit_log
 
 ---
 
