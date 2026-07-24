@@ -131,10 +131,28 @@ class VisualizationManager:
         """Called by ``builder.py``'s failure-isolation ``try/except``
         around ``initialize()``/``start()`` -- records why visualization
         didn't come up, surfaced via ``health()``, without ever raising
-        back out of the caller's exception handler."""
-        _logger.error("Visualization failed to start: %s", reason)
+        back out of the caller's exception handler.
+
+        ``initialize()`` can fail after ``VisualizationPipelineBuilder``
+        has already added and linked elements into the live pipeline
+        (e.g. a ``link()`` failure partway through); ``start()`` can fail
+        after ``initialize()`` fully succeeded (e.g. the RTSP server
+        failing to bind its port). Either way, whatever was already built
+        must be torn down here -- otherwise it reaches ``PLAYING`` with
+        the rest of the pipeline and keeps encoding/publishing into the
+        void for the rest of the process's life, even though ``health()``
+        reports it as not running. Reuses ``stop()``'s own teardown call;
+        wrapped so a failure *during* cleanup still can't raise back out
+        of this method -- best-effort, the original ``reason`` is what
+        matters to the caller either way."""
+        if self._pipeline_builder is not None and self._pipeline is not None:
+            try:
+                self._pipeline_builder.teardown(self._pipeline)
+            except Exception:
+                _logger.exception("Visualization cleanup after failure also raised")
         self._pipeline_builder = None
         self._rtsp_server = None
+        self._pipeline = None
         self._running = False
         self._reason = reason
 

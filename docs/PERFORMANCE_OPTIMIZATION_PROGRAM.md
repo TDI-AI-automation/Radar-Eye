@@ -111,6 +111,16 @@ optimization proposals belong.
 | Startup Robustness | Process startup behavior under adverse conditions — directly informed by `docs/RM-11_SIV_ENGINEERING_REVIEW.md`'s Known Issue #2. |
 | Database Resilience | Database connectivity/availability handling, including startup and runtime retry/backoff behavior — directly informed by Known Issue #2. |
 
+**Recorded finding (PR #8 code review, forward-looking, not blocking RM-11):**
+Visualization UDP port allocation must become configurable before
+multi-camera support. `apps/deepstream/app/visualization/pipeline_builder.py`'s
+`_INTERNAL_UDP_PORT` is a single fixed constant (5400), correct for RM-11.SIV's
+single-camera scope but a collision risk once multiple cameras' visualization
+branches run in the same process (Multi-camera Scaling, above). No
+implementation or configuration change made under RM-11 — recorded here only,
+to be picked up as part of Multi-camera Scaling / Visualization work under
+this program.
+
 ---
 
 ## 4. Benchmark Targets
