@@ -5,6 +5,10 @@ against this plan. Depends on `docs/RM-12_ARCHITECTURE.md` being reviewed
 and approved first, including explicit confirmation of that document's two
 open items (role taxonomy, password-hashing library choice) — this plan
 does not re-decide those, it sequences the work assuming they're settled.
+Updated per the Architecture Readiness Review's three findings (incident
+lifecycle ownership, missing error envelope, `/ws/camera-health`'s missing
+schemas) — see architecture §3.3/§3.6/§3.5 for the decisions this plan now
+reflects.
 
 Per the project's own established principle (`docs/IMPLEMENTATION_STATUS.md`,
 Design note (RM-11): *"infrastructure first, integration second,
@@ -35,10 +39,22 @@ category of code in this repo, no existing pattern to lean on).
   migration.
 - New router: `apps/api/app/routers/auth.py` — login (issue tokens),
   refresh.
+- `shared/schemas/api.py` — add `ApiError(code: str, message: str)` and
+  extend `ApiResponse[T]` with `error: ApiError | None = None` (additive,
+  backward-compatible — architecture §3.6). Cross-subsystem touch
+  (`feature/shared-contracts`), same consideration as the Phase 4 note
+  below.
+- `apps/api/app/main.py` — one global exception handler translating
+  `HTTPException`/validation errors into the `ApiResponse(success=False,
+  error=...)` shape, registered in `create_app()`. Established here, in
+  Phase 1, because auth's 401/403 responses are the first real consumer —
+  every later phase's error responses reuse this, none invents its own.
 
 **Tests:** password hashing round-trip; token encode/decode + expiry;
 `require_role` dependency (allowed/denied cases) using an authenticated
-test client fixture (new — see Phase 5).
+test client fixture (new — see Phase 5); the global exception handler
+produces the documented error shape for a 401, a 404, and a validation
+error, exercised via one throwaway test route each.
 
 **Gate before Phase 2:** full quality gates green; auth dependency
 demonstrably rejects an unauthenticated/under-privileged request against a
@@ -49,7 +65,7 @@ throwaway test route.
 ## Phase 2 — Audit foundation
 
 **Files:**
-- New Alembic migration: `audit_log` table (architecture §3.3's fields).
+- New Alembic migration: `audit_log` table (architecture §3.4's fields).
 - `apps/api/app/models/audit_log.py`, `apps/api/app/repositories/audit_log.py`
   (same generic-repository pattern as every other repository in
   `apps/api/app/repositories/`).
@@ -65,7 +81,7 @@ throwaway test route.
 ## Phase 3 — Read-only REST endpoints
 
 Lowest-risk category — no auth-role complexity beyond "any authenticated
-user," no audit writes (architecture §3.3 — reads aren't audited), thin
+user," no audit writes (architecture §3.4 — reads aren't audited), thin
 wrappers over already-existing repositories.
 
 **New router modules** (each returns `ApiResponse[T]`, uses existing
@@ -73,7 +89,7 @@ repositories, existing or newly-added schemas per architecture §2/§3.1):
 
 | Router | Routes | Schema work needed |
 |---|---|---|
-| `cameras.py` | `GET /cameras`, `GET /cameras/{id}`, `GET /cameras/{id}/calibration` | `CameraSchema` exists; calibration response schema is new (thin wrap of `CameraCalibrationRepository`) |
+| `cameras.py` | `GET /cameras`, `GET /cameras/{id}`, `GET /cameras/{id}/calibration` | `CameraSchema` exists; calibration response schema is new (thin wrap of `CameraCalibrationRepository`). `GET /cameras/{id}/health` is **not** listed here — it already exists, shipped in RM-09's `health.py`, no new work. |
 | `threats.py` | `GET /threats/active` | `ActiveThreatSchema` exists — but there's no persistence table for "active threats" (Threat Engine doesn't persist assessments, only publishes events). This endpoint's actual data source needs one more design check before Phase 3 starts: either a new in-memory "recent threats" cache fed by the event bus (mirrors `HealthCollector`'s in-memory pattern) or a decision that this endpoint is WS-only in practice. Flagged here, not resolved — first task of this phase. |
 | `incidents.py` (read routes) | `GET /incidents`, `GET /incidents/{id}`, `GET /incidents/{id}/events`, `GET /incidents/{id}/evidence`, `GET /incidents/open` | `IncidentSchema`/`IncidentSummarySchema` exist; `/evidence` sub-resource needs a small new schema (recording/snapshot summary) |
 | `reviews.py` (read routes) | `GET /reviews`, `GET /reviews/{id}` | `HumanReviewSchema` exists |
@@ -94,18 +110,25 @@ Phase 5 for the shared harness these all use.
 
 Needs Phase 1 (auth/roles) and Phase 2 (audit) both working — every route
 here is `PATCH`/`POST` and role-gated per architecture §3.2, audit-logged
-per §3.3.
+per §3.4.
 
 **New/extended router modules:**
 
 | Router | Routes | Role gate (proposed, per architecture §3.2's taxonomy) |
 |---|---|---|
-| `incidents.py` (write route) | `PATCH /incidents/{id}` | `operator` |
+| `incidents.py` (write route) | `PATCH /incidents/{id}` | `operator`. **First task in this row, before the route itself:** add a new public method to `IncidentService` for operator-initiated transitions (architecture §3.3 — found during Architecture Readiness Review). The route calls this method in-process (same pattern `ThreatEngineRuntimeAdapter` already uses to call `IncidentService`), never writes to the `incidents` table directly via `IncidentRepository`. This touches `services/incident_service` (owned by `feature/incident-service`) — flag/coordinate per `CLAUDE.md`'s Multi-Agent Collaboration rule even if implemented in this same PR. |
 | `reviews.py` (write routes) | `PATCH /reviews/{id}`, `POST /reviews/{id}/confirm-military`, `POST /reviews/{id}/confirm-civilian`, `POST /reviews/{id}/escalate`, `POST /reviews/{id}/dismiss` | `operator` — matches `CLAUDE.md`'s Human Review Rules (unknown uniforms must never auto-resolve; these are exactly the four allowed operator actions) |
 | `cameras.py` (write route) | `PATCH /cameras/{id}` | `admin` |
 | `calibration.py` (write routes) | `POST /calibration/start`, `POST /calibration/validate` | `operator` |
 | `config.py` | `GET /config`, `PATCH /config` | `admin` |
 | `users.py` | `GET /users`, `PATCH /users` | `admin` |
+
+Note: `config.py`/`users.py` are the only two routers where the `GET` route
+is built here in Phase 4 rather than Phase 3, despite being reads — unlike
+Phase 3's routes (open to any authenticated user), system config and the
+user list are both `admin`-only to *read*, not just to write, so they
+carry the same role-gating work as this phase's other routes and gain
+nothing from being split across two phases.
 
 **Tests:** contract tests (as Phase 3) plus role-gate tests (correct role
 succeeds, wrong role gets 403, unauthenticated gets 401) plus an audit-log
@@ -124,11 +147,18 @@ logging demonstrated on every mutating route, not just spot-checked.
 - `apps/api/app/websockets/connection_manager.py` — per-channel connection
   tracking (accept, register, broadcast, remove-on-disconnect).
 - `apps/api/app/websockets/bridge.py` — the `EventBus.subscribe()` →
-  translate → broadcast adapter (architecture §3.4), one per channel:
+  translate → broadcast adapter (architecture §3.5), one per channel:
   `threats`, `incidents`, `camera_health`, `tracking`, `reviews`, `alarms`.
   (`tracking` has no named event model in `FRONTEND_BACKEND_CONTRACTS.md` —
   flagged for one clarifying question before this specific channel is
   built: what does it carry, if not one of the 10 existing event types?)
+- `shared/schemas/camera.py` — two new schemas needed for `camera_health`
+  specifically, found during Architecture Readiness Review (architecture
+  §3.5's correction): `CameraDisconnectedSchema` (from
+  `CameraDisconnectedPayload`) and `SystemEventSchema` (from
+  `SystemEventPayload`) — this channel forwards both event types per
+  `FRONTEND_BACKEND_CONTRACTS.md`, neither of which has a frontend schema
+  today (unlike every other channel, which reuses an already-built one).
 - New router/endpoint registrations in `main.py`: `/ws/threats`,
   `/ws/incidents`, `/ws/camera-health`, `/ws/tracking`, `/ws/reviews`,
   `/ws/alarms`.
@@ -142,7 +172,7 @@ message arrives — this is the new test harness the architecture doc's
 Risks section flags as greenfield. The **end-to-end latency test**
 (explicit acceptance criterion) measures wall-clock time from
 `bus.publish()` to the message arriving at the WebSocket client, asserting
-it's comfortably under the 2s acceptance bound (architecture §3.4 argues
+it's comfortably under the 2s acceptance bound (architecture §3.5 argues
 this should be sub-millisecond in practice; the test proves it, doesn't
 assume it).
 
