@@ -33,6 +33,7 @@ from apps.deepstream.app.config import (
     get_logging_settings,
     get_models_settings,
     get_validation_settings,
+    get_visualization_settings,
 )
 from apps.deepstream.app.config import get_settings as get_deepstream_settings
 from apps.deepstream.app.runtime import DeepStreamRuntime
@@ -56,6 +57,7 @@ async def _run() -> None:
     deepstream_settings = get_deepstream_settings()
     models_settings = get_models_settings()
     validation_settings = get_validation_settings()
+    visualization_settings = get_visualization_settings()
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(api_settings)
@@ -68,6 +70,7 @@ async def _run() -> None:
         settings=deepstream_settings,
         models=models_settings,
         validation=validation_settings,
+        visualization=visualization_settings,
         session_factory=session_factory,
         bus=bus,
         encryption=encryption,
@@ -95,6 +98,16 @@ async def _run() -> None:
         dashboard.run_forever(interval_seconds=_DASHBOARD_INTERVAL_SECONDS)
     )
     logger.info("RM-11.SIV run started -- watchdog and dashboard active")
+
+    viz_health = runtime.visualization_manager.health()
+    if viz_health.running:
+        logger.info(
+            "Visualization stream live: rtsp://<this-machine-ip>:%d/%s",
+            viz_health.bound_port,
+            viz_health.stream_name,
+        )
+    elif viz_health.enabled:
+        logger.warning("Visualization enabled but not running: %s", viz_health.reason)
 
     try:
         await stop_event.wait()

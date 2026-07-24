@@ -248,3 +248,31 @@ class TestThroughputCounters:
         assert snapshot.threat_throughput_per_sec == pytest.approx(0.5)
         assert snapshot.alarm_throughput_per_sec == pytest.approx(0.5)
         assert snapshot.incident_throughput_per_sec == pytest.approx(0.5)
+
+
+class TestVisualizationFrame:
+    """RM-11.SIV visualization subsystem -- record_visualization_frame()
+    feeds both the same _RollingRateCounter pattern as pgie/sgie fps and a
+    rolling overlay-timing average, mirroring _average_latency_ms()."""
+
+    def test_no_records_yields_none(self) -> None:
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        snapshot = instrumentation.snapshot()
+
+        assert snapshot.visualization_fps is None
+        assert snapshot.overlay_time_avg_ms is None
+
+    def test_visualization_fps_from_two_records_one_second_apart(self, clock: _FakeClock) -> None:
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        instrumentation.record_visualization_frame(overlay_time_ms=1.0)
+        clock.advance(1.0)
+        instrumentation.record_visualization_frame(overlay_time_ms=1.0)
+
+        assert instrumentation.snapshot().visualization_fps == pytest.approx(1.0)
+
+    def test_overlay_time_avg_ms_is_rolling_average(self) -> None:
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        instrumentation.record_visualization_frame(overlay_time_ms=2.0)
+        instrumentation.record_visualization_frame(overlay_time_ms=4.0)
+
+        assert instrumentation.snapshot().overlay_time_avg_ms == pytest.approx(3.0)

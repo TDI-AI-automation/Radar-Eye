@@ -15,6 +15,7 @@ missing, not something you should patch by hand; raise it instead.
 | `configs/camera.yaml` | The one camera's RTSP details (create from `.example`) | Always |
 | `configs/validation.yaml` | Watchdog thresholds, frame trace on/off, feature flags | Optional |
 | `configs/logging.yaml` | Per-subsystem log level overrides | Optional |
+| `configs/visualization.yaml` | Operator-visible RTSP video overlay (bounding boxes, track IDs, SGIE/threat labels) | Optional |
 
 `configs/settings.yaml` (streammux/tracker/reconnect defaults) is also
 technically editable but nothing below requires touching it. `.env` is
@@ -354,6 +355,73 @@ defaults are safe.
 
 ---
 
+## 6.5. (Optional) Enable Visualization — `configs/visualization.yaml`
+
+Renders directly from the pipeline's own PGIE/NvDCF/SGIE inference results
+onto a live RTSP stream — bounding boxes, track IDs, classification, threat
+level, zone/distance, FPS/latency. This is the production video-output
+backend, not a debug-only tool, but it is entirely optional for SIV: leaving
+it disabled changes nothing else in this runbook.
+
+**Disabled (default):** `configs/visualization.yaml`'s `enabled: false` — a
+fresh checkout never starts encoding or streaming. Skip straight to step 7.
+
+**Enabled:** set `enabled: true`. Leave `stream_output_enabled: true` and
+`rtsp_output_enabled: true` unless you have a specific reason not to publish
+RTSP. Adjust `rtsp_port`/`stream_name` only if `8554`/`radar-eye` collide
+with something else on this machine. The `draw_*` toggles and `color_scheme`
+control what's overlaid — the checked-in defaults draw everything this
+milestone supports.
+
+**RTSP URL:** once `run_siv.py` (step 9) is running, its startup log prints
+the exact URL:
+```
+Visualization stream live: rtsp://<this-machine-ip>:8554/radar-eye
+```
+Connect with any RTSP client, e.g.:
+```bash
+vlc rtsp://<this-machine-ip>:8554/radar-eye
+# or
+gst-launch-1.0 rtspsrc location=rtsp://<this-machine-ip>:8554/radar-eye latency=200 ! decodebin ! autovideosink
+```
+
+**Expected output:** a live video feed of the camera with, per object
+detected: a colored bounding box (color by class — see
+`configs/visualization.yaml`'s `color_scheme`, overridden by threat color
+once a threat level is known: HIGH=red, MEDIUM=yellow, LOW=green), a text
+label above/beside it (class, confidence, track ID, SGIE classification,
+zone/distance/threat once calibration + threat engine have produced a
+result for that track), and one frame-level overlay line (camera name,
+timestamp, current FPS, pipeline latency). A client joining mid-stream may
+show a stale/frozen frame for **up to ~1 second** before the first keyframe
+arrives (`iframeinterval` is tuned to `output_fps`, i.e. one keyframe/sec) —
+this is normal RTP/H.264 join behavior, not corruption.
+
+**Verification checklist:**
+- [ ] `run_siv.py`'s startup log shows `Visualization stream live: rtsp://...`
+- [ ] An RTSP client SETUP/PLAY succeeds against that URL (VLC opens without
+  an error dialog; `gst-launch-1.0` doesn't print `SDP contains no streams`)
+- [ ] Bounding boxes track real detected objects, framerate matches live
+  motion (not a frozen/stale image beyond the ~1s join delay above)
+- [ ] Track IDs stay stable on a stationary/slow-moving object across frames
+- [ ] Once a camera is calibrated (RM-05) and a track has a threat
+  assessment, the box color switches to the threat-level color
+- [ ] With `visualization.enabled: false`, `run_siv.py`'s dashboard and
+  `siv_report.json` are unaffected — no `Visualization stream live` line,
+  no `visualization_fps`/`overlay_time_avg_ms` in the performance snapshot
+
+**Common failure modes and recovery steps:**
+
+| Symptom | Meaning | Recovery |
+|---|---|---|
+| No `Visualization stream live` line; instead `Visualization enabled but not running: <reason>` | `VisualizationManager.initialize()`/`.start()` failed — logged and isolated, **inference is unaffected**, the run is still valid | Read the `reason` string (also in `radar_eye.stage.visualization` log lines). `Failed to attach RTSP server on port <N> (already in use...)`: another process is bound to `rtsp_port` — stop it or change `rtsp_port`. Any other reason: a GStreamer element failed to construct/link — check that the DeepStream/GStreamer install has `nvvideoconvert`/`nvdsosd`/`nvv4l2h264enc`/`GstRtspServer` available (same environment step 0.2 already validated) |
+| Client connects but shows a solid green/gray frame that never updates | Almost always: client captured before the first real H.264 keyframe arrived — wait a couple of seconds and reconnect, or increase the client's jitter buffer/latency (`latency=200` above) | If it persists past ~5s, treat it as a real fault — restart `run_siv.py` and re-check the failure modes above |
+| `SDP contains no streams` from an RTSP client | The client connected before `run_siv.py`'s RTSP server finished mounting, or the port/stream name in the client URL doesn't match `configs/visualization.yaml`'s `rtsp_port`/`stream_name` | Confirm the URL against the startup log line exactly; retry the client a few seconds after `run_siv.py` starts |
+| No text labels, only boxes (or vice versa) | One or more `draw_*` toggles in `configs/visualization.yaml` is `false`, or a track hasn't yet produced the field being drawn (e.g. `draw_threat: true` but no threat assessment exists yet for that track) | Check the relevant `draw_*` toggle; for threat/zone/distance, confirm the camera is calibrated (RM-05) |
+| Pipeline FPS/latency noticeably worse with visualization enabled | Expected — see `docs/SIV_BASELINE.md`'s Visualization OFF vs. ON table for measured deltas on this hardware (real-camera baseline: +5% latency, +~1GB GPU memory, no measurable inference FPS loss) | If the delta is far larger than that baseline, treat it as a real regression, not expected overhead — report it |
+
+---
+
 ## 7. Register the camera — `siv_register_camera.py`
 
 ```bash
@@ -521,6 +589,7 @@ cp configs/camera.yaml.example configs/camera.yaml   # first time only
 # edit configs/models.yaml, configs/camera.yaml
 python -m scripts.check_models                       # must PASS
 python3.10 -m scripts.check_rtsp                      # must PASS
+# optional: edit configs/visualization.yaml, set enabled: true
 python -m scripts.siv_register_camera
 python -m scripts.show_registered_cameras             # confirm
 python3.10 -m scripts.run_siv 2>&1 | tee siv_run_$(date +%Y%m%d_%H%M%S).log
