@@ -21,7 +21,11 @@ from apps.api.app.models.camera import Camera
 from apps.api.app.models.incident import Incident
 from apps.api.app.repositories.camera import CameraRepository
 from apps.api.app.repositories.incident import IncidentRepository
-from services.incident_service.service import TRACK_LOST_SECONDS, IncidentService
+from services.incident_service.service import (
+    TRACK_LOST_SECONDS,
+    IncidentService,
+    IncidentTransitionError,
+)
 from shared.constants.distance_zones import DistanceZone
 from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
@@ -300,5 +304,101 @@ class TestTrackLostSweep:
             assert len(updated) == 1
             assert updated[0].payload.old_status is IncidentStatus.ACTIVE
             assert updated[0].payload.new_status is IncidentStatus.RESOLVED
+        finally:
+            await bus.stop()
+
+
+@pytest.mark.asyncio
+class TestRequestTransition:
+    """RM-12 §3.3 -- the single entry point for non-system-pipeline-driven
+    status changes (currently: PATCH /incidents/{id}). Must reuse
+    _transition() (no duplicate state-machine logic) and reject anything
+    outside EXTERNALLY_REQUESTABLE_TRANSITIONS."""
+
+    async def _make_active_incident(self, db_session) -> Incident:
+        camera = await _make_camera(db_session)
+        service = IncidentService(db_session)
+        return await service.handle_escalation(
+            camera_id=camera.id,
+            track_id=1,
+            threat_level=ThreatLevel.HIGH,
+            reason="r",
+            timestamp=T0,
+        )
+
+    async def test_active_to_acknowledged_is_allowed(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+
+        result = await service.request_transition(incident, IncidentStatus.ACKNOWLEDGED, now=T0)
+
+        assert result.status is IncidentStatus.ACKNOWLEDGED
+        assert result.resolved_at is None
+
+    async def test_active_to_resolved_is_allowed_and_sets_resolved_at(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+        resolved_time = T0 + timedelta(minutes=5)
+
+        result = await service.request_transition(
+            incident, IncidentStatus.RESOLVED, now=resolved_time
+        )
+
+        assert result.status is IncidentStatus.RESOLVED
+        assert result.resolved_at == resolved_time
+
+    async def test_acknowledged_to_resolved_is_allowed(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+        await service.request_transition(incident, IncidentStatus.ACKNOWLEDGED, now=T0)
+
+        result = await service.request_transition(incident, IncidentStatus.RESOLVED, now=T0)
+
+        assert result.status is IncidentStatus.RESOLVED
+
+    async def test_cannot_request_new_or_active_externally(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+
+        with pytest.raises(IncidentTransitionError):
+            await service.request_transition(incident, IncidentStatus.ACTIVE, now=T0)
+
+    async def test_cannot_request_archived(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+
+        with pytest.raises(IncidentTransitionError):
+            await service.request_transition(incident, IncidentStatus.ARCHIVED, now=T0)
+
+    async def test_cannot_skip_backwards_from_resolved(self, db_session) -> None:
+        incident = await self._make_active_incident(db_session)
+        service = IncidentService(db_session)
+        await service.request_transition(incident, IncidentStatus.RESOLVED, now=T0)
+
+        with pytest.raises(IncidentTransitionError):
+            await service.request_transition(incident, IncidentStatus.ACKNOWLEDGED, now=T0)
+
+    async def test_reuses_transition_and_publishes_the_same_event(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        bus = InProcessEventBus()
+        try:
+            updated: list = []
+            bus.subscribe("IncidentUpdatedEvent", _collecting_handler(updated))
+            service = IncidentService(db_session, bus)
+            incident = await service.handle_escalation(
+                camera_id=camera.id,
+                track_id=1,
+                threat_level=ThreatLevel.HIGH,
+                reason="r",
+                timestamp=T0,
+            )
+            updated.clear()  # drop the NEW->ACTIVE update from creation
+
+            await service.request_transition(incident, IncidentStatus.ACKNOWLEDGED, now=T0)
+
+            await asyncio.sleep(0.05)
+            assert len(updated) == 1
+            assert updated[0].payload.old_status is IncidentStatus.ACTIVE
+            assert updated[0].payload.new_status is IncidentStatus.ACKNOWLEDGED
         finally:
             await bus.stop()

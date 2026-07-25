@@ -13,7 +13,7 @@ from services.incident_service.alarm import (
     AlarmTargetType,
     MockAlarmAdapter,
 )
-from services.incident_service.service import IncidentService
+from services.incident_service.service import IncidentService, IncidentTransitionError
 
 __all__ = [
     "AlarmAdapter",
@@ -22,5 +22,6 @@ __all__ = [
     "AlarmState",
     "AlarmTargetType",
     "IncidentService",
+    "IncidentTransitionError",
     "MockAlarmAdapter",
 ]
