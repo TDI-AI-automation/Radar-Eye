@@ -50,6 +50,16 @@ class CameraSchema(BaseModel):
     updated_at: datetime
 
 
+class CameraUpdateRequestSchema(BaseModel):
+    """Body of ``PATCH /cameras/{camera_id}`` -- partial update, every field
+    optional. RTSP credentials are never updated through this route (they
+    live in ``camera_stream_profiles``, encrypted -- out of scope here)."""
+
+    name: str | None = None
+    location: str | None = None
+    status: CameraConnectionStatus | None = None
+
+
 class CameraCalibrationSchema(BaseModel):
     """Ground-plane calibration for a camera (ADR-016).
 

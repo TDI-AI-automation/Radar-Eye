@@ -22,11 +22,18 @@ from shared.schemas.analytics import (
 )
 from shared.schemas.api import ApiError, ApiResponse
 from shared.schemas.auth import LoginRequestSchema, RefreshRequestSchema, TokenResponseSchema
+from shared.schemas.calibration import (
+    CalibrationStartRequestSchema,
+    CalibrationValidateRequestSchema,
+    CalibrationValidationResultSchema,
+    ReferencePointSchema,
+)
 from shared.schemas.camera import (
     CameraCalibrationSchema,
     CameraConnectionStatus,
     CameraHealthSchema,
     CameraSchema,
+    CameraUpdateRequestSchema,
 )
 from shared.schemas.evidence import (
     EvidenceItemSchema,
@@ -46,9 +53,15 @@ from shared.schemas.incident import (
     IncidentEventSchema,
     IncidentSchema,
     IncidentSummarySchema,
+    IncidentTransitionRequestSchema,
     IncidentUpdatedSchema,
 )
-from shared.schemas.review import HumanReviewSchema, ReviewStatus
+from shared.schemas.review import (
+    RESOLUTION_STATUSES,
+    HumanReviewSchema,
+    ReviewResolutionRequestSchema,
+    ReviewStatus,
+)
 from shared.schemas.threat import ActiveThreatSchema, ThreatAssessmentSchema
 
 __all__ = [
@@ -72,15 +85,24 @@ __all__ = [
     "IncidentEventSchema",
     "IncidentSchema",
     "IncidentSummarySchema",
+    "IncidentTransitionRequestSchema",
     "IncidentUpdatedSchema",
     # review
+    "RESOLUTION_STATUSES",
     "HumanReviewSchema",
+    "ReviewResolutionRequestSchema",
     "ReviewStatus",
     # camera
     "CameraCalibrationSchema",
     "CameraConnectionStatus",
     "CameraHealthSchema",
     "CameraSchema",
+    "CameraUpdateRequestSchema",
+    # calibration
+    "CalibrationStartRequestSchema",
+    "CalibrationValidateRequestSchema",
+    "CalibrationValidationResultSchema",
+    "ReferencePointSchema",
     # evidence
     "EvidenceItemSchema",
     "EvidenceType",

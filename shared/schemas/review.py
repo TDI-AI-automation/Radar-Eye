@@ -35,3 +35,23 @@ class HumanReviewSchema(BaseModel):
     reason: str
     """Why this item was queued (e.g. "uniform_unknown")."""
     status: ReviewStatus = "OPEN"
+
+
+RESOLUTION_STATUSES: tuple[ReviewStatus, ...] = (
+    "CONFIRMED_MILITARY",
+    "CONFIRMED_CIVILIAN",
+    "ESCALATED",
+    "DISMISSED",
+)
+"""The four allowed operator resolutions (CLAUDE.md's Human Review Rules --
+Confirm Military, Confirm Civilian, Escalate, Dismiss). ``OPEN`` is never a
+valid resolution target; it is the queued-and-unresolved starting state."""
+
+
+class ReviewResolutionRequestSchema(BaseModel):
+    """Body of ``PATCH /reviews/{review_id}`` -- the generic form of the
+    four ``POST /reviews/{id}/confirm-military`` etc. convenience routes,
+    which take no body (the action name fixes the target status). Both
+    paths funnel through the same resolution logic -- no duplicate rules."""
+
+    status: ReviewStatus

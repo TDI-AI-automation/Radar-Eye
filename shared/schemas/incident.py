@@ -67,6 +67,15 @@ class IncidentUpdatedSchema(BaseModel):
     new_status: IncidentStatus
 
 
+class IncidentTransitionRequestSchema(BaseModel):
+    """Body of ``PATCH /incidents/{incident_id}`` -- the only field an
+    external caller may request a change to (docs/RM-12_ARCHITECTURE.md
+    §3.3; services.incident_service.service.EXTERNALLY_REQUESTABLE_TRANSITIONS
+    is the actual validation authority, not this schema)."""
+
+    status: IncidentStatus
+
+
 class IncidentEventSchema(BaseModel):
     """A single incident-lifecycle history entry.
 
