@@ -31,9 +31,11 @@ from shared.schemas.calibration import (
 from shared.schemas.camera import (
     CameraCalibrationSchema,
     CameraConnectionStatus,
+    CameraDisconnectedSchema,
     CameraHealthSchema,
     CameraSchema,
     CameraUpdateRequestSchema,
+    SystemEventSchema,
 )
 from shared.schemas.evidence import (
     EvidenceItemSchema,
@@ -96,9 +98,11 @@ __all__ = [
     # camera
     "CameraCalibrationSchema",
     "CameraConnectionStatus",
+    "CameraDisconnectedSchema",
     "CameraHealthSchema",
     "CameraSchema",
     "CameraUpdateRequestSchema",
+    "SystemEventSchema",
     # calibration
     "CalibrationStartRequestSchema",
     "CalibrationValidateRequestSchema",

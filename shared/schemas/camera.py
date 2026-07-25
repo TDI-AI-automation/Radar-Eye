@@ -3,9 +3,6 @@
 Source: docs/FRONTEND_BACKEND_CONTRACTS.md — Camera Management and
   Live Monitoring sections.
   GET /cameras, GET /cameras/{camera_id}, GET /cameras/{camera_id}/health
-
-Also used on the Tactical Map (/ws/tracking) and camera-health channel
-(/ws/camera-health).
 """
 
 from __future__ import annotations
@@ -16,14 +13,22 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from shared.events.payloads import SystemEventSeverity
+
 CameraConnectionStatus = Literal["CONNECTED", "DISCONNECTED", "RECONNECTING"]
 
 
 class CameraHealthSchema(BaseModel):
     """Per-camera health metrics surfaced by the System Health Agent.
 
-    Returned by ``GET /cameras/{camera_id}/health`` and the
-    ``/ws/camera-health`` WebSocket channel.
+    Returned by ``GET /cameras/{camera_id}/health``. **Not** the
+    ``/ws/camera-health`` WebSocket message body -- that channel forwards
+    ``CameraDisconnectedEvent``/``SystemEvent`` (disconnect notifications
+    and operational log events), not ongoing health metrics like this
+    schema. Corrected during the RM-12 Architecture Readiness Review, which
+    had initially listed this schema against that channel in error -- see
+    ``CameraDisconnectedSchema``/``SystemEventSchema`` below for the actual
+    ``/ws/camera-health`` shapes.
     """
 
     camera_id: uuid.UUID
@@ -32,6 +37,25 @@ class CameraHealthSchema(BaseModel):
     """Current decoded frames per second; None when disconnected."""
     last_frame_age_seconds: float | None = None
     """Seconds since the last frame was received; None when disconnected."""
+
+
+class CameraDisconnectedSchema(BaseModel):
+    """WebSocket message body for ``/ws/camera-health`` --
+    CameraDisconnectedEvent (from ``shared.events.payloads.
+    CameraDisconnectedPayload``, RM-12 Phase 5 -- no frontend-facing schema
+    existed for this internal payload before)."""
+
+    camera_id: uuid.UUID
+    reason: str
+
+
+class SystemEventSchema(BaseModel):
+    """WebSocket message body for ``/ws/camera-health`` -- SystemEvent
+    (from ``shared.events.payloads.SystemEventPayload``, RM-12 Phase 5)."""
+
+    severity: SystemEventSeverity
+    source_component: str
+    message: str
 
 
 class CameraSchema(BaseModel):

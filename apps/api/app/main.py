@@ -41,6 +41,8 @@ from apps.api.app.routers import (
     users_router,
 )
 from apps.api.app.threats import ActiveThreatCache
+from apps.api.app.websockets import ConnectionManager, WebSocketBridge, ws_router
+from shared.events.bus import InProcessEventBus
 from shared.schemas.api import ApiError, ApiResponse
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,9 @@ def create_app() -> FastAPI:
     health_collector = HealthCollector()
     audit_logger = AuditLogger()
     active_threat_cache = ActiveThreatCache()
+    event_bus = InProcessEventBus(source="api")
+    ws_connection_manager = ConnectionManager()
+    ws_bridge = WebSocketBridge(event_bus, ws_connection_manager)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -83,7 +88,9 @@ def create_app() -> FastAPI:
             "radar-eye-api starting",
             extra={"environment": settings.environment},
         )
+        await ws_bridge.start()
         yield
+        await ws_bridge.stop()
         await engine.dispose()
         logger.info("radar-eye-api shutting down")
 
@@ -95,6 +102,8 @@ def create_app() -> FastAPI:
     app.state.health_collector = health_collector
     app.state.audit_logger = audit_logger
     app.state.active_threat_cache = active_threat_cache
+    app.state.event_bus = event_bus
+    app.state.ws_connection_manager = ws_connection_manager
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
@@ -116,5 +125,6 @@ def create_app() -> FastAPI:
     app.include_router(evidence_router)
     app.include_router(analytics_router)
     app.include_router(users_router)
+    app.include_router(ws_router)
 
     return app
