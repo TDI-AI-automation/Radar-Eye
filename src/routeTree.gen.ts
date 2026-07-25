@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as IncidentsRouteImport } from './routes/incidents'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as CamerasRouteImport } from './routes/cameras'
@@ -25,6 +26,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const MapRoute = MapRouteImport.update({
   id: '/map',
   path: '/map',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IncidentsRoute = IncidentsRouteImport.update({
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/cameras': typeof CamerasRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
+  '/login': typeof LoginRoute
   '/map': typeof MapRoute
   '/settings': typeof SettingsRoute
 }
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/cameras': typeof CamerasRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
+  '/login': typeof LoginRoute
   '/map': typeof MapRoute
   '/settings': typeof SettingsRoute
 }
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/cameras': typeof CamerasRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
+  '/login': typeof LoginRoute
   '/map': typeof MapRoute
   '/settings': typeof SettingsRoute
 }
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/cameras'
     | '/health'
     | '/incidents'
+    | '/login'
     | '/map'
     | '/settings'
   fileRoutesByTo: FileRoutesByTo
@@ -98,6 +108,7 @@ export interface FileRouteTypes {
     | '/cameras'
     | '/health'
     | '/incidents'
+    | '/login'
     | '/map'
     | '/settings'
   id:
@@ -107,6 +118,7 @@ export interface FileRouteTypes {
     | '/cameras'
     | '/health'
     | '/incidents'
+    | '/login'
     | '/map'
     | '/settings'
   fileRoutesById: FileRoutesById
@@ -117,6 +129,7 @@ export interface RootRouteChildren {
   CamerasRoute: typeof CamerasRoute
   HealthRoute: typeof HealthRoute
   IncidentsRoute: typeof IncidentsRoute
+  LoginRoute: typeof LoginRoute
   MapRoute: typeof MapRoute
   SettingsRoute: typeof SettingsRoute
 }
@@ -135,6 +148,13 @@ declare module '@tanstack/react-router' {
       path: '/map'
       fullPath: '/map'
       preLoaderRoute: typeof MapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/incidents': {
@@ -181,9 +201,20 @@ const rootRouteChildren: RootRouteChildren = {
   CamerasRoute: CamerasRoute,
   HealthRoute: HealthRoute,
   IncidentsRoute: IncidentsRoute,
+  LoginRoute: LoginRoute,
   MapRoute: MapRoute,
   SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}

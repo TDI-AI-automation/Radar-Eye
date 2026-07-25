@@ -309,3 +309,76 @@ Planned features (§ RM-13 scope): `live-monitoring`, `incidents`,
 | `/ws/tracking` | Backend | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-015) |
 | AI Model / Notifications settings tabs | Backend (Configuration Service) | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-014) — rendered as an explicit disabled state, not removed |
 | Refresh-token rotation | Backend | Assumed present, not yet confirmed against actual RM-12 behavior |
+
+---
+
+## 11. Pre-Phase-1 pipeline validation
+
+Performed before any Phase 1 code was written, per Phase 0 review. Checks
+every planned feature against: generated DTO → mapper → domain model →
+query → WebSocket event (if applicable) → feature module. Four domains
+required an explicit architectural decision rather than a straight
+pass-through; each is recorded here so the decision is traceable, not
+silently made during implementation.
+
+| Domain | DTO | Mapper | Domain model | Query | WS | Feature module | Result |
+|---|---|---|---|---|---|---|---|
+| Cameras | `CameraSchema` (RM-12) | needed, not yet written | `Camera` (Phase 0) | `queryKeys.cameras.*` | `/ws/camera-health` | `features/cameras` | Fits cleanly |
+| Threats | `ThreatAssessmentSchema` | needed | `ThreatAssessment` (Phase 0) | `queryKeys.threats.*` | `/ws/threats` | `features/live-monitoring` | Fits cleanly |
+| Incidents | `IncidentSchema` | needed | `Incident` (Phase 0) | `queryKeys.incidents.*` | `/ws/incidents` | `features/incidents` | Fits cleanly |
+| Tactical map | reuses Cameras/Threats/Incidents | reuses existing | reuses existing | reuses existing | reuses existing | `features/tactical-map` | Fits cleanly — no new domain. Known gaps (no `/ws/tracking`, no camera lat/lng in `CameraSchema`) are already tracked in §10, not new findings |
+| Reviews | `HumanReviewItemSchema` | needed | new `HumanReviewItem` domain model | `queryKeys.reviews.*` | `/ws/reviews` (creation only) | `features/threat-review` (new) | **Gap found — see below** |
+| Calibration | `CalibrationResultSchema` | needed | new `CalibrationResult` domain model | `queryKeys.calibration.*` | none (by design) | `features/calibration` (new) | Fits — no WS channel is correct, not a gap: calibration is an infrequent, on-demand operator workflow |
+| Evidence | `RecordingSchema`/`SnapshotSchema` | needed | new `Evidence` domain model | `queryKeys.evidence.*` | none (by design) | `features/evidence` (new) | Fits — same reasoning as Calibration |
+| Analytics | aggregate report DTOs | needed | **exception — see below** | `queryKeys.analytics.*` | none (by design) | `features/analytics` | Intentional pipeline exception |
+| Health (GPU/CPU/storage) | `SystemHealthSchema` | needed | thin/pass-through (same exception as Analytics) | `queryKeys.health.*` | **Gap found — see below** | `features/health` | REST-polling exception |
+| Users / Settings | `UserSchema` | needed | new `User` domain model | `queryKeys.users.*` | none | `features/settings` | Fits — one open design question, not a gap, see below |
+| Auth | login/token DTOs | needed | no domain model needed (token is not a business entity) | not a TanStack Query concern — held in `AuthProvider` | none | `features/auth` (new) | Fits |
+
+**Finding 1 — Reviews: no resolution-event WS channel.** `/ws/reviews`
+carries `HumanReviewItemCreatedEvent` only (RM-12 Phase 5 scope). There is
+no backend event for a review item being resolved/escalated/dismissed, so
+a second operator's browser will not get a live push when someone else
+resolves a review item — only the acting client's own REST response
+updates their own view. This is a real gap, but not one Phase 0/1
+architecture needs to solve: it is a Phase 3 (`features/threat-review`)
+implementation decision. Mitigation recorded here so it isn't rediscovered
+later: give the reviews list query a short `staleTime` and
+`refetchOnWindowFocus: true` rather than treating it as WS-driven like
+Incidents/Threats. Not a blocker for Phase 1.
+
+**Finding 2 — Health: no WS channel for periodic metrics.**
+`/ws/camera-health` carries `CameraDisconnectedEvent`/`SystemEvent`
+(discrete events), not periodic GPU/CPU/storage telemetry. The System
+Health screen's metric widgets have no event source to subscribe to and
+must use REST polling (a bounded `refetchInterval` on the query). This is
+in tension with `FRONTEND_BACKEND_CONTRACTS.md`'s "avoid polling where
+practical" principle, but is a reasonable, documented exception — the
+data is genuinely poll-shaped (a periodic gauge, not a discrete event) and
+no backend event stream exists for it. Recorded here, not silently
+implemented in Phase 3 as if it were the default pattern.
+
+**Finding 3 — Analytics / Health: pass-through domain model is correct,
+not a violation.** The `DTO → Domain (business behavior) → ViewModel`
+pattern assumes a domain entity with behavior worth modeling
+(`Incident.canAcknowledge()`, `ThreatAssessment.requiresImmediateAction()`,
+etc.). Analytics and health-metrics data is pure aggregate/reporting
+output with no business behavior to express — inventing methods on an
+`AnalyticsSummary` class to satisfy the pattern would be exactly the kind
+of fabricated capability the Phase 0 review warned against
+(`canEscalate()` precedent). For these two domains only, the mapper may
+produce a thin pass-through object (or the view model directly), skipping
+a behavior-bearing domain model. This is an intentional, narrow exception,
+not a gap in the pipeline design.
+
+**Finding 4 — Users: role-check placement is a design question, not a
+gap.** Whether `hasRole()`/permission-check logic belongs on a `User`
+domain model or purely inside the `usePermission()` hook is undecided.
+Both fit the pipeline; this is deferred to Phase 2 as an implementation
+detail, not an architectural blocker.
+
+**Conclusion:** every planned domain maps to the DTO → mapper → domain →
+query → (WS) → feature pipeline. No domain requires a pipeline redesign.
+Two real, backend-driven gaps were found (Reviews resolution events,
+Health metric events) and are recorded as scoped implementation
+exceptions rather than blockers. Phase 1 may proceed.

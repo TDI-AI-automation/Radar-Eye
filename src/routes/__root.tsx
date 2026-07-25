@@ -24,6 +24,9 @@ import {
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { AuthProvider, useAuth } from "@/auth/AuthProvider";
+import { RouteGuard } from "@/auth/RouteGuard";
+import { VideoProviderRoot } from "@/video/VideoProviderContext";
 
 function NotFoundComponent() {
   return (
@@ -31,9 +34,7 @@ function NotFoundComponent() {
       <div className="hud-panel hud-corner max-w-md text-center p-10">
         <h1 className="text-glow-cyan text-6xl font-mono font-bold">404</h1>
         <h2 className="mt-4 text-lg font-semibold uppercase tracking-widest">Signal Lost</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          The requested sector is out of range.
-        </p>
+        <p className="mt-2 text-sm text-muted-foreground">The requested sector is out of range.</p>
         <Link
           to="/"
           className="mt-6 inline-flex items-center justify-center rounded border border-primary/40 bg-primary/10 px-4 py-2 text-xs font-mono uppercase tracking-widest text-primary hover:bg-primary/20"
@@ -54,15 +55,16 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="hud-panel hud-corner max-w-md p-8 text-center">
-        <h1 className="text-glow-red text-lg font-mono uppercase tracking-widest">
-          System Fault
-        </h1>
+        <h1 className="text-glow-red text-lg font-mono uppercase tracking-widest">System Fault</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           A subsystem failed to load. Retry to re-establish link.
         </p>
         <div className="mt-6 flex justify-center gap-2">
           <button
-            onClick={() => { router.invalidate(); reset(); }}
+            onClick={() => {
+              router.invalidate();
+              reset();
+            }}
             className="rounded border border-primary/40 bg-primary/10 px-4 py-2 text-xs font-mono uppercase tracking-widest text-primary hover:bg-primary/20"
           >
             Retry
@@ -85,16 +87,33 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Live Monitoring — SENTINEL C2" },
-      { name: "description", content: "Real-time AI-driven perimeter monitoring across all camera feeds." },
+      {
+        name: "description",
+        content: "Real-time AI-driven perimeter monitoring across all camera feeds.",
+      },
       { name: "author", content: "SENTINEL" },
       { property: "og:title", content: "Live Monitoring — SENTINEL C2" },
-      { property: "og:description", content: "Real-time AI-driven perimeter monitoring across all camera feeds." },
+      {
+        property: "og:description",
+        content: "Real-time AI-driven perimeter monitoring across all camera feeds.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:title", content: "Live Monitoring — SENTINEL C2" },
-      { name: "twitter:description", content: "Real-time AI-driven perimeter monitoring across all camera feeds." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/4425d33b-709e-441f-947a-f8c4456cba67/id-preview-f686e65d--d74d4cbd-a321-41f8-a680-15330c53a948.lovable.app-1783995403366.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/4425d33b-709e-441f-947a-f8c4456cba67/id-preview-f686e65d--d74d4cbd-a321-41f8-a680-15330c53a948.lovable.app-1783995403366.png" },
+      {
+        name: "twitter:description",
+        content: "Real-time AI-driven perimeter monitoring across all camera feeds.",
+      },
+      {
+        property: "og:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/4425d33b-709e-441f-947a-f8c4456cba67/id-preview-f686e65d--d74d4cbd-a321-41f8-a680-15330c53a948.lovable.app-1783995403366.png",
+      },
+      {
+        name: "twitter:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/4425d33b-709e-441f-947a-f8c4456cba67/id-preview-f686e65d--d74d4cbd-a321-41f8-a680-15330c53a948.lovable.app-1783995403366.png",
+      },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -153,7 +172,9 @@ function TopBar() {
           <span className="absolute inset-0 rounded animate-pulse-cyan" />
         </div>
         <div className="leading-tight">
-          <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">SENTINEL C2</div>
+          <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">
+            SENTINEL C2
+          </div>
           <div className="text-[10px] text-muted-foreground">Army Camp Alpha • Sector 7</div>
         </div>
       </div>
@@ -176,7 +197,15 @@ function TopBar() {
   );
 }
 
-function StatChip({ label, value, tone }: { label: string; value: string; tone: "cyan" | "amber" | "red" | "success" }) {
+function StatChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "cyan" | "amber" | "red" | "success";
+}) {
   const toneClass = {
     cyan: "text-primary border-primary/40",
     amber: "text-amber-glow border-amber-glow/40",
@@ -193,10 +222,13 @@ function StatChip({ label, value, tone }: { label: string; value: string; tone: 
 
 function SideNav() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const { user } = useAuth();
   return (
     <nav className="hud-panel rounded-none border-y-0 border-l-0 w-16 lg:w-56 flex flex-col py-4">
       <div className="px-3 pb-2 hidden lg:block">
-        <div className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">Command Modules</div>
+        <div className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+          Command Modules
+        </div>
       </div>
       <ul className="flex-1 space-y-1 px-2">
         {NAV.map((item) => {
@@ -222,8 +254,9 @@ function SideNav() {
       <div className="px-3 pt-4 hidden lg:block">
         <div className="hud-divider mb-3" />
         <div className="text-[10px] font-mono text-muted-foreground">
-          OPERATOR<br />
-          <span className="text-primary">LT. RAHMAN, S.</span>
+          OPERATOR
+          <br />
+          <span className="text-primary">{user?.username ?? "—"}</span>
         </div>
       </div>
     </nav>
@@ -234,15 +267,38 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-screen flex-col">
-        <TopBar />
-        <div className="flex flex-1 overflow-hidden">
-          <SideNav />
-          <main className="flex-1 overflow-auto">
-            <Outlet />
-          </main>
-        </div>
-      </div>
+      <AuthProvider>
+        <AppShell />
+      </AuthProvider>
     </QueryClientProvider>
+  );
+}
+
+/**
+ * /login is rendered outside RouteGuard and without the operator chrome
+ * (TopBar/SideNav) entirely -- it's the one route unauthenticated users
+ * can reach, so it can neither require auth nor show authenticated-only
+ * content (stat chips, operator name). Every other route is wrapped in
+ * RouteGuard, which redirects to /login when unauthenticated.
+ */
+function AppShell() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  if (pathname === "/login") {
+    return <Outlet />;
+  }
+  return (
+    <RouteGuard>
+      <VideoProviderRoot>
+        <div className="flex min-h-screen flex-col">
+          <TopBar />
+          <div className="flex flex-1 overflow-hidden">
+            <SideNav />
+            <main className="flex-1 overflow-auto">
+              <Outlet />
+            </main>
+          </div>
+        </div>
+      </VideoProviderRoot>
+    </RouteGuard>
   );
 }
