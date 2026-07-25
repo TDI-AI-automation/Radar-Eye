@@ -63,6 +63,7 @@ from shared.schemas.review import (
     ReviewStatus,
 )
 from shared.schemas.threat import ActiveThreatSchema, ThreatAssessmentSchema
+from shared.schemas.user import UserRoleUpdateRequestSchema, UserSchema
 
 __all__ = [
     # analytics
@@ -116,4 +117,7 @@ __all__ = [
     "SystemHealthSchema",
     # alarm
     "AlarmSchema",
+    # user
+    "UserRoleUpdateRequestSchema",
+    "UserSchema",
 ]

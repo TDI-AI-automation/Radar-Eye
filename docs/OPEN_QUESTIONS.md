@@ -257,3 +257,39 @@ Distance estimation method has been selected:
 - Ground Plane Projection
 
 Required accuracy tolerance remains undefined.
+
+---
+
+## Q-014
+
+Question:
+
+What is the persistence model for system configuration (`GET`/`PATCH /config`,
+docs/FRONTEND_BACKEND_CONTRACTS.md's Settings section)?
+
+Status:
+
+OPEN
+
+Owner:
+
+Engineering
+
+Notes:
+
+ADR-008 lists "configuration" as one of four persisted categories (alongside
+incidents, evidence metadata, and audit history), but neither
+`docs/DATABASE_SCHEMA.md` nor `docs/DOMAIN_MODEL.md` defines its shape --
+unlike audit history, which had a `docs/DOMAIN_MODEL.md` "Audit Log" entity
+to anchor a schema on (see `audit_log`, added during RM-12 Phase 2), there
+is no equivalent "Config"/"SystemConfig" conceptual entity anywhere.
+
+Discovered during RM-12 Phase 4 (`docs/RM-12_IMPLEMENTATION_PLAN.md`):
+`GET`/`PATCH /config` were explicitly descoped from RM-12 rather than
+guessed at, per the Principal Engineer's explicit instruction --
+implementing them would require inventing a configuration persistence
+model (ownership, validation, storage semantics, versioning, rollback)
+rather than implementing already-approved architecture. A future
+Configuration Management milestone must resolve this design question
+before `GET`/`PATCH /config` can be implemented. No placeholder route, no
+YAML write-back, and no new table were added in the meantime.

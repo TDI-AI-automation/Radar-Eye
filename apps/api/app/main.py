@@ -38,6 +38,7 @@ from apps.api.app.routers import (
     incidents_router,
     reviews_router,
     threats_router,
+    users_router,
 )
 from apps.api.app.threats import ActiveThreatCache
 from shared.schemas.api import ApiError, ApiResponse
@@ -114,5 +115,6 @@ def create_app() -> FastAPI:
     app.include_router(calibration_router)
     app.include_router(evidence_router)
     app.include_router(analytics_router)
+    app.include_router(users_router)
 
     return app

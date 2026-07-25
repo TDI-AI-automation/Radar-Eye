@@ -369,3 +369,79 @@ class TestCalibrationWriteRoutes:
                 headers=_auth_header(operator, ROLE_OPERATOR),
             )
         assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestUsersRoutes:
+    async def test_list_requires_admin(self, db_engine, db_session) -> None:
+        operator = await _make_user(db_session, ROLE_OPERATOR)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.get("/users", headers=_auth_header(operator, ROLE_OPERATOR))
+        assert response.status_code == 403
+
+    async def test_list_returns_users_without_password_hash(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.get("/users", headers=_auth_header(admin, ROLE_ADMIN))
+
+        assert response.status_code == 200
+        assert len(response.json()["data"]) >= 1
+        assert "password_hash" not in response.json()["data"][0]
+
+    async def test_patch_requires_admin(self, db_engine, db_session) -> None:
+        operator = await _make_user(db_session, ROLE_OPERATOR)
+        target = await _make_user(db_session, ROLE_VIEWER)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/users/{target.id}",
+                json={"role": "admin"},
+                headers=_auth_header(operator, ROLE_OPERATOR),
+            )
+        assert response.status_code == 403
+
+    async def test_admin_updates_a_users_role_and_writes_audit_row(
+        self, db_engine, db_session
+    ) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        target = await _make_user(db_session, ROLE_VIEWER)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/users/{target.id}",
+                json={"role": "operator"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["role"] == "operator"
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [e for e in entries if e.action == "UPDATE_USER_ROLE"]
+        assert len(matching) == 1
+        assert matching[0].details == {"old_role": "viewer", "new_role": "operator"}
+
+    async def test_rejects_an_unrecognized_role(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        target = await _make_user(db_session, ROLE_VIEWER)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/users/{target.id}",
+                json={"role": "not-a-real-role"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 422
+
+    async def test_returns_404_for_missing_user(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                "/users/00000000-0000-0000-0000-000000000000",
+                json={"role": "admin"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 404
