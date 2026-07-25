@@ -1,13 +1,19 @@
 # RM-12 — API Service (REST + WebSocket): Architecture
 
-**Status:** Draft — planning only, per `docs/IMPLEMENTATION_ROADMAP.md`'s RM-12
-entry and the Principal Engineer's explicit instruction. No implementation
-code has been written against this document. Requires review and approval,
-alongside `docs/RM-12_IMPLEMENTATION_PLAN.md`, before implementation begins.
+**Status:** Implemented. This document represents the architecture as built
+— all decisions below were carried into `feature/RM-12-api-service` across
+Phases 1–6 (`docs/RM-12_IMPLEMENTATION_PLAN.md`), reviewed in the RM-12
+Release Review, and approved. Two items were implemented exactly as
+proposed here (§3.2's role taxonomy remains the client-owned open question
+it always was, per `docs/OPEN_QUESTIONS.md` Q-009 — engineering built
+against the proposal without claiming to ratify it); two capabilities this
+document originally scoped in were explicitly deferred during
+implementation rather than built speculatively — see §4's Non-Goals and
+`docs/OPEN_QUESTIONS.md` Q-014/Q-015.
 
 **Owning branch:** `feature/RM-12-api-service` (cut from `feature/api`,
 fast-forwarded to `develop`'s tip — see that branch's history for the exact
-base commit).
+base commit). Pending Principal Engineer merge into `feature/api` → `develop`.
 
 ---
 
@@ -75,10 +81,12 @@ One router module per `FRONTEND_BACKEND_CONTRACTS.md` section, mirroring
 returning `ApiResponse[T]`, DB session and any collaborator pulled from
 `request.app.state` via a `Depends()` helper):
 
-`cameras.py`, `threats.py`, `incidents.py`, `analytics.py`, `config.py`,
+`cameras.py`, `threats.py`, `incidents.py`, `analytics.py`,
 `users.py`, `reviews.py`, `calibration.py`, `evidence.py` (covers
 `/recordings*`, `/snapshots*`, `/evidence*` — all three are evidence-domain
 reads over the existing `RecordingRepository`/`SnapshotRepository`).
+`config.py` was intentionally **not** built — `GET`/`PATCH /config` are
+deferred (`docs/OPEN_QUESTIONS.md` Q-014; see §4's Non-Goals).
 
 No `/api/v1` prefix — `FRONTEND_BACKEND_CONTRACTS.md`'s Base Path is
 `/api/v1` in name, but RM-09's own corrected precedent (a Repository
@@ -275,6 +283,21 @@ handling it independently. This is a small, additive change to `shared/`
 
 ## 4. Non-Goals (explicitly out of scope for RM-12)
 
+- `GET`/`PATCH /config` — deferred during implementation, not built.
+  §1/§2 originally scoped this in (per `FRONTEND_BACKEND_CONTRACTS.md`'s
+  full endpoint list), but no configuration persistence model exists
+  anywhere in `docs/DATABASE_SCHEMA.md`/`docs/DOMAIN_MODEL.md` — unlike
+  `audit_log` (§3.4), there was no conceptual entity to anchor a schema
+  on. Building it would mean inventing a new persistence model rather than
+  implementing already-approved architecture. Tracked as
+  `docs/OPEN_QUESTIONS.md` Q-014, requiring its own Configuration
+  Management milestone.
+- `/ws/tracking` — deferred during implementation, not built. No event
+  model, payload, or publisher exists for live tracking data anywhere in
+  the codebase, and `FRONTEND_BACKEND_CONTRACTS.md`'s "Frontend Event
+  Models" section defines no shape for it (unlike every other `/ws/*`
+  channel). Tracked as `docs/OPEN_QUESTIONS.md` Q-015, requiring its own
+  Tracking Streaming milestone.
 - LDAP/Active Directory integration (ADR-009's Future State — local users
   only for now).
 - A durable/replayable event log for the WebSocket bridge (§3.4).

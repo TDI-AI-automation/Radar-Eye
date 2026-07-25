@@ -1,13 +1,21 @@
 # RM-12 — API Service (REST + WebSocket): Implementation Plan
 
-**Status:** Draft — planning only. No implementation code has been written
-against this plan. Depends on `docs/RM-12_ARCHITECTURE.md` being reviewed
-and approved first, including explicit confirmation of that document's two
-open items (role taxonomy, password-hashing library choice) — this plan
-does not re-decide those, it sequences the work assuming they're settled.
+**Status:** Implemented. All 6 phases below are complete on
+`feature/RM-12-api-service`, reviewed in the RM-12 Release Review, and
+approved. This document now records what was actually built, not a plan
+awaiting execution. Of the architecture doc's two items deferred to this
+plan: password hashing was decided as **bcrypt** (`apps/api/app/security/
+auth.py` — no native `argon2` build dependency needed for a Jetson-class
+target, simpler dependency footprint; an implementation-detail choice, not
+an architectural one); the role taxonomy remains the client-owned open
+question it always was (`docs/OPEN_QUESTIONS.md` Q-009) — Phase 1 built
+against the proposed `admin`/`operator`/`viewer` taxonomy without claiming
+to ratify it. Two capabilities originally scoped into Phase 4/5 were
+deferred during implementation rather than built speculatively — see
+those phases' notes below and `docs/OPEN_QUESTIONS.md` Q-014/Q-015.
 Updated per the Architecture Readiness Review's three findings (incident
 lifecycle ownership, missing error envelope, `/ws/camera-health`'s missing
-schemas) — see architecture §3.3/§3.6/§3.5 for the decisions this plan now
+schemas) — see architecture §3.3/§3.6/§3.5 for the decisions this plan
 reflects.
 
 Per the project's own established principle (`docs/IMPLEMENTATION_STATUS.md`,
@@ -120,15 +128,25 @@ per §3.4.
 | `reviews.py` (write routes) | `PATCH /reviews/{id}`, `POST /reviews/{id}/confirm-military`, `POST /reviews/{id}/confirm-civilian`, `POST /reviews/{id}/escalate`, `POST /reviews/{id}/dismiss` | `operator` — matches `CLAUDE.md`'s Human Review Rules (unknown uniforms must never auto-resolve; these are exactly the four allowed operator actions) |
 | `cameras.py` (write route) | `PATCH /cameras/{id}` | `admin` |
 | `calibration.py` (write routes) | `POST /calibration/start`, `POST /calibration/validate` | `operator` |
-| `config.py` | `GET /config`, `PATCH /config` | `admin` |
-| `users.py` | `GET /users`, `PATCH /users` | `admin` |
+| `users.py` | `GET /users`, `PATCH /users/{user_id}` | `admin` |
 
-Note: `config.py`/`users.py` are the only two routers where the `GET` route
-is built here in Phase 4 rather than Phase 3, despite being reads — unlike
-Phase 3's routes (open to any authenticated user), system config and the
-user list are both `admin`-only to *read*, not just to write, so they
-carry the same role-gating work as this phase's other routes and gain
-nothing from being split across two phases.
+**`config.py` — Deferred, not implemented (`docs/OPEN_QUESTIONS.md` Q-014).**
+`GET`/`PATCH /config` were removed from this phase's scope during
+implementation: no configuration persistence model exists anywhere in
+`docs/DATABASE_SCHEMA.md`/`docs/DOMAIN_MODEL.md` (unlike `audit_log`,
+there was no conceptual entity to anchor a schema on), so building it
+would mean inventing new architecture rather than implementing approved
+architecture. Requires its own Configuration Management milestone.
+
+Note: `users.py` is the only router where the `GET` route is built here in
+Phase 4 rather than Phase 3, despite being a read — unlike Phase 3's
+routes (open to any authenticated user), the user list is `admin`-only to
+*read*, not just to write, so it carries the same role-gating work as this
+phase's other routes and gains nothing from being split across two
+phases. `PATCH /users` was corrected to `PATCH /users/{user_id}` during
+implementation — the contract document's original path had no identifier,
+unlike every other mutating route in it (see
+`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Settings section notes).
 
 **Tests:** contract tests (as Phase 3) plus role-gate tests (correct role
 succeeds, wrong role gets 403, unauthenticated gets 401) plus an audit-log
@@ -136,8 +154,9 @@ assertion (the action produced the expected `audit_log` row) for every
 mutating route.
 
 **Gate before Phase 5:** full quality gates green; every route in
-`FRONTEND_BACKEND_CONTRACTS.md` now implemented; role-gating and audit
-logging demonstrated on every mutating route, not just spot-checked.
+`FRONTEND_BACKEND_CONTRACTS.md` now implemented except the deferred
+`GET`/`PATCH /config` (`docs/OPEN_QUESTIONS.md` Q-014); role-gating and
+audit logging demonstrated on every mutating route, not just spot-checked.
 
 ---
 
@@ -148,10 +167,16 @@ logging demonstrated on every mutating route, not just spot-checked.
   tracking (accept, register, broadcast, remove-on-disconnect).
 - `apps/api/app/websockets/bridge.py` — the `EventBus.subscribe()` →
   translate → broadcast adapter (architecture §3.5), one per channel:
-  `threats`, `incidents`, `camera_health`, `tracking`, `reviews`, `alarms`.
-  (`tracking` has no named event model in `FRONTEND_BACKEND_CONTRACTS.md` —
-  flagged for one clarifying question before this specific channel is
-  built: what does it carry, if not one of the 10 existing event types?)
+  `threats`, `incidents`, `camera_health`, `reviews`, `alarms`. `tracking`
+  is **deferred, not implemented** (`docs/OPEN_QUESTIONS.md` Q-015) — the
+  clarifying question this row originally flagged (what does `/ws/tracking`
+  carry, if not one of the 10 existing event types?) was asked and
+  answered: defer it. No event model, payload, or publisher exists for
+  live tracking data anywhere in the codebase; building one would require
+  its own design pass (event schema, publish frequency, publisher
+  ownership, and how it interacts with `docs/DATABASE_SCHEMA.md`'s
+  Explicit Non-Persistence Rules), not a smallest-reasonable-choice
+  resolution like this phase's other decisions.
 - `shared/schemas/camera.py` — two new schemas needed for `camera_health`
   specifically, found during Architecture Readiness Review (architecture
   §3.5's correction): `CameraDisconnectedSchema` (from
@@ -160,8 +185,8 @@ logging demonstrated on every mutating route, not just spot-checked.
   `FRONTEND_BACKEND_CONTRACTS.md`, neither of which has a frontend schema
   today (unlike every other channel, which reuses an already-built one).
 - New router/endpoint registrations in `main.py`: `/ws/threats`,
-  `/ws/incidents`, `/ws/camera-health`, `/ws/tracking`, `/ws/reviews`,
-  `/ws/alarms`.
+  `/ws/incidents`, `/ws/camera-health`, `/ws/reviews`, `/ws/alarms`
+  (`/ws/tracking` deferred — see above).
 - Bridge lifecycle wired into `main.py`'s `lifespan` (subscribe on startup,
   unsubscribe on shutdown, matching the engine-dispose pattern already
   there).
@@ -177,7 +202,8 @@ this should be sub-millisecond in practice; the test proves it, doesn't
 assume it).
 
 **Gate before Phase 6:** full quality gates green; every WS channel in
-`FRONTEND_BACKEND_CONTRACTS.md` implemented and latency-tested.
+`FRONTEND_BACKEND_CONTRACTS.md` implemented and latency-tested except the
+deferred `/ws/tracking` (`docs/OPEN_QUESTIONS.md` Q-015).
 
 ---
 
@@ -210,9 +236,11 @@ assume it).
   explicitly required this) — e.g. Phase 1's "unauthenticated request
   rejected" test before "authenticated request succeeds," Phase 4's 401/403
   cases before the 200 case.
-- **Items flagged as "not yet resolved" above** (the `/threats/active` data
-  source, `/download` route design, `/ws/tracking`'s payload shape) are
-  real open design points discovered during this planning pass, not
-  implementation-time surprises — each is called out at the specific phase
-  it blocks, to be resolved as a small, scoped design decision when that
-  phase starts, not guessed at now.
+- **Items flagged as "not yet resolved" during planning** (the
+  `/threats/active` data source, `/download` route design, `/ws/tracking`'s
+  payload shape) were each resolved during their own phase, not guessed at
+  during planning: `/threats/active` reads from a new in-memory
+  `ActiveThreatCache` (Phase 3); `/download` streams files directly via
+  `FileResponse`, no signed-URL infrastructure (Phase 3); `/ws/tracking`
+  was deferred entirely rather than built speculatively (Phase 5,
+  `docs/OPEN_QUESTIONS.md` Q-015).

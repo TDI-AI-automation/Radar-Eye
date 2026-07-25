@@ -325,6 +325,7 @@ Store:
 - Event Clips
 - System Events
 - Users
+- Audit Log
 
 ---
 
