@@ -1,6 +1,8 @@
 # Radar Eye Command — Frontend Architecture
 
-**Status:** RM-13 Phase 0 (Architecture Setup). This document is the reference
+**Status:** RM-13 Phase 2 (Existing-Screen Migration), building on Phase 0
+(Architecture Setup, approved) and Phase 1 (Infrastructure, approved). This
+document is the reference
 architecture for this milestone and every frontend milestone after it. It
 describes the *target* production architecture; where Phase 0 has only
 defined an interface or written a design-only piece, that's stated
@@ -382,3 +384,89 @@ query → (WS) → feature pipeline. No domain requires a pipeline redesign.
 Two real, backend-driven gaps were found (Reviews resolution events,
 Health metric events) and are recorded as scoped implementation
 exceptions rather than blockers. Phase 1 may proceed.
+
+---
+
+## 12. Domain facts vs. authorization (resolved before Phase 2)
+
+Rule, decided before any Phase 2 code: **domain models expose facts;
+authorization decisions belong to the auth layer, never to a domain
+model.**
+
+- `Incident.canAcknowledge()` / `.canClose()` / `.isTerminal()` (Phase 0)
+  are *not* an exception to this rule — they encode backend-enforced
+  **business state transitions** (`EXTERNALLY_REQUESTABLE_TRANSITIONS`),
+  the same fact for every caller regardless of who's asking. They answer
+  "is this incident in a state where X is possible," not "is *this user*
+  allowed to do X."
+- Authorization — "can *this* user do X" — is a function of the current
+  user's role, not of the entity being acted on. It belongs exclusively in
+  `usePermission()` (`src/auth/usePermission.ts`) and nowhere else. No
+  domain model gets a `hasRole()`, `canEdit()`-meaning-role-gated, or
+  similar method.
+- Two distinct `User`-shaped types exist for two distinct purposes and
+  must not be conflated:
+  - `AuthUser` (`src/auth/types.ts`) — the current session's identity,
+    decoded from the JWT + login input. Auth infrastructure, not a REST
+    domain entity. Consumed by `AuthProvider`/`usePermission()` only.
+  - `User` (`src/domain/models/User.ts`, Phase 3 — Settings/Users screen)
+    — the full `UserSchema` entity (`user_id`, `username`, `role`,
+    `created_at`) returned by `GET /users`, for an admin managing other
+    users. Exposes `role` as a plain fact (`readonly role: string`); it
+    does **not** get a `hasRole()` method, including for the admin's own
+    authorization checks against list rows — that composition still goes
+    through `usePermission()` at the call site (e.g. "does the *current
+    operator* have permission to edit *this listed user's* role" is two
+    facts — `usePermission("admin")` and the target row's `user.role` —
+    combined in the component/view model, not fused into the entity).
+
+UI components combine both: `usePermission()` answers "is the current
+operator allowed," a domain model's own methods (if any) answer "is this
+action possible given the entity's state." A role-gated mutation button
+checks both independently and never encodes the role check inside the
+entity.
+
+---
+
+## 13. Technical debt: WebSocket contracts are not generated
+
+Tracked here per Phase 1 review — explicitly **not** solved during RM-13.
+A future infrastructure milestone's job, not this one's.
+
+**Current state:** `src/ws/messages.ts` hand-declares every `/ws/*`
+message shape (`ThreatAssessmentMessage` reuses the generated
+`ActiveThreatSchema` where a REST-exposed twin exists; `ReviewMessage`
+reuses generated `HumanReviewSchema` likewise; `IncidentCreatedMessage`,
+`IncidentUpdatedMessage`, `CameraDisconnectedMessage`, `SystemEventMessage`,
+`AlarmMessage` are fully hand-typed, with no REST-exposed twin at all).
+Two of the five channels (`incidents`, `camera_health`) additionally carry
+more than one message shape with no on-the-wire discriminator field,
+requiring structural type guards (`isIncidentUpdatedMessage`,
+`isSystemEventMessage`) instead of a tagged union.
+
+**Source of truth:** `shared/schemas/*.py` in the `Radar-Eye` backend repo
+— specifically the classes cited in each type's docstring in
+`src/ws/messages.ts`. FastAPI's `.openapi()` output (what
+`openapi-typescript` consumes for the REST layer) has no WebSocket
+representation at all — this isn't a gap in how the schema was exported,
+it's a structural limit of OpenAPI itself, so the existing REST
+type-generation pipeline cannot be pointed at it.
+
+**Future code-generation possibilities** (not evaluated in depth, listed
+for whoever picks this up):
+- A small backend-side export script that introspects the WS-message
+  Pydantic classes already declared in `shared/schemas/*.py` (they're
+  ordinary `BaseModel` subclasses, not FastAPI-route-bound) and emits a
+  JSON Schema document per channel, consumed by the same
+  `openapi-typescript`-style generator already in the frontend toolchain.
+- Adopting AsyncAPI as a parallel spec alongside OpenAPI, with the
+  WS-bridge's `_CHANNEL_BY_EVENT_TYPE`/`_TRANSLATOR_BY_EVENT_TYPE` mapping
+  (`apps/api/app/websockets/bridge.py`) as the source the spec would need
+  to be generated from or kept consistent with.
+- At minimum, a contract test (backend-side) asserting each translator's
+  output still matches its schema's field set, so a silent backend field
+  rename is caught in CI rather than discovered as a frontend runtime bug.
+
+Until one of these exists, every change to a WS-message-shaped schema in
+the backend repo must be manually mirrored in `src/ws/messages.ts` — there
+is no compiler or generator that will catch drift.
