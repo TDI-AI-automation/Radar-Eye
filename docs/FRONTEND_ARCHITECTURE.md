@@ -1,0 +1,311 @@
+# Radar Eye Command — Frontend Architecture
+
+**Status:** RM-13 Phase 0 (Architecture Setup). This document is the reference
+architecture for this milestone and every frontend milestone after it. It
+describes the *target* production architecture; where Phase 0 has only
+defined an interface or written a design-only piece, that's stated
+explicitly rather than implied as done.
+
+**Relationship to the prototype:** the pre-RM-13 codebase (Lovable-generated,
+see `AGENTS.md`) is treated as a **visual/UX reference only** — layout,
+navigation, interaction design, and visual styling are the parts of it worth
+preserving. Its internal data flow (direct `mock-data.ts` imports, ad hoc
+per-route mock arrays, a 3-level `1|2|3` threat model) is not architecture
+and is being replaced entirely by what's described here. Where backend
+reality and prototype assumptions disagree, the backend wins — see
+`docs/RM-12_ARCHITECTURE.md` and `docs/FRONTEND_BACKEND_CONTRACTS.md` in the
+`Radar-Eye` backend repository, which remain the authoritative sources for
+every data shape and endpoint referenced below.
+
+---
+
+## 1. Module boundaries
+
+```
+src/
+  api/           Transport layer. The ONLY code allowed to call fetch().
+    generated/     openapi-typescript output (Phase 1). Read-only — never
+                   hand-edited. If a generated type is wrong, the fix is a
+                   backend contract change, not an edit here.
+    client.ts      ApiClient — auth, correlation ID, timeout, cancellation,
+                   retry, error/response normalization. (Phase 0: written.)
+    endpoints/     Thin per-domain functions (cameras.ts, incidents.ts, …)
+                   calling client.ts, returning generated DTOs. (Phase 1.)
+
+  domain/
+    models/        Domain models — DTOs mapped into real classes carrying
+                    business behavior (§6). (Phase 0: Incident, ThreatAssessment,
+                    Camera written as the reference examples; the rest follow
+                    the same pattern in Phase 1/2 as each domain is migrated.)
+    mappers/        DTO → domain model, one file per domain. (Phase 1+.)
+
+  queries/          TanStack Query hooks — the only place components touch
+                    server state. Built on endpoints/ + mappers/.
+    queryKeys.ts    Centralized Query Key Factory. (Phase 0: written.)
+
+  ws/               WebSocket layer. connection.ts (manager) + hooks.ts
+                    (per-channel hooks that write into the Query cache).
+                    (Phase 1.)
+
+  auth/             AuthProvider, ProtectedRoute, usePermission. (Phase 1.)
+
+  video/
+    VideoProvider.ts            Interface + capability flags. (Phase 0: written.)
+    PlaceholderVideoProvider.ts The only concrete implementation today.
+                                (Phase 0: written.)
+
+  features/         One folder per screen (business capability), each owning
+                    only its own components/ hooks/ view-models/ utils/.
+                    Cross-feature imports are avoided — shared code is
+                    promoted to shared/ instead (§9).
+
+  components/
+    ui/               Unchanged from the prototype (shadcn/Radix primitives).
+    hud/               Kept and extended (CameraTile, Panel, StatTile, …).
+    shared/            New: ErrorBoundary, loading/empty states — used by
+                       more than one feature.
+
+  routes/            Thin — a route file defines the route and renders its
+                    feature's top-level component. No business logic here.
+```
+
+**Rule:** `domain/` never imports from `api/generated/` outside its own
+`mappers/`. `features/` never imports `api/` or `domain/` directly except
+through `queries/`. `queries/` never imports `ws/` (the dependency runs the
+other way: `ws/` writes into `queries/`'s cache via `queryClient`).
+
+---
+
+## 2. Data flow (end to end)
+
+```
+Backend (Radar-Eye)
+  │  REST: ApiResponse<T> envelope           WS: EventEnvelope<Payload>
+  ▼                                            ▼
+api/generated/*.ts (OpenAPI DTO)           ws/hooks.ts (raw message)
+  │                                            │
+  ▼                                            ▼
+domain/mappers/*.ts  ─────────────────────────►│  (same mapper — one DTO shape
+  │                                                per domain, whichever
+  ▼                                                transport produced it)
+domain/models/*.ts (business behavior)
+  │
+  ▼
+queries/*.ts (TanStack Query cache — single source of truth for server state)
+  │
+  ▼
+features/*/view-models/*.ts (screen-ready shapes: formatted dates, sorted/
+  │                          grouped lists, display strings — derived from
+  │                          domain models, never re-deriving business rules)
+  ▼
+features/*/components/*.tsx → JSX
+```
+
+No component reads `api/generated/` types directly. No component computes a
+date format, a status color, or a permission check inline — those are domain
+model methods or view-model fields, never JSX-local logic (§7).
+
+---
+
+## 3. Authentication flow
+
+**Token storage: `localStorage`.** Decision and rationale (recorded here per
+architecture review):
+
+- The backend contract (RM-12, frozen except review-driven fixes) already
+  returns tokens in the JSON response body for the client to store and
+  attach itself — this requires no backend change.
+- `httpOnly` cookies are the stronger security posture but would require
+  RM-12 to `Set-Cookie` on `/auth/login`/`/auth/refresh` and would introduce
+  CSRF exposure that doesn't exist today — out of scope while RM-12 is frozen.
+- Deployment context narrows the realistic risk: air-gapped (no remote
+  attacker path in), single-tenant, operator-facing C2 tool, not a public
+  web app.
+- `sessionStorage` and in-memory storage were rejected on operational
+  grounds specific to this deployment: a 24/7 watch-room display should not
+  force re-login on every tab reload, and `localStorage` is the only option
+  that both survives reloads and shares a session across multiple tabs/
+  monitors, a real usage pattern for a command-center UI.
+- Access tokens are short-lived (900s) already, bounding exposure if leaked.
+  Refresh-token rotation on `/auth/refresh` should be confirmed against
+  actual RM-12 behavior during Phase 1 as a companion hardening measure.
+- **Migration path stays open:** if backend changes come back into scope,
+  moving to `httpOnly` cookies only touches `AuthProvider`/`ApiClient`'s
+  config, not `features/` or `domain/` — nothing above the API layer knows
+  how the token is stored.
+
+**Flow:**
+```
+User submits login form
+  → POST /auth/login (via api/endpoints/auth.ts)
+  → { access_token, refresh_token } stored in localStorage
+  → AuthProvider context updates → ProtectedRoute allows navigation
+
+Every subsequent request
+  → ApiClient.getAuthToken() reads localStorage → Authorization: Bearer header
+
+Access token expires (or any request returns 401 with a token present)
+  → ApiClient.onUnauthorized() fires
+  → AuthProvider attempts POST /auth/refresh using the stored refresh token
+  → success: new tokens stored, original request's caller retries
+  → failure: tokens cleared, redirect to /login
+
+WebSocket connections
+  → token passed as ?token= query param (browsers cannot set custom
+    headers on the WS handshake — this is RM-12's own existing scheme,
+    not something the frontend invents)
+```
+
+---
+
+## 4. Request lifecycle (`ApiClient.request()`)
+
+```
+1. Generate a request ID (crypto.randomUUID()) — sent as X-Request-Id.
+2. hooks.onRequestStart (no-op today; metrics/tracing/telemetry seam).
+3. Build headers: Content-Type, X-Request-Id, Authorization (if a token exists).
+4. Race the fetch against a per-request timeout (default 10s) using a
+   combined AbortSignal — the caller's own signal (e.g. TanStack Query's
+   queryFn signal) is honored simultaneously, whichever fires first wins.
+5. Parse the ApiResponse<T> envelope.
+   - Transport/parse failure → AppError("network_error").
+   - HTTP !ok or envelope.success === false → AppError(envelope.error.code, …).
+   - 401 specifically → config.onUnauthorized() fires, no retry.
+6. GET requests with retry:true retry up to 3 attempts on failure (excluding
+   401). POST/PATCH/DELETE never auto-retry — not safe to replay blindly.
+7. hooks.onRequestEnd (success|error) — same seam as step 2.
+8. Return envelope.data, or throw the normalized AppError.
+```
+
+Downloads (`GET /recordings/{id}/download`, `GET /snapshots/{id}/download`)
+use `ApiClient.requestBlob()` instead — those endpoints return the raw file,
+not an `ApiResponse` envelope.
+
+---
+
+## 5. WebSocket lifecycle
+
+```
+Screen mounts → ws/hooks.ts's useXChannel() calls ws/connection.ts.connect(channel, token)
+  → on open: nothing else happens yet — REST queries already established
+    baseline state via queries/*.ts on mount (REST first, WS incremental,
+    per the architecture review's explicit rule)
+  → on message: map the raw payload through the SAME domain/mappers/*.ts
+    used by REST, then:
+      - if it can be merged safely into the existing cache entry
+        → queryClient.setQueryData(matching key, updater)
+      - if it cannot be merged safely
+        → queryClient.invalidateQueries({ queryKey: matching key })
+        (correctness over cleverness — an incremental update is only
+        applied when it's unambiguous how to merge it; anything else
+        triggers a real refetch)
+  → on disconnect: connection.ts backs off and reconnects; on reconnect,
+    re-subscribes to the same channel (no separate re-fetch needed — an
+    open reconnect gap is exactly what a REST re-fetch on remount /
+    window-focus already covers via TanStack Query's own defaults)
+Screen unmounts → disconnect(channel)
+```
+
+There is never a second, WS-only store. `ws/` writes exclusively into the
+same `queryClient` cache `queries/` populates — a component subscribed via
+`useIncidentsQuery()` sees both the initial REST fetch and every live WS
+update through one cache entry.
+
+---
+
+## 6. DTO → Domain → ViewModel transformation
+
+```
+OpenAPI DTO (generated/, transport shape, matches the backend 1:1)
+   │  mapper (domain/mappers/incident.ts)
+   ▼
+Domain Model (domain/models/Incident.ts — a real class: readonly fields +
+   │           business-behavior methods, e.g. canAcknowledge()/canClose().
+   │           These methods drive UI affordances only; the backend
+   │           re-validates every mutation regardless of what the UI shows.)
+   │  selector (features/incidents/view-models/incidentRow.ts)
+   ▼
+View Model (screen-ready: formatted timestamp, resolved display color via
+   │         the domain model's own displayColor(), pre-joined camera name —
+   │         never re-implements a business rule the domain model already owns)
+   ▼
+React Component (renders the view model — no date formatting, no status
+             mapping, no color logic inline in JSX)
+```
+
+Phase 0 delivered three worked examples of the DTO→Domain step —
+`Incident`, `ThreatAssessment`, `Camera` (`src/domain/models/`) — establishing
+the pattern before it's replicated for Review, CameraCalibration, Evidence,
+and User during Phase 1/2's actual screen migrations.
+
+---
+
+## 7. Query lifecycle
+
+- `queryKeys.ts` (§1) is the only source of query key arrays — never a
+  literal `["incidents", id]` inline in a hook or component.
+- Query hooks live in `queries/`, one module per REST domain, built on
+  `api/endpoints/` + `domain/mappers/`.
+- `staleTime`/`gcTime` are set per data class, not globally: live-feed data
+  (threats, incidents) relies on WS for freshness and can have a longer
+  `staleTime` since WS keeps it current; reference data (cameras, users)
+  can cache longer still; analytics aggregates longest.
+- React component state (`useState`/`useReducer`) holds **only** transient
+  UI state — selected tab, open dialog, form draft. Server data never lives
+  in component state; if a component needs server data, it calls a
+  `queries/` hook, full stop.
+- Mutations (`useMutation`) call `api/endpoints/`, then either update the
+  cache optimistically where safe or `invalidateQueries()` — same
+  correctness-over-cleverness rule as WS (§5).
+
+---
+
+## 8. VideoProvider abstraction
+
+See `src/video/VideoProvider.ts` (interface, Phase 0) and
+`PlaceholderVideoProvider.ts` (Phase 0's only implementation). `CameraTile`
+depends on the `VideoProvider` interface only; it never imports a concrete
+provider class. Capability flags (`supportsLiveVideo()`,
+`supportsSnapshots()`, `supportsRecordingPlayback()`) let a component ask
+"can the active provider do X" instead of assuming — a future
+`RTSPProvider`/`WebRTCProvider`/`HLSProvider` implements the same interface
+and simply advertises real capability, with zero change required in
+`CameraTile` or any feature that consumes it.
+
+**Open backend dependency, not resolved by this abstraction:** no live
+video delivery mechanism or contract exists yet (`ADR-011` mandates
+"backend-controlled video delivery," but no endpoint/URL scheme is defined
+in `FRONTEND_BACKEND_CONTRACTS.md`, and the backend's `ThreatAssessmentEvent`
+carries no bounding-box coordinates for the detection-overlay feature
+either). This is real, separate work spanning `apps/deepstream` and
+`apps/api` in the backend repo — the `VideoProvider` seam exists so that
+work can land later without touching this codebase's screens again.
+
+---
+
+## 9. Feature boundaries
+
+Each `features/<name>/` folder owns only code specific to that screen:
+`components/`, `hooks/` (screen-specific query/mutation wrappers, if any
+beyond the shared `queries/` hooks), `view-models/`, `utils/`. Anything a
+second feature needs is promoted to `components/shared/`, `domain/`, or
+`queries/` — never imported cross-feature directly. If two features start
+needing the same thing, that's the signal to promote it, not to import
+across the feature boundary.
+
+Planned features (§ RM-13 scope): `live-monitoring`, `incidents`,
+`tactical-map`, `cameras`, `analytics`, `health`, `settings`,
+`threat-review` (new), `calibration` (new), `evidence` (new), `auth` (new).
+
+---
+
+## 10. Known open items (tracked, not resolved by Phase 0)
+
+| Item | Owner | Status |
+|---|---|---|
+| CORS policy on `apps/api` | Backend | Not yet configured — needed before any real integration testing |
+| `GET /audit-log`-equivalent endpoint | Backend | Doesn't exist; `audit_log` table does (RM-12 Phase 2) |
+| Live video delivery contract | Backend (`apps/deepstream` + `apps/api`) | No contract; `VideoProvider` seam is ready for it |
+| `/ws/tracking` | Backend | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-015) |
+| AI Model / Notifications settings tabs | Backend (Configuration Service) | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-014) — rendered as an explicit disabled state, not removed |
+| Refresh-token rotation | Backend | Assumed present, not yet confirmed against actual RM-12 behavior |
