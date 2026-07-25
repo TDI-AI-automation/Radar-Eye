@@ -28,7 +28,18 @@ from apps.api.app.config import get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
-from apps.api.app.routers import auth_router, health_router
+from apps.api.app.routers import (
+    analytics_router,
+    auth_router,
+    calibration_router,
+    cameras_router,
+    evidence_router,
+    health_router,
+    incidents_router,
+    reviews_router,
+    threats_router,
+)
+from apps.api.app.threats import ActiveThreatCache
 from shared.schemas.api import ApiError, ApiResponse
 
 logger = logging.getLogger(__name__)
@@ -63,6 +74,7 @@ def create_app() -> FastAPI:
     session_factory = create_session_factory(engine)
     health_collector = HealthCollector()
     audit_logger = AuditLogger()
+    active_threat_cache = ActiveThreatCache()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -81,6 +93,7 @@ def create_app() -> FastAPI:
     app.state.db_session_factory = session_factory
     app.state.health_collector = health_collector
     app.state.audit_logger = audit_logger
+    app.state.active_threat_cache = active_threat_cache
 
     @app.exception_handler(HTTPException)
     async def _http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
@@ -94,5 +107,12 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(health_router)
+    app.include_router(cameras_router)
+    app.include_router(threats_router)
+    app.include_router(incidents_router)
+    app.include_router(reviews_router)
+    app.include_router(calibration_router)
+    app.include_router(evidence_router)
+    app.include_router(analytics_router)
 
     return app

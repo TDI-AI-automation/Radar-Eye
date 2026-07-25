@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -48,3 +48,21 @@ class CameraSchema(BaseModel):
     status: CameraConnectionStatus
     created_at: datetime
     updated_at: datetime
+
+
+class CameraCalibrationSchema(BaseModel):
+    """Ground-plane calibration for a camera (ADR-016).
+
+    Returned by ``GET /cameras/{camera_id}/calibration`` and the
+    Calibration Center's ``GET /calibration/{camera_id}`` /
+    ``GET /calibration/results`` -- calibration is append-only
+    (docs/DATABASE_SCHEMA.md), so this always represents one specific
+    calibration record, never a mutable "current calibration" object.
+    """
+
+    calibration_id: uuid.UUID
+    camera_id: uuid.UUID
+    homography_matrix: dict[str, Any]
+    reference_points: dict[str, Any]
+    calibrated_by: str | None = None
+    created_at: datetime

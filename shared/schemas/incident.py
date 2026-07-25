@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -64,3 +65,17 @@ class IncidentUpdatedSchema(BaseModel):
     incident_id: uuid.UUID
     old_status: IncidentStatus
     new_status: IncidentStatus
+
+
+class IncidentEventSchema(BaseModel):
+    """A single incident-lifecycle history entry.
+
+    Returned by ``GET /incidents/{incident_id}/events`` (Incident Center) --
+    thin wrap of the ``incident_events`` table (docs/DATABASE_SCHEMA.md).
+    """
+
+    event_id: uuid.UUID
+    incident_id: uuid.UUID
+    event_type: str
+    event_payload: dict[str, Any]
+    created_at: datetime

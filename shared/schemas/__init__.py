@@ -14,9 +14,26 @@ Typical import patterns::
 """
 
 from shared.schemas.alarm import AlarmSchema
+from shared.schemas.analytics import (
+    CameraAnalyticsSchema,
+    IncidentAnalyticsSchema,
+    SystemAnalyticsSchema,
+    ThreatAnalyticsSchema,
+)
 from shared.schemas.api import ApiError, ApiResponse
 from shared.schemas.auth import LoginRequestSchema, RefreshRequestSchema, TokenResponseSchema
-from shared.schemas.camera import CameraConnectionStatus, CameraHealthSchema, CameraSchema
+from shared.schemas.camera import (
+    CameraCalibrationSchema,
+    CameraConnectionStatus,
+    CameraHealthSchema,
+    CameraSchema,
+)
+from shared.schemas.evidence import (
+    EvidenceItemSchema,
+    EvidenceType,
+    RecordingSchema,
+    SnapshotSchema,
+)
 from shared.schemas.health import (
     CameraHealthSummarySchema,
     GPUHealthSchema,
@@ -26,6 +43,7 @@ from shared.schemas.health import (
 )
 from shared.schemas.incident import (
     IncidentCreatedSchema,
+    IncidentEventSchema,
     IncidentSchema,
     IncidentSummarySchema,
     IncidentUpdatedSchema,
@@ -34,6 +52,11 @@ from shared.schemas.review import HumanReviewSchema, ReviewStatus
 from shared.schemas.threat import ActiveThreatSchema, ThreatAssessmentSchema
 
 __all__ = [
+    # analytics
+    "CameraAnalyticsSchema",
+    "IncidentAnalyticsSchema",
+    "SystemAnalyticsSchema",
+    "ThreatAnalyticsSchema",
     # api
     "ApiError",
     "ApiResponse",
@@ -46,6 +69,7 @@ __all__ = [
     "ThreatAssessmentSchema",
     # incident
     "IncidentCreatedSchema",
+    "IncidentEventSchema",
     "IncidentSchema",
     "IncidentSummarySchema",
     "IncidentUpdatedSchema",
@@ -53,9 +77,15 @@ __all__ = [
     "HumanReviewSchema",
     "ReviewStatus",
     # camera
+    "CameraCalibrationSchema",
     "CameraConnectionStatus",
     "CameraHealthSchema",
     "CameraSchema",
+    # evidence
+    "EvidenceItemSchema",
+    "EvidenceType",
+    "RecordingSchema",
+    "SnapshotSchema",
     # health
     "CameraHealthSummarySchema",
     "GPUHealthSchema",
