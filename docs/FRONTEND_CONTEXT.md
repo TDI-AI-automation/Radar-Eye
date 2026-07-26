@@ -5,22 +5,22 @@
 # Frontend Repository
 
 Name:
-radar-eye-command
+`frontend/` (this repository — Radar-Eye)
 
-URL:
-https://github.com/CodeHub1443/radar-eye-command
+Former location:
+`radar-eye-command` (https://github.com/CodeHub1443/radar-eye-command) — the original Lovable-generated prototype. Its full commit history was imported into this repository via `git subtree` on 2026-07-26 (Repository Consolidation initiative); it is no longer a separate development target. `frontend/docs/` carries the RM-13 migration's own detailed records (`FRONTEND_ARCHITECTURE_REVIEW.md`, `RM-13_MIGRATION_SUMMARY.md`, `BACKEND_CAPABILITY_GAPS.md`, `TECHNICAL_DEBT.md`).
 
 Purpose:
 Radar Eye Command Center User Interface
 
 Status:
-Prototype UI Complete
+RM-13 complete — every screen consumes real backend data through a layered (DTO → mapper → domain model → view model → UI) pipeline; zero mock data remains.
 
 Integration Status:
-Not Yet Integrated
+Integrated — merged into `develop` (2026-07-26), living at `frontend/` alongside `apps/`, `services/`, `shared/`.
 
 Architecture Status:
-Requires Alignment With Backend Architecture
+Aligned with backend architecture (see Major Architectural Alignment Required / Health Monitoring Alignment below — both resolved).
 
 ---
 
@@ -67,68 +67,35 @@ Provide a real-time military command center interface for:
 
 # Current State
 
-The frontend is primarily driven by mocked data.
+`frontend/src/lib/mock-data.ts` no longer exists — deleted once nothing referenced it (verified via repo-wide grep before deletion, per `frontend/docs/RM-13_MIGRATION_SUMMARY.md`).
 
-Current implementation relies on:
-
-src/lib/mock-data.ts
-
-for:
-
-- Cameras
-- Alerts
-- Incidents
-- Analytics
-- System Health
-
-The UI architecture is mature but backend integration is incomplete.
+Every screen (Live Monitoring, Tactical Map, Camera Management, Incident Center, Threat Review Center, Calibration Center, Evidence Viewer, AI Analytics, System Health, Settings) is real-data-driven, per `frontend/docs/UI_SCREEN_CATALOG.md`'s full 10-screen catalog.
 
 ---
 
 # Integration Strategy
 
-The frontend shall transition from:
+Completed: Mock Data → REST APIs + WebSocket Streams, per `frontend/docs/FRONTEND_ARCHITECTURE_REVIEW.md`'s five-layer pipeline (Transport DTO → Mapper → Domain Model → View Model → UI). All operational data originates from Radar Eye backend services (RM-12's API layer); WebSocket writes update the same TanStack Query cache REST populates, never a parallel store.
 
-Mock Data
-    ->
-REST APIs
-    +
-WebSocket Streams
-
-All operational data shall originate from Radar Eye backend services.
+Not yet exercised: an actual integrated run of `apps/api` + `frontend/` against each other on `develop` (RM-13's own verification worked against RM-12's OpenAPI schema exported from its branch, not a running merged instance) — see Phase D of the Repository Consolidation plan / the Repository Integration Completion Report.
 
 ---
 
-# Major Architectural Alignment Required
+# Major Architectural Alignment Required — Resolved
 
 Threat Model
 
-Current:
-- Alert Level 1
-- Alert Level 2
-- Alert Level 3
+Was:
+- Alert Level 1 / 2 / 3
 
-Required:
-- ALLY
-- OBSERVE
-- LOW
-- MEDIUM
-- HIGH
+Now:
+- ALLY / OBSERVE / LOW / MEDIUM / HIGH / HUMAN_REVIEW (`frontend/src/domain/threatLevel.ts`, the one place this mapping exists — every screen displaying a threat level goes through it)
 
 ---
 
-# Health Monitoring Alignment
+# Health Monitoring Alignment — Resolved
 
-Current UI contains generic infrastructure metrics.
-
-Required deployment model:
-
-- NVIDIA Jetson AGX Orin 32GB
-- DeepStream
-- TensorRT
-- PostgreSQL
-
-All health metrics shall represent actual deployment hardware.
+System Health now shows only what `apps/api`'s `/health/*` endpoints actually provide: GPU (nullable, honestly empty outside NVML/Jetson hardware), storage, per-camera connection status, and a fixed 5-key component-status map. The prototype's generic CPU/memory/network/ambient-temperature panels — consistent with a discrete-workstation assumption, not the single-Jetson-SoC deployment target — were dropped rather than kept with fabricated numbers; recorded as a backend capability gap (not yet exposed by any endpoint) in `frontend/docs/BACKEND_CAPABILITY_GAPS.md` (G-11) if ever wanted.
 
 ---
 
