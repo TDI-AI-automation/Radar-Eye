@@ -1,9 +1,6 @@
 import torch
 
-ckpt = torch.load(
-    "models/yolo26m_weapon.pt",
-    map_location="cpu"
-)
+ckpt = torch.load("models/yolo26m_weapon.pt", map_location="cpu")
 
 print("TOP LEVEL KEYS")
 print("=" * 80)
