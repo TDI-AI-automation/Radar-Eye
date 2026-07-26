@@ -345,6 +345,6 @@ class TestContractCompleteness:
         import shared.events as events_module
 
         for name in self.EXPECTED_EVENT_TYPES:
-            assert hasattr(events_module, name), (
-                f"Missing event type: {name} — not exported from shared.events"
-            )
+            assert hasattr(
+                events_module, name
+            ), f"Missing event type: {name} — not exported from shared.events"

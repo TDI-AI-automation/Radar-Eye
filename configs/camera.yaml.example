@@ -1,0 +1,30 @@
+# RM-11.SIV -- camera bootstrap input (Decision A).
+#
+# Copy this file to configs/camera.yaml (gitignored -- never commit it) and
+# fill in the values for the one physical camera being validated.
+#
+# This file is consumed exactly once, by scripts/siv_register_camera.py,
+# which encrypts the RTSP credentials via CredentialEncryptionProvider and
+# writes them into the cameras / camera_stream_profiles tables. The
+# DeepStream runtime never reads this file directly -- it loads cameras
+# from the database via CameraRegistry, the same production path RM-12's
+# registration API will use.
+#
+# Credentials: set RADAR_CAMERA_USERNAME / RADAR_CAMERA_PASSWORD in the
+# environment (e.g. via .env, never committed) and reference them with
+# ${VAR_NAME} below -- this file itself never needs to hold a plaintext
+# secret (Additional Requirement A.1, Option B).
+
+camera_id: north-gate-01
+friendly_name: "North Gate Camera"
+rtsp_url: rtsp://192.168.1.50:554/stream1
+username: ${RADAR_CAMERA_USERNAME}
+password: ${RADAR_CAMERA_PASSWORD}
+transport: tcp
+latency_ms: 200
+resolution: [1920, 1080]
+fps: 30
+
+reconnect:
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 30.0

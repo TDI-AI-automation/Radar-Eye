@@ -1,0 +1,36 @@
+7:rtph264pay -> udpsink``. ``builder.py`` creates the ``tee`` itself (it's the
+8-pipeline fork point, not visualization-specific) and only ever calls
+9-``build()``/``teardown()`` here -- it never constructs a converter,
+10:encoder, OSD, or payloader itself.
+11-
+12-Backpressure: ``viz-queue`` is leaky (drops the oldest buffered frame
+13-rather than blocking) and small, so a slow encoder/RTSP client can never
+--
+129:        payloader = self._make(Gst, "rtph264pay", "viz-pay")
+130:        payloader.set_property("pt", 96)
+131:        payloader.set_property("config-interval", 1)
+132-
+133-        udpsink = self._make(Gst, "udpsink", "viz-udpsink")
+134-        udpsink.set_property("host", "127.0.0.1")
+--
+148:            payloader,
+149-            udpsink,
+150-        ]
+151-        for element in self._elements:
+--
+161:        self._link(parser, payloader)
+162:        self._link(payloader, udpsink)
+163-
+164-        tee_pad = tee.get_request_pad("src_%u")
+165-        if tee_pad is None:
+
+=== rtph264pay actual property defaults (gst-inspect-1.0 on this machine) ===
+config-interval: our code sets =1 -- "Send SPS and PPS Insertion Interval in seconds (sprop parameter sets will
+                 be multiplexed in the data stream when detected.)" -- CONFIRMS this delivers SPS/PPS IN-BAND
+                 in the RTP stream (matches Step 3's finding: no out-of-band sprop-parameter-sets in the SDP,
+                 because this mechanism doesn't populate SDP -- it inserts SPS/PPS as in-band NAL units before
+                 IDR frames instead).
+pt:              our code sets =96 (matches SDP payload type 96, Step 3, confirmed consistent)
+timestamp mode:  perfect-rtptime -- library default (true), our code does not override it. Correct for a live
+                 encoder source; not an interop concern.
+seqnum-offset / timestamp-offset: library defaults (random) -- normal for a live stream.

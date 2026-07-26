@@ -1,0 +1,60 @@
+# RM-11.SIV -- visualization subsystem (production video-output backend).
+#
+# Renders directly from the existing DeepStream pipeline's own PGIE/NvDCF/
+# SGIE inference results -- no second inference pass, no OpenCV. See
+# apps/deepstream/app/visualization/ and docs/DEEPSTREAM_PIPELINE_SPEC.md's
+# Visualization Path section.
+#
+# Off by default: a fresh checkout never silently starts encoding/
+# streaming. Set enabled: true (and, on a real bench, point stream_output/
+# rtsp settings as needed) to turn it on for a session.
+
+version: 1
+
+enabled: false
+stream_output_enabled: true
+rtsp_output_enabled: true
+
+draw_bbox: true
+draw_labels: true
+draw_tracker: true
+draw_sgie: true
+draw_distance: true
+draw_zone: true
+draw_threat: true
+draw_fps: true
+draw_latency: true
+draw_timestamp: true
+draw_camera_name: true
+draw_gpu: true
+draw_system_status: false
+
+font_size: 12
+line_thickness: 3
+
+# RGBA hex colors ("#RRGGBB" or "#RRGGBBAA"). PGIE class names match the
+# real label set (configs/models.yaml's pgie.labels) -- fire/metal/
+# ranged_metal/non_metal/person, not a generic placeholder set.
+color_scheme:
+  fire: "#FFA500FF"
+  metal: "#FF0000FF"
+  ranged_metal: "#FF0000FF"
+  non_metal: "#808080FF"
+  person: "#00FF00FF"
+  civilian: "#00FFFFFF"
+  military: "#800080FF"
+  threat_high: "#FF0000FF"
+  threat_medium: "#FFFF00FF"
+  threat_low: "#00FF00FF"
+  default: "#FFFFFFFF"
+
+output_codec: h264
+output_bitrate: 4000000
+output_fps: 30
+rtsp_port: 8554
+stream_name: radar-eye
+
+annotation_ttl_seconds: 5.0
+
+performance:
+  enable_overlay_cache: true

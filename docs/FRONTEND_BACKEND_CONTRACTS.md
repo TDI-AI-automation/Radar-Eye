@@ -169,11 +169,23 @@ PATCH /config
 
 GET /users
 
-PATCH /users
+PATCH /users/{user_id}
 
 Purpose:
 
 System administration.
+
+Notes:
+
+`PATCH /users` (no identifier) was a documentation error -- corrected to
+`PATCH /users/{user_id}`, matching every other mutating route in this
+contract (each takes a path identifier; there is no collection-level PATCH
+anywhere else in this document). Scoped to updating one user's `role`
+only -- `username`/`password_hash` are not exposed through this route.
+
+`GET`/`PATCH /config` are not yet implemented (docs/OPEN_QUESTIONS.md
+Q-014) -- no persistence model for system configuration is defined in
+`docs/DATABASE_SCHEMA.md` or `docs/DOMAIN_MODEL.md` yet.
 
 ---
 

@@ -401,9 +401,26 @@ Four distinct concerns, kept separate:
 
 **Subsystem ownership** — each subsystem branch owns one logical part of the architecture. See docs/IMPLEMENTATION_STATUS.md's Subsystem Status table for the current list and their corresponding apps/, services/, or shared/ paths.
 
-**Git branching** — long-lived subsystem branches (feature/api, feature/deepstream, feature/threat-engine, feature/incident-service, feature/recording, feature/calibration, feature/shared-contracts, feature/frontend-integration, feature/deployment, feature/testing) are the primary integration branches. A milestone is implemented on the subsystem branch its work belongs to. If a milestone is large enough to need parallel work, short-lived ticket branches branch from the subsystem branch (e.g. feature/RE-301-rtsp-ingestion from feature/deepstream) and merge back into it.
+**Git branching** — branch hierarchy, top to bottom:
 
-**Merge strategy** — ticket branches merge into their subsystem branch when their piece is done. Subsystem branches merge into master at a reviewed, approved integration point — not automatically after every milestone. master never receives a direct commit.
+```
+main (production)
+    ↑
+develop (integration)
+    ↑
+long-lived subsystem branches
+    ↑
+optional short-lived ticket branches
+```
+
+- `main` — production only. Never developed on directly. Only receives merges from `develop`, and only at a full production release (see Production Release Gate below).
+- `develop` — the primary integration branch. Every completed, reviewed subsystem milestone merges here. Continuous integration and integration testing run against `develop`. It always represents the latest integrated engineering build.
+- Long-lived subsystem branches (feature/api, feature/deepstream, feature/threat-engine, feature/incident-service, feature/recording, feature/calibration, feature/shared-contracts, feature/frontend-integration, feature/developer-infrastructure, feature/testing) each own one logical part of the architecture. A milestone is implemented on the subsystem branch its work belongs to.
+- If a milestone is large enough to need parallel work, short-lived ticket branches branch from the subsystem branch (e.g. feature/RE-301-rtsp-ingestion from feature/deepstream) and merge back into it after review.
+
+**Merge strategy** — Developer → ticket branch (optional) → subsystem branch → Principal Engineer review → testing → merge into `develop` (regular merge commit, never squash) → integration testing on `develop`. `develop` never receives a direct commit outside of these subsystem merges. Repeat across all subsystems until end-to-end validation and a production readiness review are complete, then merge `develop` → `main` for a production release.
+
+**Production Release Gate** — `develop` must not be merged into `main` until ALL of the following are complete: every roadmap milestone implemented; DeepStream pipeline, AI pipeline, API, frontend, database, event bus, incident pipeline, recording, alarm pipeline, and calibration all integrated; Developer Infrastructure and Testing subsystems complete; end-to-end integration tests passing; system acceptance testing complete; architecture review passed; production deployment validated. Only then may `develop` be merged into `main`.
 
 ---
 

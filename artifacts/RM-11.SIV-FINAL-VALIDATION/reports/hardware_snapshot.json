@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-07-23T16:55:28+06:00",
+  "deepstream_version": "Version: 7.0.0\nDATE: Sun Apr 28 23:27:33 UTC 2024",
+  "gstreamer_version": "gst-inspect-1.0 version 1.20.3 GStreamer 1.20.3 https://launchpad.net/distros/ubuntu/+source/gstreamer1.0",
+  "cuda_version": "12.2",
+  "tensorrt_version": "8.6.1.6-1+cuda12.0",
+  "gpu_model": "NVIDIA GeForce RTX 3060",
+  "gpu_memory_total": "12288 MiB",
+  "driver_version": "535.288.01"
+}
