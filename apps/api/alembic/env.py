@@ -15,8 +15,21 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+#
+# disable_existing_loggers=False -- fileConfig()'s default (True) silently
+# disables every logger that already exists in the process and isn't
+# explicitly named in alembic.ini's [loggers] section. In this repository
+# that includes apps/deepstream/app/stage_logging.py's radar_eye.audit
+# logger (and the radar_eye.stage.* loggers) whenever Alembic runs in the
+# same process as application code -- e.g. every pytest session that
+# exercises both apps/api/tests/test_migrations.py and anything logging
+# through those loggers afterward (apps/deepstream/tests/test_watchdog.py
+# was silently broken this way from 2026-07-23 onward: the falling-edge
+# audit warning became a no-op once radar_eye.audit.disabled was True).
+# Alembic itself only needs its own loggers configured; disabling
+# unrelated application loggers is never correct here.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -62,15 +62,16 @@ async def _make_camera(session: AsyncSession, **overrides) -> Camera:
 
 
 async def _make_incident(session: AsyncSession, camera: Camera, **overrides) -> Incident:
-    incident = Incident(
-        camera_id=camera.id,
-        track_id=1,
-        incident_type=IncidentType.THREAT,
-        threat_level=ThreatLevel.HIGH,
-        status=IncidentStatus.ACTIVE,
-        threat_summary={},
-        **overrides,
-    )
+    fields = {
+        "camera_id": camera.id,
+        "track_id": 1,
+        "incident_type": IncidentType.THREAT,
+        "threat_level": ThreatLevel.HIGH,
+        "status": IncidentStatus.ACTIVE,
+        "threat_summary": {},
+    }
+    fields.update(overrides)
+    incident = Incident(**fields)
     session.add(incident)
     await session.commit()
     return incident

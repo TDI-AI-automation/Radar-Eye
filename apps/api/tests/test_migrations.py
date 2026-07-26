@@ -32,6 +32,7 @@ _EXPECTED_TABLES = {
     "recordings",
     "system_events",
     "users",
+    "audit_log",
 }
 
 
@@ -48,7 +49,7 @@ async def _reset_schema(settings) -> None:
             text(
                 "DROP TABLE IF EXISTS snapshots, recordings, incident_events, incidents, "
                 "human_review_items, camera_stream_profiles, camera_calibrations, users, "
-                "system_events, cameras, alembic_version CASCADE"
+                "system_events, cameras, audit_log, alembic_version CASCADE"
             )
         )
         await conn.execute(text("DROP TYPE IF EXISTS incident_status, incident_type, threat_level"))
