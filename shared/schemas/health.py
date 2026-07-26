@@ -1,7 +1,8 @@
 """Health monitoring API schemas.
 
 Source: docs/FRONTEND_BACKEND_CONTRACTS.md — System Health section.
-  GET /health/system, GET /health/gpu, GET /health/storage, GET /health/cameras
+  GET /health/system, GET /health/gpu, GET /health/storage, GET /health/recording,
+  GET /health/cameras
 """
 
 from __future__ import annotations

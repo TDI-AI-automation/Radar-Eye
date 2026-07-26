@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Generic, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.models.base import Base
@@ -40,3 +40,7 @@ class Repository(Generic[ModelT]):
     async def list(self) -> Sequence[ModelT]:
         result = await self._session.execute(select(self.model))
         return result.scalars().all()
+
+    async def count(self) -> int:
+        result = await self._session.execute(select(func.count()).select_from(self.model))
+        return result.scalar_one()

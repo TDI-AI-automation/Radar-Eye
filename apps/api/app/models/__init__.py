@@ -7,6 +7,7 @@ of tables.
 
 from __future__ import annotations
 
+from apps.api.app.models.audit_log import AuditLog
 from apps.api.app.models.base import Base
 from apps.api.app.models.camera import Camera, CameraCalibration, CameraStreamProfile
 from apps.api.app.models.human_review import HumanReviewItem
@@ -16,6 +17,7 @@ from apps.api.app.models.system_event import SystemEvent
 from apps.api.app.models.user import User
 
 __all__ = [
+    "AuditLog",
     "Base",
     "Camera",
     "CameraCalibration",
