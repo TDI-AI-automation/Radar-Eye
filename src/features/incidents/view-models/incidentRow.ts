@@ -31,3 +31,25 @@ export function buildIncidentRowViewModel(
     status: incident.status,
   };
 }
+
+export interface IncidentStatusCounts {
+  open: number;
+  acknowledged: number;
+  resolved: number;
+}
+
+/** Same category of aggregation as features/analytics/view-models'
+ * buildIncidentStatusCounts() -- kept here instead of inline in
+ * routes/incidents.tsx for the same reason: display-count aggregation is
+ * view-model work, not a route component's job. */
+export function buildIncidentStatusCounts(incidents: IncidentSummary[]): IncidentStatusCounts {
+  let open = 0;
+  let acknowledged = 0;
+  let resolved = 0;
+  for (const i of incidents) {
+    if (i.status === "NEW" || i.status === "ACTIVE") open += 1;
+    if (i.status === "ACKNOWLEDGED") acknowledged += 1;
+    if (i.status === "RESOLVED" || i.status === "ARCHIVED") resolved += 1;
+  }
+  return { open, acknowledged, resolved };
+}

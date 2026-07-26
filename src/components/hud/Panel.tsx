@@ -64,7 +64,13 @@ export function StatTile({
   );
 }
 
-export function Bar({ value, tone = "cyan" }: { value: number; tone?: "cyan" | "amber" | "red" | "success" }) {
+export function Bar({
+  value,
+  tone = "cyan",
+}: {
+  value: number;
+  tone?: "cyan" | "amber" | "red" | "success";
+}) {
   const colorVar = {
     cyan: "var(--primary)",
     amber: "var(--amber-glow)",
@@ -81,18 +87,5 @@ export function Bar({ value, tone = "cyan" }: { value: number; tone?: "cyan" | "
         }}
       />
     </div>
-  );
-}
-
-export function LevelBadge({ level }: { level: 1 | 2 | 3 }) {
-  const cfg = {
-    1: { label: "L1", cls: "text-primary border-primary/60 bg-primary/10" },
-    2: { label: "L2", cls: "text-amber-glow border-amber-glow/60 bg-amber-glow/10" },
-    3: { label: "L3", cls: "text-red-glow border-red-glow/70 bg-red-glow/10" },
-  }[level];
-  return (
-    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-widest ${cfg.cls}`}>
-      {cfg.label}
-    </span>
   );
 }

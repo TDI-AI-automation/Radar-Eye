@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { Panel, Bar } from "@/components/hud/Panel";
 import { LoadingState, ErrorState } from "@/components/shared/QueryState";
+import { DisabledFeaturePanel } from "@/components/shared/DisabledFeaturePanel";
 import { Cpu, HardDrive, Database, Camera as CameraIcon } from "lucide-react";
 import {
   useSystemHealth,
@@ -209,10 +210,7 @@ function Health() {
         </Panel>
 
         <Panel title="Event Log Stream">
-          <span className="font-mono text-[11px] text-muted-foreground">
-            Not yet available — awaiting a GET /audit-log endpoint (docs/FRONTEND_ARCHITECTURE.md
-            §10).
-          </span>
+          <DisabledFeaturePanel reason="Not yet available — awaiting a GET /audit-log endpoint (docs/FRONTEND_ARCHITECTURE.md §10)." />
         </Panel>
       </div>
     </div>

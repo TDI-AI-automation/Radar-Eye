@@ -10,11 +10,13 @@ import {
   useIncidentEvents,
   useTransitionIncident,
 } from "@/features/incidents/hooks/useIncidents";
-import { buildIncidentRowViewModel } from "@/features/incidents/view-models/incidentRow";
+import {
+  buildIncidentRowViewModel,
+  buildIncidentStatusCounts,
+} from "@/features/incidents/view-models/incidentRow";
 import { useCameras } from "@/queries/useCameras";
 import { usePermission } from "@/auth/usePermission";
 import { useVideoHandle } from "@/video/VideoProviderContext";
-import type { IncidentSummary } from "@/domain/models/IncidentSummary";
 
 export const Route = createFileRoute("/incidents")({
   head: () => ({
@@ -60,7 +62,10 @@ function Incidents() {
     [incidentsQuery.data, cameraNameById],
   );
 
-  const counts = useMemo(() => countByStatus(incidentsQuery.data ?? []), [incidentsQuery.data]);
+  const counts = useMemo(
+    () => buildIncidentStatusCounts(incidentsQuery.data ?? []),
+    [incidentsQuery.data],
+  );
   const effectiveSelectedId = selectedId ?? rows[0]?.id ?? null;
 
   return (
@@ -209,18 +214,6 @@ function IncidentDetail({ incidentId }: { incidentId: string }) {
       )}
     </Panel>
   );
-}
-
-function countByStatus(incidents: IncidentSummary[]) {
-  let open = 0;
-  let acknowledged = 0;
-  let resolved = 0;
-  for (const i of incidents) {
-    if (i.status === "NEW" || i.status === "ACTIVE") open += 1;
-    if (i.status === "ACKNOWLEDGED") acknowledged += 1;
-    if (i.status === "RESOLVED" || i.status === "ARCHIVED") resolved += 1;
-  }
-  return { open, acknowledged, resolved };
 }
 
 function MiniStat({

@@ -1,11 +1,13 @@
 # Radar Eye Command — Frontend Architecture
 
-**Status:** RM-13 Phase 3 (New Screens) complete pending review — Threat
-Review Center, Calibration Center, and Evidence Viewer added, completing
-the operational core. Live Monitoring, Tactical Map, and Settings remain
-on mock data, scoped for a later phase. Builds on Phase 0 (Architecture
-Setup, approved), Phase 1 (Infrastructure, approved), and Phase 2
-(Existing-Screen Migration, approved). This document is the reference
+**Status:** RM-13 final migration phase complete pending review — every
+screen (Live Monitoring, Tactical Map, Cameras, Incidents, Threat Review
+Center, Calibration Center, Evidence Viewer, AI Analytics, System Health,
+Settings) now runs on real backend data; the Lovable prototype's mock
+data and mock-only components are fully retired (§18, §19). Builds on
+Phase 0 (Architecture Setup, approved), Phase 1 (Infrastructure,
+approved), Phase 2 (Existing-Screen Migration, approved), and Phase 3
+(New Screens, approved). This document is the reference
 architecture for this milestone and every frontend milestone after it. It
 describes the *target* production architecture; where Phase 0 has only
 defined an interface or written a design-only piece, that's stated
@@ -298,11 +300,10 @@ second feature needs is promoted to `components/shared/`, `domain/`, or
 needing the same thing, that's the signal to promote it, not to import
 across the feature boundary.
 
-Planned features (§ RM-13 scope): `live-monitoring`, `incidents`,
-`tactical-map`, `cameras`, `analytics`, `health`, `settings`,
-`threat-review`, `calibration`, `evidence`, `auth`. All except
-`live-monitoring`/`tactical-map`/`settings` are built as of Phase 3
-(§14, §15).
+Features (§ RM-13 scope): `live-monitoring`, `incidents`, `tactical-map`,
+`cameras`, `analytics`, `health`, `settings`, `threat-review`,
+`calibration`, `evidence`, `auth`. All built as of the final migration
+phase (§14, §15, §18).
 
 ---
 
@@ -637,3 +638,106 @@ Set so RM-14+ planning has a concrete trigger instead of a vague "if it gets slo
 | Calibration Center | Full historical calibration log rendered as one table | Pagination needed above ~500 rows — an append-only, low-frequency table, unlikely to hit this soon, but has no ceiling today |
 
 These thresholds are about client-side rendering/interaction cost, not about the backend gaps in §16 (e.g. Evidence's lack of server-side pagination is the *precondition* for hitting the first row above, not the same issue).
+
+---
+
+## 18. Final migration phase: Live Monitoring, Tactical Map, Settings
+
+The last three prototype screens, framed as system integration rather than
+isolated migrations — every hook/domain model/view model used below
+already existed from Phases 1–3; nothing new was built to support them
+except `useActiveThreats` (`queries/useThreats.ts`, the one REST domain
+with no prior consumer) and `User`/`useUsers` (Settings' Roles & Users tab).
+
+**Live Monitoring** (`routes/index.tsx`): the prototype's bounding-box
+detection overlay and autoplay demo video are dropped, not replaced —
+§8 already flagged in Phase 0 that no bounding-box coordinates or live
+video delivery mechanism exist on the backend; this is that flag acted
+on, not a new finding. `components/hud/CameraTile.tsx` (fabricated
+fps/latency/confidence/health/detections props) is replaced by
+`components/shared/LiveCameraTile.tsx`, which renders only real data:
+`VideoProvider`'s honest "No Signal" state, real per-camera fps
+(nullable), and active threats as `ThreatLevelBadge` chips instead of
+pixel-space boxes. Alerts/incidents reuse `useIncidents()` and
+`useTransitionIncident()` from Incident Center unchanged — the same
+Acknowledge action, not a second implementation. System Load (CPU/
+Memory/Network — no backend source, §16) and the Radar Sweep panel
+(fabricated blip positions — no spatial data, same root cause as Tactical
+Map below) are dropped; GPU and Active Threats (real) take their place.
+
+**Tactical Map** (`routes/map.tsx`): the prototype was entirely
+coordinate-driven (x/y percent positions, rotation/FOV cones, patrol
+routes, blind-spot polygons) with zero backend source for any of it —
+`CameraSchema.location` is free text, never a coordinate (flagged since
+Phase 0 §8/§11, tracked in §16). Per the explicit instruction not to
+implement synthetic map intelligence, this is rebuilt as an honest
+operational status board grouped by the real `location` string, with a
+visible banner explaining *why* there's no positioned map rather than
+silently downgrading. If camera geo-coordinates are ever added, a real
+spatial view can replace this without touching any other screen — the
+same `Camera`/`ThreatAssessment` domain models and query hooks feed both.
+
+**Settings** (`routes/settings.tsx`): reorganized into three real
+categories per the review's instruction. *Administrative* (real): Roles &
+Users, the first use of a new `User` domain model
+(`domain/models/User.ts`) and `GET/PATCH /users` — admin-gated per §12's
+already-resolved facts-vs-authorization rule (`User.role` is a plain
+fact; the admin-only gate is `usePermission("admin")`, not a method on
+the entity). *Fixed policy* (real but not editable): Recording Policy,
+restated to exactly what CLAUDE.md's Recording Rules state, with
+specifics the prototype invented (a 180-day snapshot retention, a ±30s
+clip buffer, AES-256/TLS1.3 specifics stated nowhere) removed rather than
+kept. *Unavailable* (explicit disabled state, not removed): AI Model and
+Notifications (`docs/OPEN_QUESTIONS.md` Q-014, tracked since Phase 0
+§10), and Audit Log (no `GET /audit-log`, §16 Tier 1). The prototype's
+"System" tab (language selector with no i18n infrastructure anywhere in
+the app, an animation toggle with no wiring, a fabricated backup schedule
+and version string) is dropped entirely — nothing in it was real, and
+none of it was worth building as an isolated local-only feature with no
+connection to anything else in RM-13's scope.
+
+**Dead prototype code removed** once nothing referenced it: `lib/mock-data.ts`,
+`components/hud/CameraTile.tsx`, `lib/hud-hooks.ts` (`useTick`/
+`useAnimatedNumber`, built only to animate the old index.tsx's fabricated
+numbers), and `Panel.tsx`'s `LevelBadge` (the prototype's fabricated 1/2/3
+threat-level badge, fully superseded by `ThreatLevelBadge`). Verified
+unreferenced via repo-wide grep before deletion, not assumed.
+
+---
+
+## 19. RM-13 exit audit
+
+Run against the final-phase review's explicit checklist, with the actual
+commands used, not asserted from memory:
+
+| Check | Result |
+|---|---|
+| No mock-data imports remain anywhere | `grep -rn "mock-data" src/` → zero matches. The file itself is deleted (§18). |
+| No direct `fetch()` usage | `grep` for `fetch(` outside `.refetch()` calls → zero matches outside `src/server.ts` (TanStack Start's SSR entry, an unrelated `.fetch(request, env, ctx)` handler signature, not a network call, never touched this session). |
+| No DTOs inside UI components | `grep -rln "api/generated/schema" src/routes/` → zero matches. Every route consumes domain/view-model types only. |
+| No business logic inside React components | Spot-checked; one real inconsistency found and fixed (§ — `incidents.tsx`'s inline status-counting extracted to `buildIncidentStatusCounts()` in the view-model layer, matching Analytics' existing pattern). |
+| Query keys centralized | `grep -rn "queryKey: \[" src/` → zero matches; every query key comes from `queryKeys.ts`. |
+| Domain models used consistently | Every REST domain has one: `Camera`, `ThreatAssessment`, `Incident`/`IncidentSummary`, `HumanReviewItem`, `CameraCalibration`, `Evidence`, `User`. Analytics/Health remain the one documented pass-through exception (§11 Finding 3). |
+| View models used consistently | Every list-rendering screen has a `view-models/` module joining domain data with display concerns (camera-name joins, status counts, filters). |
+| Video abstraction preserved | `grep -rn "PlaceholderVideoProvider"` outside `src/video/` → one match, a docstring comment, not an import. `grep` for raw `<video>`/`<img src=` outside `Evidence Viewer` (a legitimately different case — archived-file blob preview, not live video, per `VideoProvider`'s own docstring distinguishing the two) → zero. |
+| Authentication enforced | `RouteGuard` wraps every route except `/login` (`routes/__root.tsx`'s `AppShell`), unchanged since Phase 1. |
+| Permissions enforced | `usePermission()` gates every mutation-capable screen: Cameras (admin), Incidents (operator), Reviews (operator), Calibration (operator), Settings' Roles tab (admin), Live Monitoring's inline Acknowledge (operator). Evidence/Analytics/Health have no mutations to gate. |
+| Generated OpenAPI types remain current | Re-exported `apps/api/app/main.py`'s live schema and regenerated with `openapi-typescript` — `diff` against the committed `src/api/generated/schema.d.ts` is empty. No backend change happened during RM-13 after Phase 1's export. |
+| Documentation synchronized | This document, §§14–19, updated alongside every phase's code, not after the fact. |
+
+**Compile/lint status at exit:** `bunx tsc --noEmit` exits 0. Repo-wide
+`eslint` — **0 errors** (down from Phase 2's 84, all of which were in
+prototype files now either migrated or deleted), 9 warnings, all the same
+pre-existing `react-refresh/only-export-components` advisory pattern
+(co-locating a context provider with its hook), none newly introduced.
+
+**What "prototype" means now:** every screen in the nav consumes real
+backend data through the DTO → mapper → domain → query → view model → UI
+pipeline, with every deviation from the original Lovable prototype
+recorded (§§14, 15, 18) rather than silently made. The two remaining
+categories of incompleteness are not frontend gaps: backend capabilities
+not yet exposed (§16, prioritized for RM-14+) and client-side performance
+headroom with no current trigger (§17). Per the review's stated exit
+criteria — "complete only when the prototype has been fully retired and
+the production architecture is uniformly applied across the entire
+frontend" — both conditions are met as of this phase.
