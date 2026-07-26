@@ -614,3 +614,26 @@ findings (§11's two gaps are cross-referenced, not duplicated).
 | Evidence download responses don't expose the original filename/extension/content-type | Evidence Viewer | The suggested save-as filename is a best-effort guess (`snapshot-{id}.jpg` / `recording-{id}.mp4`), not sourced from the backend. |
 | `HumanReviewSchema` has no `created_at`/timestamp field | Threat Review Center | The review queue cannot be sorted or aged chronologically — every other list-bearing schema (Incident, Camera, Recording) has one; this one doesn't. |
 | Recordings are stored as H.265; browser `<video>` playback support is unreliable | Evidence Viewer | Inline preview is best-effort; download (the raw, unmodified file) always works regardless. Not fixable frontend-side — a transcode-on-demand or a browser-compatible mezzanine format would be a backend/DeepStream-side decision. |
+
+**Priority for RM-14+ triage** (set at the Phase 3 review, not by the frontend):
+
+- **Tier 1 (highest impact):** live/reference frame endpoint for calibration; `HumanReviewItem` timestamps; `GET /audit-log`; WS schema generation or a contract test.
+- **Tier 2:** evidence/reviews pagination; recording streaming/range-request support; `/ws/reviews` completion events; richer analytics endpoints.
+- **Tier 3:** expanded camera configuration; additional operational/dashboard metrics.
+
+This is a backlog for backend milestones, not a to-do list for the frontend — no item above is to be worked around or simulated client-side.
+
+---
+
+## 17. Performance thresholds (objective criteria for future work)
+
+Set so RM-14+ planning has a concrete trigger instead of a vague "if it gets slow." These are engineering judgment calls made now, not measurements taken under real production load (this deployment has 20 cameras and no production evidence/review volume yet) — revisit the numbers once real volume exists, don't treat them as validated.
+
+| Screen | Current approach | Threshold that would require work |
+|---|---|---|
+| Evidence Viewer | Fetches the entire `GET /evidence` table, filters client-side | Pagination/server-side filtering needed above ~1,000 items — comfortably below what a single unpaginated `<select>`/grid can render and filter smoothly in-browser |
+| Evidence Viewer (recording preview) | Fetches the whole file as a `Blob` before playback | Streaming/range-request support needed above ~200 MB per recording — the point at which a full-file `Blob` fetch starts to noticeably delay preview and pressure browser memory on a kiosk-class device |
+| Threat Review Center | Renders the full open-queue as a plain list, no virtualization | Virtualization needed above ~100 simultaneously visible rows — the usual point a plain DOM list starts costing noticeable render/scroll performance |
+| Calibration Center | Full historical calibration log rendered as one table | Pagination needed above ~500 rows — an append-only, low-frequency table, unlikely to hit this soon, but has no ceiling today |
+
+These thresholds are about client-side rendering/interaction cost, not about the backend gaps in §16 (e.g. Evidence's lack of server-side pagination is the *precondition* for hitting the first row above, not the same issue).
