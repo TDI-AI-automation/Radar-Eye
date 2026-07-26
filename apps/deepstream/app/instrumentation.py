@@ -73,6 +73,8 @@ class PerformanceSnapshot:
     threat_throughput_per_sec: float | None
     alarm_throughput_per_sec: float | None
     incident_throughput_per_sec: float | None
+    visualization_fps: float | None
+    overlay_time_avg_ms: float | None
 
 
 @dataclass
@@ -196,6 +198,8 @@ class PerformanceInstrumentation:
         self._threat_rate = _RollingRateCounter()
         self._alarm_rate = _RollingRateCounter()
         self._incident_rate = _RollingRateCounter()
+        self._visualization_rate = _RollingRateCounter()
+        self._overlay_time_samples_ms: deque[float] = deque(maxlen=_LATENCY_WINDOW_SIZE)
 
     def mark_pipeline_build_start(self) -> None:
         self._build_started_at = time.monotonic()
@@ -231,6 +235,18 @@ class PerformanceInstrumentation:
     def record_incident(self) -> None:
         self._incident_rate.record()
 
+    def record_visualization_frame(self, *, overlay_time_ms: float) -> None:
+        """Called once per frame from the OSD renderer's probe callback
+        (RM-11.SIV visualization subsystem). In the visualization branch's
+        linear topology (tee -> queue -> convert -> OSD -> convert ->
+        encode -> parse -> pay -> udpsink, no further branching or
+        frame-dropping stage after this point), this one rate is reported
+        as Visualization/Encoder/RTSP Publish FPS -- see
+        docs/SIV_BASELINE.md -- rather than instrumenting three separate
+        counters that would only ever report identical values here."""
+        self._visualization_rate.record()
+        self._overlay_time_samples_ms.append(overlay_time_ms)
+
     def sample_system_metrics(self) -> None:
         """Expensive (subprocess + file I/O) -- call on a slow periodic
         timer only, never per-frame."""
@@ -262,6 +278,11 @@ class PerformanceInstrumentation:
             return None
         return sum(self._latency_samples_ms) / len(self._latency_samples_ms)
 
+    def _overlay_time_avg_ms(self) -> float | None:
+        if not self._overlay_time_samples_ms:
+            return None
+        return sum(self._overlay_time_samples_ms) / len(self._overlay_time_samples_ms)
+
     def snapshot(self) -> PerformanceSnapshot:
         pipeline_startup_seconds = None
         if self._build_started_at is not None and self._playing_at is not None:
@@ -285,4 +306,6 @@ class PerformanceInstrumentation:
             threat_throughput_per_sec=self._threat_rate.rate_per_second(),
             alarm_throughput_per_sec=self._alarm_rate.rate_per_second(),
             incident_throughput_per_sec=self._incident_rate.rate_per_second(),
+            visualization_fps=self._visualization_rate.rate_per_second(),
+            overlay_time_avg_ms=self._overlay_time_avg_ms(),
         )

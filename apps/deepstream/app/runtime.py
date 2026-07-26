@@ -38,7 +38,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.bridge import AsyncBridge
-from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings, ValidationSettings
+from apps.deepstream.app.config import (
+    DeepStreamSettings,
+    ModelsSettings,
+    ValidationSettings,
+    VisualizationSettings,
+)
 from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatScheduler
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
@@ -50,6 +55,7 @@ from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from apps.deepstream.app.stage_logging import get_audit_logger
 from apps.deepstream.app.threat_runtime_adapter import ThreatEngineRuntimeAdapter
+from apps.deepstream.app.visualization.manager import VisualizationManager
 from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
 
@@ -75,6 +81,7 @@ class DeepStreamRuntime:
         settings: DeepStreamSettings,
         models: ModelsSettings,
         validation: ValidationSettings,
+        visualization: VisualizationSettings,
         session_factory: async_sessionmaker[AsyncSession],
         bus: EventBus,
         encryption: Any,
@@ -93,6 +100,13 @@ class DeepStreamRuntime:
         # can wire them up without reaching into private state.
         self.heartbeat_registry = HeartbeatRegistry()
         self._tracer = PipelineTracer(enabled=validation.frame_trace.enabled)
+
+        self.visualization_manager = VisualizationManager(visualization)
+        """RM-11.SIV visualization subsystem -- public (matching
+        heartbeat_registry/instrumentation above) so scripts/run_siv.py's
+        dashboard/watchdog can read .health() later without reaching into
+        private state. Always constructed regardless of
+        visualization.enabled -- see manager.py's own docstring for why."""
 
         # RM-11.SIV Decision C: placeholder status now comes from
         # configs/models.yaml (pgie.enabled/sgie.enabled), not
@@ -127,6 +141,7 @@ class DeepStreamRuntime:
             heartbeat=self.heartbeat_registry,
             tracer=self._tracer,
             instrumentation=self._instrumentation,
+            track_annotations=self.visualization_manager.track_annotations,
         )
 
         self._frame_counter = FrameCounter()
@@ -139,6 +154,8 @@ class DeepStreamRuntime:
             on_inference_buffer=self._on_inference_buffer,
             heartbeat=self.heartbeat_registry,
             instrumentation=self._instrumentation,
+            visualization_settings=visualization,
+            visualization_manager=self.visualization_manager,
         )
         self._policies: dict[uuid.UUID, ReconnectPolicy] = {}
         self._heartbeat: HeartbeatScheduler | None = None

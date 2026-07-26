@@ -24,12 +24,13 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings
+from apps.deepstream.app.config import DeepStreamSettings, ModelsSettings, VisualizationSettings
 from apps.deepstream.app.health.heartbeat import FrameCounter
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.models_config import ModelConfigResolver
+from apps.deepstream.app.visualization.manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,8 @@ class DeepStreamPipeline:
         model_config_resolver: ModelConfigResolver | None = None,
         heartbeat: HeartbeatRegistry | None = None,
         instrumentation: PerformanceInstrumentation | None = None,
+        visualization_settings: VisualizationSettings | None = None,
+        visualization_manager: VisualizationManager | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
@@ -86,6 +89,20 @@ class DeepStreamPipeline:
         """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
         identical pattern. Fed by pad probes below (pgie/tracker/sgie
         element-level liveness) and _count_frame_probe (rtsp)."""
+        self._visualization_settings = visualization_settings
+        self._visualization_manager = visualization_manager
+        """RM-11.SIV visualization subsystem -- both optional/None-safe,
+        matching heartbeat/instrumentation's pattern above. Only used when
+        visualization_settings.enabled and .stream_output_enabled are both
+        true (see build()); otherwise the pipeline is byte-for-byte
+        identical to before this subsystem existed. initialize()/start()
+        happen in add_source() rather than build() -- the visualization
+        renderer needs a fixed camera_id (RM-11.SIV validates a single
+        camera) that isn't known until the first camera source is added;
+        build() only constructs the topology-level tee + metadata branch,
+        which is camera-independent."""
+        self._visualization_tee: Any = None
+        self._visualization_initialized = False
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
         self._on_inference_buffer = on_inference_buffer
@@ -160,7 +177,46 @@ class DeepStreamPipeline:
         streammux.link(pgie)
         pgie.link(tracker)
         tracker.link(sgie)
-        sgie.link(fakesink)
+
+        if (
+            self._visualization_settings is not None
+            and self._visualization_settings.enabled
+            and self._visualization_settings.stream_output_enabled
+        ):
+            # Visualization branch requested -- fork the shared metadata
+            # branch (unchanged: sgie -> fakesink, now via a queue off the
+            # tee) from the new visualization branch. Only the tee itself
+            # and this metadata-queue are built here; everything downstream
+            # of the tee's second pad is VisualizationPipelineBuilder's
+            # exclusive responsibility (see visualization/pipeline_builder.py).
+            #
+            # buffer-pool-size: nvstreammux's own default (4) is tuned for
+            # this pipeline's single original consumer -- raised for a
+            # second consumer's extra headroom. Not, on its own, the fix for
+            # the real corruption bug found during RM-11.SIV Phase 5
+            # hardware verification (see pipeline_builder.py's
+            # disable-passthrough comment for the actual root cause and fix)
+            # -- kept anyway since two consumers genuinely do need more
+            # pool headroom than one.
+            streammux.set_property("buffer-pool-size", 16)
+            tee = Gst.ElementFactory.make("tee", "viz-tee")
+            if tee is None:
+                raise RuntimeError("Failed to create tee (viz-tee)")
+            self._pipeline.add(tee)
+            metadata_queue = Gst.ElementFactory.make("queue", "metadata-queue")
+            if metadata_queue is None:
+                raise RuntimeError("Failed to create queue (metadata-queue)")
+            self._pipeline.add(metadata_queue)
+
+            sgie.link(tee)
+            tee.link(metadata_queue)
+            metadata_queue.link(fakesink)
+            self._visualization_tee = tee
+        else:
+            # Disabled (default): identical to this pipeline's behavior
+            # before the visualization subsystem existed -- no tee, no
+            # extra queue, nothing else constructed.
+            sgie.link(fakesink)
 
         # Heartbeat FPS counting (Phase 0, RM-09 integration) -- unchanged,
         # still counts every batched frame regardless of inference result.
@@ -277,6 +333,36 @@ class DeepStreamPipeline:
         self._pad_index_to_camera_id[pad_index] = source.camera_id
         bin_.sync_state_with_parent()
 
+        # Visualization renderer needs a fixed camera_id (RM-11.SIV
+        # validates a single camera), only known once a camera is actually
+        # added -- see __init__'s docstring for why this can't happen in
+        # build(). Guarded to run once: add_source() is also called again
+        # from the reconnect path for an already-known camera, which must
+        # never re-initialize (or fail trying to reuse) the branch built
+        # once during the pipeline's lifetime. Failure isolation: visualization
+        # must never prevent the camera source itself from being wired up.
+        if (
+            self._visualization_tee is not None
+            and self._visualization_manager is not None
+            and not self._visualization_initialized
+        ):
+            self._visualization_initialized = True
+            try:
+                self._visualization_manager.initialize(
+                    self._pipeline,
+                    self._visualization_tee,
+                    camera_id=source.camera_id,
+                    camera_name=source.camera.name,
+                    instrumentation=self._instrumentation,
+                )
+                self._visualization_manager.start()
+            except Exception as exc:  # noqa: BLE001 -- must never take inference down with it
+                logger.exception(
+                    "Visualization failed to start -- continuing without it "
+                    "(inference is unaffected)"
+                )
+                self._visualization_manager.mark_failed(str(exc))
+
     def remove_source(self, camera_id: uuid.UUID) -> None:
         source = self._sources.pop(camera_id, None)
         sink_pad = self._request_pads.pop(camera_id, None)
@@ -295,6 +381,8 @@ class DeepStreamPipeline:
         self._pipeline.set_state(Gst.State.PLAYING)
 
     def stop(self) -> None:
+        if self._visualization_manager is not None:
+            self._visualization_manager.stop()
         if self._pipeline is not None:
             self._pipeline.set_state(_import_gst().State.NULL)
 

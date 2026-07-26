@@ -1,0 +1,61 @@
+=== apps/deepstream/app/visualization/stream_server.py (RtspStreamServer.start()) ===
+    def start(self) -> None:
+        """Raises on failure (e.g. ``rtsp_port`` already bound by another
+        process) -- the caller (``VisualizationManager.start()``, called
+        from ``builder.py``'s failure-isolation ``try/except``) is expected
+        to catch it, same shared path as every other visualization
+        construction failure."""
+        GstRtspServer, _Gst = _import_gst_rtsp_server()
+
+        server = GstRtspServer.RTSPServer()
+        server.set_service(str(self._rtsp_port))
+
+        factory = GstRtspServer.RTSPMediaFactory()
+        # name=pay0 is required, not cosmetic -- GstRtspServer's SDP
+        # generation specifically looks for an element named pay0 (or
+        # pay%d for multiple streams) to identify the payload source; a
+        # bare unnamed udpsrc attaches successfully (attach() only proves
+        # the server bound its port) but a real client's DESCRIBE/SETUP
+        # then fails with "SDP contains no streams" -- caught via a real
+        # gst-launch-1.0 RTSP client during Phase 5 hardware verification,
+        # not visible in the manager-level smoke tests from Phase 3.
+        factory.set_launch(
+            f'( udpsrc name=pay0 port={self._udp_port} caps="application/x-rtp, media=video, '
+            f'clock-rate=90000, encoding-name=H264, payload=96" )'
+        )
+        factory.set_shared(True)
+        server.get_mount_points().add_factory(f"/{self._stream_name}", factory)
+
+        source_id = server.attach(None)
+        if source_id == 0:
+            raise RuntimeError(
+                f"Failed to attach RTSP server on port {self._rtsp_port} "
+                "(already in use by another process?)"
+            )
+
+        self._server = server
+        self._source_id = source_id
+        self._running = True
+        self._reason = None
+
+=== Runtime-queried GstRtspServer defaults (this machine's GstRtspServer build) ===
+suspend_mode: GST_RTSP_SUSPEND_MODE_NONE (library default -- our code does not override it)
+transport_mode: GST_RTSP_TRANSPORT_MODE_PLAY (library default -- correct, this is a live stream, not RECORD)
+shared: our code explicitly sets True via factory.set_shared(True) (library default is False)
+stop_on_disconnect: True (library default -- our code does not override it)
+latency: 200ms jitter-buffer default (library default -- our code does not override it)
+protocols: UDP unicast + UDP multicast + TCP all enabled (library default -- our code does not restrict it; TCP-interleaved fallback IS available)
+
+=== Summary (as actually configured, apps/deepstream/app/visualization/stream_server.py) ===
+service port:    8554 (configs/visualization.yaml: rtsp_port) -- CONFIRMED LISTENING (Step 1, previous round)
+mount point:     /radar-eye (configs/visualization.yaml: stream_name) -- CONFIRMED REACHABLE (Step 3 DESCRIBE succeeded against this exact path)
+media factory:   launch string "( udpsrc name=pay0 port=<internal UDP port> caps=... )" -- proxies an
+                 already-encoded UDP/RTP stream from our own separate visualization pipeline's
+                 rtph264pay, rather than encoding inside the RTSP media factory's own pipeline.
+                 This is why GstRtspServer cannot introspect a live rtph264pay element to auto-populate
+                 the SDP's a=fmtp sprop-parameter-sets attribute (Step 3 finding) -- there is no
+                 rtph264pay element inside THIS pipeline for it to inspect, only a udpsrc relay.
+shared:          True (explicit, correct for multiple simultaneous clients sharing one relay)
+suspend_mode:    library default (NONE)
+transport modes: library default (PLAY only, correct)
+protocols:       library default (UDP unicast + UDP multicast + TCP all available)

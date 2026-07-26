@@ -44,6 +44,7 @@ from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.observations import DetectionObservation, FrameObservation
 from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
+from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry
 from services.calibration.service import CalibrationService
 from services.calibration.types import CalibrationNotFoundError
 from services.incident_service.alarm import AlarmService
@@ -103,6 +104,7 @@ class ThreatEngineRuntimeAdapter:
         heartbeat: HeartbeatRegistry | None = None,
         tracer: PipelineTracer | None = None,
         instrumentation: PerformanceInstrumentation | None = None,
+        track_annotations: TrackAnnotationRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._bus = bus
@@ -117,6 +119,12 @@ class ThreatEngineRuntimeAdapter:
         self._tracer = tracer or PipelineTracer(enabled=False)
         self._instrumentation = instrumentation
         """RM-11.SIV Task 7 throughput counters -- optional, None-safe."""
+        self._track_annotations = track_annotations
+        """RM-11.SIV visualization subsystem -- optional, None-safe, same
+        idiom as heartbeat/instrumentation above. The OSD renderer (a
+        different thread, apps/deepstream/app/visualization/osd_renderer.py)
+        reads what gets written here by (camera_id, track_id) -- this class
+        never reads it back."""
 
     def _beat(self, component: str, *, reason: str | None = None) -> None:
         if self._heartbeat is not None:
@@ -155,6 +163,8 @@ class ThreatEngineRuntimeAdapter:
                 )
                 return
 
+        assert detection.track_id is not None  # narrowed by on_frame_observation's guard
+
         self._beat("calibration", reason=f"zone={distance.zone.value}")
         _calibration_logger.debug(
             "Calibration result: camera=%s track=%d zone=%s distance=%.1fm",
@@ -163,6 +173,13 @@ class ThreatEngineRuntimeAdapter:
             distance.zone.value,
             distance.distance_meters,
         )
+        if self._track_annotations is not None:
+            self._track_annotations.update(
+                observation.camera_id,
+                detection.track_id,
+                zone=distance.zone.value,
+                distance_meters=distance.distance_meters,
+            )
         frame_correlation_id = self._tracer.frame_id(observation.camera_id, observation.frame_num)
         if self._tracer.enabled:
             self._tracer.calibration_result(
@@ -171,7 +188,6 @@ class ThreatEngineRuntimeAdapter:
                 distance_meters=distance.distance_meters,
             )
 
-        assert detection.track_id is not None  # narrowed by on_frame_observation's guard
         results = self._threat_engine.ingest(
             camera_id=observation.camera_id,
             track_id=detection.track_id,
@@ -208,6 +224,13 @@ class ThreatEngineRuntimeAdapter:
             return
 
         if isinstance(result.payload, ThreatAssessmentPayload):
+            if self._track_annotations is not None:
+                self._track_annotations.update(
+                    result.payload.camera_id,
+                    result.payload.track_id,
+                    threat_level=result.payload.threat_level.value,
+                    rule_id=result.payload.rule_id,
+                )
             if self._instrumentation is not None:
                 self._instrumentation.record_threat_assessment()
             if self._tracer.enabled:

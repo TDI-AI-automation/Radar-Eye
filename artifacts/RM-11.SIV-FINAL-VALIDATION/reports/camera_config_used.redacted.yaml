@@ -1,0 +1,15 @@
+# RM-11.SIV -- camera bootstrap input (Decision A). Gitignored, never committed.
+
+camera_id: hikvision-gate-01
+friendly_name: "Hikvision Gate Camera"
+rtsp_url: rtsp://192.168.68.10:554/Streaming/Channels/101
+username: ***REDACTED***
+password: ***REDACTED***
+transport: tcp
+latency_ms: 200
+resolution: [1920, 1080]
+fps: 30
+
+reconnect:
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 30.0

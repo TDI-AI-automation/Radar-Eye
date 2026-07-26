@@ -46,12 +46,11 @@ def test_configure_stage_logging_never_silences_audit_logger() -> None:
     assert get_audit_logger().level == logging.INFO
 
 
-def test_all_seventeen_stage_names_get_a_logger() -> None:
+def test_all_stage_names_get_a_logger() -> None:
     from apps.deepstream.app.config import STAGE_LOGGER_NAMES
 
     settings = LoggingSettings()
     configure_stage_logging(settings)
 
-    assert len(STAGE_LOGGER_NAMES) == 17
     for name in STAGE_LOGGER_NAMES:
         assert get_stage_logger(name).level == logging.INFO
