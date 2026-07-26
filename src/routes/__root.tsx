@@ -20,6 +20,9 @@ import {
   Shield,
   Signal,
   Wifi,
+  ShieldAlert,
+  Crosshair,
+  FolderLock,
 } from "lucide-react";
 
 import appCss from "../styles.css?url";
@@ -151,6 +154,9 @@ const NAV = [
   { to: "/map", label: "Tactical Map", icon: Radar },
   { to: "/cameras", label: "Cameras", icon: Camera },
   { to: "/incidents", label: "Incidents", icon: AlertTriangle },
+  { to: "/reviews", label: "Threat Review", icon: ShieldAlert },
+  { to: "/calibration", label: "Calibration", icon: Crosshair },
+  { to: "/evidence", label: "Evidence", icon: FolderLock },
   { to: "/analytics", label: "AI Analytics", icon: BrainCircuit },
   { to: "/health", label: "System Health", icon: HeartPulse },
   { to: "/settings", label: "Configuration", icon: Settings },

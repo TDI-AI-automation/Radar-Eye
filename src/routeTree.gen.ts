@@ -10,17 +10,25 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ReviewsRouteImport } from './routes/reviews'
 import { Route as MapRouteImport } from './routes/map'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as IncidentsRouteImport } from './routes/incidents'
 import { Route as HealthRouteImport } from './routes/health'
+import { Route as EvidenceRouteImport } from './routes/evidence'
 import { Route as CamerasRouteImport } from './routes/cameras'
+import { Route as CalibrationRouteImport } from './routes/calibration'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as IndexRouteImport } from './routes/index'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReviewsRoute = ReviewsRouteImport.update({
+  id: '/reviews',
+  path: '/reviews',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MapRoute = MapRouteImport.update({
@@ -43,9 +51,19 @@ const HealthRoute = HealthRouteImport.update({
   path: '/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const EvidenceRoute = EvidenceRouteImport.update({
+  id: '/evidence',
+  path: '/evidence',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CamerasRoute = CamerasRouteImport.update({
   id: '/cameras',
   path: '/cameras',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CalibrationRoute = CalibrationRouteImport.update({
+  id: '/calibration',
+  path: '/calibration',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AnalyticsRoute = AnalyticsRouteImport.update({
@@ -62,32 +80,41 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
+  '/calibration': typeof CalibrationRoute
   '/cameras': typeof CamerasRoute
+  '/evidence': typeof EvidenceRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
   '/login': typeof LoginRoute
   '/map': typeof MapRoute
+  '/reviews': typeof ReviewsRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
+  '/calibration': typeof CalibrationRoute
   '/cameras': typeof CamerasRoute
+  '/evidence': typeof EvidenceRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
   '/login': typeof LoginRoute
   '/map': typeof MapRoute
+  '/reviews': typeof ReviewsRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
+  '/calibration': typeof CalibrationRoute
   '/cameras': typeof CamerasRoute
+  '/evidence': typeof EvidenceRoute
   '/health': typeof HealthRoute
   '/incidents': typeof IncidentsRoute
   '/login': typeof LoginRoute
   '/map': typeof MapRoute
+  '/reviews': typeof ReviewsRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
@@ -95,42 +122,54 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/analytics'
+    | '/calibration'
     | '/cameras'
+    | '/evidence'
     | '/health'
     | '/incidents'
     | '/login'
     | '/map'
+    | '/reviews'
     | '/settings'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/analytics'
+    | '/calibration'
     | '/cameras'
+    | '/evidence'
     | '/health'
     | '/incidents'
     | '/login'
     | '/map'
+    | '/reviews'
     | '/settings'
   id:
     | '__root__'
     | '/'
     | '/analytics'
+    | '/calibration'
     | '/cameras'
+    | '/evidence'
     | '/health'
     | '/incidents'
     | '/login'
     | '/map'
+    | '/reviews'
     | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AnalyticsRoute: typeof AnalyticsRoute
+  CalibrationRoute: typeof CalibrationRoute
   CamerasRoute: typeof CamerasRoute
+  EvidenceRoute: typeof EvidenceRoute
   HealthRoute: typeof HealthRoute
   IncidentsRoute: typeof IncidentsRoute
   LoginRoute: typeof LoginRoute
   MapRoute: typeof MapRoute
+  ReviewsRoute: typeof ReviewsRoute
   SettingsRoute: typeof SettingsRoute
 }
 
@@ -141,6 +180,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reviews': {
+      id: '/reviews'
+      path: '/reviews'
+      fullPath: '/reviews'
+      preLoaderRoute: typeof ReviewsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/map': {
@@ -171,11 +217,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/evidence': {
+      id: '/evidence'
+      path: '/evidence'
+      fullPath: '/evidence'
+      preLoaderRoute: typeof EvidenceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/cameras': {
       id: '/cameras'
       path: '/cameras'
       fullPath: '/cameras'
       preLoaderRoute: typeof CamerasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calibration': {
+      id: '/calibration'
+      path: '/calibration'
+      fullPath: '/calibration'
+      preLoaderRoute: typeof CalibrationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/analytics': {
@@ -198,11 +258,14 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AnalyticsRoute: AnalyticsRoute,
+  CalibrationRoute: CalibrationRoute,
   CamerasRoute: CamerasRoute,
+  EvidenceRoute: EvidenceRoute,
   HealthRoute: HealthRoute,
   IncidentsRoute: IncidentsRoute,
   LoginRoute: LoginRoute,
   MapRoute: MapRoute,
+  ReviewsRoute: ReviewsRoute,
   SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport

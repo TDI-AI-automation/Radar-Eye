@@ -1,10 +1,11 @@
 # Radar Eye Command — Frontend Architecture
 
-**Status:** RM-13 Phase 2 (Existing-Screen Migration) complete pending
-review — Camera Management, AI Analytics, System Health, and Incident
-Center migrated; Live Monitoring and Tactical Map remain on mock data,
-scoped for a later phase. Builds on Phase 0 (Architecture Setup, approved)
-and Phase 1 (Infrastructure, approved). This document is the reference
+**Status:** RM-13 Phase 3 (New Screens) complete pending review — Threat
+Review Center, Calibration Center, and Evidence Viewer added, completing
+the operational core. Live Monitoring, Tactical Map, and Settings remain
+on mock data, scoped for a later phase. Builds on Phase 0 (Architecture
+Setup, approved), Phase 1 (Infrastructure, approved), and Phase 2
+(Existing-Screen Migration, approved). This document is the reference
 architecture for this milestone and every frontend milestone after it. It
 describes the *target* production architecture; where Phase 0 has only
 defined an interface or written a design-only piece, that's stated
@@ -299,7 +300,9 @@ across the feature boundary.
 
 Planned features (§ RM-13 scope): `live-monitoring`, `incidents`,
 `tactical-map`, `cameras`, `analytics`, `health`, `settings`,
-`threat-review` (new), `calibration` (new), `evidence` (new), `auth` (new).
+`threat-review`, `calibration`, `evidence`, `auth`. All except
+`live-monitoring`/`tactical-map`/`settings` are built as of Phase 3
+(§14, §15).
 
 ---
 
@@ -539,3 +542,75 @@ data. The equivalent `ThreatLevel` label/color mapping was extracted from
 `ThreatAssessment` into `domain/threatLevel.ts` the same way, since
 `Incident`/`IncidentSummary` needed it too and duplicating the switch
 statement would have violated "the ONLY place this mapping should exist."
+
+---
+
+## 15. Phase 3 migration record: Threat Review Center, Calibration Center, Evidence Viewer
+
+Three new screens (`routes/{reviews,calibration,evidence}.tsx`), the
+operational core per the Phase 3 review. Same pipeline as every migrated
+screen (DTO → mapper → domain → query → view model → UI), no exceptions.
+
+**Threat Review Center**: `HumanReviewItem` domain model
+(`domain/models/HumanReviewItem.ts`), one fact (`canResolve()`) backing
+all four resolution actions — `apps/api/app/routers/reviews.py::_resolve()`
+rejects any resolution once `status != "OPEN"`, identically across all
+four, so one fact covers all of them rather than four near-duplicate
+methods. Keyboard-driven per the review's "special attention" instruction:
+J/K navigate the queue, M/C/E/X arm the four actions, a second press
+within 3s confirms (armed-then-confirm, not a modal — a modal would
+defeat a keyboard-driven queue's purpose). `/ws/reviews` (creation-only,
+§11 Finding 1) invalidates the list; the documented staleTime +
+refetch-on-focus mitigation covers resolutions made by other operators.
+
+**Calibration Center**: `CameraCalibration` domain model
+(`domain/models/CameraCalibration.ts`). `referencePointCount()` is sourced
+from `services/calibration/service.py::calibrate()`'s actual persisted
+shape (`{"points": [...]}`), not the OpenAPI schema, which types
+`reference_points`/`homography_matrix` as opaque dicts — verified against
+the source, not guessed. No live/reference camera frame endpoint exists
+anywhere in RM-12 (§16 below), so reference points are entered as numeric
+coordinates rather than clicked on an image — the one real constraint
+that shaped this screen's interaction model. `useVideoHandle()` (existing
+seam, not a new placeholder) fills the space where a live view would go.
+Calibration history is a real, full historical log (`GET
+/calibration/results`, append-only per `docs/DATABASE_SCHEMA.md`), not
+just current state — matches the "engineering workstation, not an
+admin settings page" instruction.
+
+**Evidence Viewer**: `Evidence` domain model (`domain/models/Evidence.ts`).
+`apps/api/app/routers/evidence.py` has zero mutation routes for evidence —
+this UI mirrors that exactly: no rename/delete/annotate/edit affordance
+anywhere, an explicit "Read-only — evidence cannot be edited or deleted"
+notice in the detail panel, and only two actions (inline preview,
+download). Preview requires fetching the file as a Blob and creating an
+object URL (`useEvidencePreview`) rather than a plain `<img src>`/
+`<video src>`, because the download routes require a Bearer token a
+browser won't attach to a plain element `src`. Recording preview is
+best-effort only (see §16 — H.265 browser support).
+
+---
+
+## 16. Backend capability gaps (candidate RM-14+ backlog)
+
+Maintained per the Phase 3 review's explicit instruction: document, never
+work around, never invent an API. Consolidated here from every phase's
+findings (§11's two gaps are cross-referenced, not duplicated).
+
+| Gap | Screens affected | Detail |
+|---|---|---|
+| No `/ws/reviews` resolution/status-change event | Threat Review Center | §11 Finding 1. Creation-only; mitigated with staleTime + refetch-on-focus, not solved. |
+| No WS channel for periodic health metrics | System Health | §11 Finding 2. REST-polled instead. |
+| WS message schemas have no generated-type coverage | All WS-consuming screens | §13. Hand-typed in `ws/messages.ts`, manually kept in sync. |
+| No `GET /auth/me` | Auth | Username has no server source post-login; carried from the login form input (`docs/FRONTEND_ARCHITECTURE.md` §3/Phase 1). |
+| `CameraUpdateRequestSchema` supports only name/location/status | Camera Management | No resolution/codec/confidence-threshold/detection-type/privacy-mask/firmware field exists on the backend at all. |
+| `/analytics/*` are coarse aggregate counts only | AI Analytics | No time-windowed trends, precision/recall, response-time percentiles, per-sector heatmap, or weapon-frequency breakdown anywhere in RM-12. |
+| No CPU/memory/ambient-temperature/network-uplink/MQTT/notification-bus health metrics | System Health | Only GPU/storage/cameras/component-status exist. Consistent with the single-Jetson-SoC target, not necessarily a gap to close. |
+| No `GET /audit-log` (or equivalent) | System Health | Event Log Stream has no data source; shown as an explicit disabled panel. Already tracked in §10. |
+| `Incident`/`IncidentSummary` carry no weapon type, assigned operator, confidence score, escalation field, or free-text location | Incident Center | None of these exist on `IncidentSchema`/`IncidentSummarySchema`. |
+| No time-windowed incident aggregates (e.g. "resolved in the last 24h", average response time) | Incident Center, AI Analytics | `IncidentAnalyticsSchema` is all-time totals only. |
+| No server-side filtering or pagination on `GET /evidence`, `GET /recordings`, or `GET /reviews` | Evidence Viewer, Threat Review Center | Always the full table; fine at current scale (single node, 20 cameras) but worth flagging before evidence/review volume grows. |
+| No endpoint to retrieve a live or reference frame for a camera | Calibration Center | An operator cannot visually place reference points on an image; numeric entry is the only option today. The single most impactful gap for that screen's usability. |
+| Evidence download responses don't expose the original filename/extension/content-type | Evidence Viewer | The suggested save-as filename is a best-effort guess (`snapshot-{id}.jpg` / `recording-{id}.mp4`), not sourced from the backend. |
+| `HumanReviewSchema` has no `created_at`/timestamp field | Threat Review Center | The review queue cannot be sorted or aged chronologically — every other list-bearing schema (Incident, Camera, Recording) has one; this one doesn't. |
+| Recordings are stored as H.265; browser `<video>` playback support is unreliable | Evidence Viewer | Inline preview is best-effort; download (the raw, unmodified file) always works regardless. Not fixable frontend-side — a transcode-on-demand or a browser-compatible mezzanine format would be a backend/DeepStream-side decision. |
