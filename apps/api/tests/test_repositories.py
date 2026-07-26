@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from apps.api.app.models.audit_log import AuditLog
 from apps.api.app.models.camera import Camera, CameraCalibration, CameraStreamProfile
 from apps.api.app.models.human_review import HumanReviewItem
 from apps.api.app.models.incident import Incident, IncidentEvent
 from apps.api.app.models.recording import Recording, Snapshot
 from apps.api.app.models.system_event import SystemEvent
 from apps.api.app.models.user import User
+from apps.api.app.repositories.audit_log import AuditLogRepository
 from apps.api.app.repositories.camera import (
     CameraCalibrationRepository,
     CameraRepository,
@@ -307,3 +309,37 @@ class TestUserRepository:
             await UserRepository(db_session).add(
                 User(username="operator2", password_hash="hash2", role="operator")
             )
+
+
+@pytest.mark.asyncio
+class TestAuditLogRepository:
+    async def test_round_trips(self, db_session) -> None:
+        user = await UserRepository(db_session).add(
+            User(username="operator3", password_hash="not-a-real-hash", role="operator")
+        )
+
+        entry = await AuditLogRepository(db_session).add(
+            AuditLog(
+                actor_user_id=user.id,
+                action="CONFIRM_MILITARY",
+                resource_type="human_review_item",
+                resource_id=str(user.id),
+                details={"note": "confirmed via test"},
+            )
+        )
+
+        assert entry.actor_user_id == user.id
+        assert entry.details == {"note": "confirmed via test"}
+
+    async def test_actor_user_id_is_nullable_for_system_generated_actions(self, db_session) -> None:
+        entry = await AuditLogRepository(db_session).add(
+            AuditLog(
+                actor_user_id=None,
+                action="AUTO_RESOLVE",
+                resource_type="incident",
+                resource_id="00000000-0000-0000-0000-000000000000",
+                details={},
+            )
+        )
+
+        assert entry.actor_user_id is None

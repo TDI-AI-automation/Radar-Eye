@@ -29,6 +29,9 @@ def _default_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("RADAR_EYE_DB_USER", "test_user")
     monkeypatch.setenv("RADAR_EYE_DB_PASSWORD", "test_password")
     monkeypatch.setenv("RADAR_EYE_ENCRYPTION_KEY", "CLrFKStOGSTRHci9yIv1kJV-SxMwWNDHzUiSWl3C3jA=")
+    monkeypatch.setenv(
+        "RADAR_EYE_JWT_SECRET", "test-jwt-signing-secret-not-for-production-use-32bytes+"
+    )
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

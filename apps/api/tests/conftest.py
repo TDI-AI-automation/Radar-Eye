@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from apps.api.app.config import get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.models import Base
+from apps.api.app.models.user import ROLE_ADMIN
+from apps.api.app.security.auth import create_token_pair
 
 
 @pytest.fixture(autouse=True)
@@ -24,9 +27,25 @@ def _default_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("RADAR_EYE_DB_USER", "test_user")
     monkeypatch.setenv("RADAR_EYE_DB_PASSWORD", "test_password")
     monkeypatch.setenv("RADAR_EYE_ENCRYPTION_KEY", "CLrFKStOGSTRHci9yIv1kJV-SxMwWNDHzUiSWl3C3jA=")
+    monkeypatch.setenv(
+        "RADAR_EYE_JWT_SECRET", "test-jwt-signing-secret-not-for-production-use-32bytes+"
+    )
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def auth_header(_default_env: None) -> dict[str, str]:
+    """A ready-to-use ``Authorization`` header for an admin-role user,
+    against a freshly-issued access token -- for any test that needs a
+    valid, authenticated request without exercising the login flow itself
+    (which has its own dedicated tests). No DB round-trip -- JWTs are
+    stateless, so this only needs ``get_settings()`` to sign with the same
+    secret the app under test will verify with."""
+    settings = get_settings()
+    tokens = create_token_pair(user_id=uuid.uuid4(), role=ROLE_ADMIN, settings=settings)
+    return {"Authorization": f"Bearer {tokens.access_token}"}
 
 
 @pytest_asyncio.fixture
