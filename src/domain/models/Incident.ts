@@ -2,17 +2,30 @@
  * Incident domain model.
  *
  * Mirrors Radar-Eye backend's `Incident` (shared/constants/incident_types.py,
- * services/incident_service/service.py). This class owns *display/UI-affordance*
- * business logic only -- it is never the authority on whether a transition is
- * actually allowed. The backend re-validates every PATCH against
- * `IncidentService.request_transition()` regardless of what the UI shows; these
- * methods exist purely so components don't inline backend state-machine
- * knowledge directly in JSX.
+ * services/incident_service/service.py) as returned in full by
+ * `GET /incidents/{id}` (shared/schemas/incident.py::IncidentSchema). This
+ * class owns *display/UI-affordance* business logic only -- it is never the
+ * authority on whether a transition is actually allowed. The backend
+ * re-validates every PATCH against `IncidentService.request_transition()`
+ * regardless of what the UI shows; these methods exist purely so components
+ * don't inline backend state-machine knowledge directly in JSX.
+ *
+ * For list contexts (`GET /incidents`, `GET /incidents/open`), the backend
+ * returns the leaner `IncidentSummarySchema` (no track_id/incident_type/
+ * timestamps) -- see `IncidentSummary` (./IncidentSummary.ts), which shares
+ * this class's transition-check logic via ../incidentStatus.ts rather than
+ * being constructed from partial/fabricated data.
  */
+import {
+  canAcknowledgeIncident,
+  canCloseIncident,
+  isIncidentTerminal,
+  type IncidentStatus,
+} from "../incidentStatus";
+import type { ThreatLevel } from "../threatLevel";
 
-export type IncidentStatus = "NEW" | "ACTIVE" | "ACKNOWLEDGED" | "RESOLVED" | "ARCHIVED";
-
-export type ThreatLevel = "ALLY" | "OBSERVE" | "LOW" | "MEDIUM" | "HIGH" | "HUMAN_REVIEW";
+export type { IncidentStatus };
+export type { ThreatLevel };
 
 export class Incident {
   constructor(
@@ -26,21 +39,12 @@ export class Incident {
     readonly updatedAt: Date,
   ) {}
 
-  /**
-   * Mirrors `EXTERNALLY_REQUESTABLE_TRANSITIONS` in
-   * services/incident_service/service.py: ACTIVE -> ACKNOWLEDGED is the only
-   * externally-requestable path into ACKNOWLEDGED.
-   */
   canAcknowledge(): boolean {
-    return this.status === "ACTIVE";
+    return canAcknowledgeIncident(this.status);
   }
 
-  /**
-   * Mirrors the same map: both ACTIVE -> RESOLVED (direct close) and
-   * ACKNOWLEDGED -> RESOLVED are externally-requestable.
-   */
   canClose(): boolean {
-    return this.status === "ACTIVE" || this.status === "ACKNOWLEDGED";
+    return canCloseIncident(this.status);
   }
 
   /**
@@ -59,6 +63,6 @@ export class Incident {
   }
 
   isTerminal(): boolean {
-    return this.status === "RESOLVED" || this.status === "ARCHIVED";
+    return isIncidentTerminal(this.status);
   }
 }

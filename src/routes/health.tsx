@@ -1,99 +1,270 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { Panel, Bar } from "@/components/hud/Panel";
-import { Cpu, HardDrive, Thermometer, Network, Database, Radio, Bell, Server } from "lucide-react";
+import { LoadingState, ErrorState } from "@/components/shared/QueryState";
+import { Cpu, HardDrive, Database, Camera as CameraIcon } from "lucide-react";
+import {
+  useSystemHealth,
+  useGpuHealth,
+  useStorageHealth,
+  useRecordingHealth,
+} from "@/features/health/hooks/useHealth";
+import { useCameras, useCamerasHealth } from "@/queries/useCameras";
+import {
+  buildComponentRows,
+  formatBytes,
+  statusTone,
+} from "@/features/health/view-models/healthViewModels";
 
 export const Route = createFileRoute("/health")({
   head: () => ({
     meta: [
       { title: "System Health — SENTINEL C2" },
-      { name: "description", content: "Real-time health of compute, storage, network, and detection subsystems." },
+      {
+        name: "description",
+        content: "Real-time health of GPU, storage, cameras, and core subsystems.",
+      },
       { property: "og:title", content: "System Health — SENTINEL C2" },
-      { property: "og:description", content: "Real-time health of compute, storage, network, and detection subsystems." },
+      {
+        property: "og:description",
+        content: "Real-time health of GPU, storage, cameras, and core subsystems.",
+      },
     ],
   }),
   component: Health,
 });
 
-const SUBS = [
-  { icon: Cpu, label: "GPU · RTX A6000", value: 73, tone: "cyan" as const, sub: "68°C · 30 FPS" },
-  { icon: Cpu, label: "CPU · EPYC 7742", value: 41, tone: "cyan" as const, sub: "64 cores · 52°C" },
-  { icon: Server, label: "Memory", value: 58, tone: "cyan" as const, sub: "74 / 128 GB" },
-  { icon: HardDrive, label: "Storage · NVMe RAID", value: 72, tone: "amber" as const, sub: "28.8 / 40 TB" },
-  { icon: Thermometer, label: "Ambient", value: 34, tone: "success" as const, sub: "24°C rack" },
-  { icon: Network, label: "Network Uplink", value: 22, tone: "success" as const, sub: "220 Mbps / 1 Gbps" },
-  { icon: Database, label: "Database", value: 12, tone: "success" as const, sub: "PostgreSQL 16 · nominal" },
-  { icon: Radio, label: "MQTT Broker", value: 18, tone: "success" as const, sub: "312 msg/s" },
-  { icon: Bell, label: "Notification Bus", value: 45, tone: "cyan" as const, sub: "SMS · Email · Radio" },
-];
+const TONE_CLASS: Record<string, string> = {
+  success: "text-success border-success/40 bg-success/10",
+  amber: "text-amber-glow border-amber-glow/40 bg-amber-glow/10",
+  red: "text-red-glow border-red-glow/40 bg-red-glow/10",
+  muted: "text-muted-foreground border-border bg-black/20",
+};
 
+/**
+ * CLAUDE.md's primary deployment target is a single Jetson AGX Orin --
+ * the prototype's CPU/Memory/Ambient/Network-Uplink/MQTT/Notification-Bus
+ * panels have no backing endpoint anywhere in RM-12 and are not carried
+ * forward (docs/FRONTEND_ARCHITECTURE.md's Phase 2 checkpoint has the
+ * full list of what was dropped and why). GPU/Storage/Recording/Cameras/
+ * component-status are all real (apps/api/app/health/collector.py).
+ * Event Log Stream has no backing endpoint either (no GET /audit-log
+ * exists yet, docs/FRONTEND_ARCHITECTURE.md §10) -- shown as an explicit
+ * disabled panel, matching Settings' existing precedent for deferred
+ * tabs, rather than removed or filled with fabricated entries.
+ */
 function Health() {
+  const systemQuery = useSystemHealth();
+  const gpuQuery = useGpuHealth();
+  const storageQuery = useStorageHealth();
+  const recordingQuery = useRecordingHealth();
+  const camerasQuery = useCameras();
+  const cameraHealthQuery = useCamerasHealth();
+
+  const componentRows = useMemo(
+    () => buildComponentRows(systemQuery.data?.components),
+    [systemQuery.data],
+  );
+
+  const cameraHealthById = useMemo(
+    () => new Map((cameraHealthQuery.data ?? []).map((h) => [h.camera_id, h])),
+    [cameraHealthQuery.data],
+  );
+
   return (
     <div className="p-3 space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {SUBS.map((s) => {
-          const Icon = s.icon;
-          const tone = s.value > 85 ? "red" : s.value > 65 ? "amber" : "success";
-          return (
-            <Panel key={s.label} title={s.label}>
-              <div className="flex items-center gap-3">
-                <div className="hud-panel rounded p-2 border-primary/30">
-                  <Icon className="h-5 w-5 text-primary" />
+        <Panel title="Overall Status">
+          {systemQuery.isLoading ? (
+            <LoadingState />
+          ) : systemQuery.isError ? (
+            <ErrorState onRetry={() => void systemQuery.refetch()} />
+          ) : (
+            <span
+              className={`inline-flex items-center rounded border px-3 py-1.5 font-mono text-sm uppercase tracking-widest ${TONE_CLASS[statusTone(systemQuery.data?.status)]}`}
+            >
+              {systemQuery.data?.status ?? "Unknown"}
+            </span>
+          )}
+        </Panel>
+
+        <Panel title="GPU">
+          {gpuQuery.isLoading ? (
+            <LoadingState />
+          ) : gpuQuery.isError ? (
+            <ErrorState onRetry={() => void gpuQuery.refetch()} />
+          ) : gpuQuery.data?.utilization_percent == null ? (
+            <div className="flex items-center gap-3">
+              <Cpu className="h-5 w-5 text-muted-foreground" />
+              <span className="text-[11px] font-mono text-muted-foreground">
+                GPU metrics unavailable in this environment
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="hud-panel rounded p-2 border-primary/30">
+                <Cpu className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1">
+                <div className="font-mono text-2xl font-bold text-glow-cyan">
+                  {gpuQuery.data.utilization_percent.toFixed(0)}%
                 </div>
-                <div className="flex-1">
-                  <div className="font-mono text-2xl font-bold text-glow-cyan">{s.value}%</div>
-                  <div className="text-[10px] font-mono text-muted-foreground">{s.sub}</div>
+                <div className="text-[10px] font-mono text-muted-foreground">
+                  {gpuQuery.data.temperature_celsius != null
+                    ? `${gpuQuery.data.temperature_celsius.toFixed(0)}°C · `
+                    : ""}
+                  {gpuQuery.data.memory_used_mb != null && gpuQuery.data.memory_total_mb != null
+                    ? `${(gpuQuery.data.memory_used_mb / 1024).toFixed(1)} / ${(gpuQuery.data.memory_total_mb / 1024).toFixed(1)} GB`
+                    : ""}
                 </div>
               </div>
-              <div className="mt-3">
-                <Bar value={s.value} tone={tone} />
+            </div>
+          )}
+        </Panel>
+
+        <StoragePanel title="Storage · Evidence" icon={HardDrive} query={storageQuery} />
+        <StoragePanel title="Storage · Recording" icon={HardDrive} query={recordingQuery} />
+
+        <Panel title="Cameras">
+          {systemQuery.isLoading ? (
+            <LoadingState />
+          ) : systemQuery.isError ? (
+            <ErrorState onRetry={() => void systemQuery.refetch()} />
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="hud-panel rounded p-2 border-primary/30">
+                <CameraIcon className="h-5 w-5 text-primary" />
               </div>
-            </Panel>
-          );
-        })}
+              <div className="font-mono text-[11px] space-y-0.5">
+                <div className="text-success">
+                  {systemQuery.data?.cameras.connected_count ?? 0} Connected
+                </div>
+                <div className="text-amber-glow">
+                  {systemQuery.data?.cameras.reconnecting_count ?? 0} Reconnecting
+                </div>
+                <div className="text-red-glow">
+                  {systemQuery.data?.cameras.disconnected_count ?? 0} Disconnected
+                </div>
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Components">
+          {systemQuery.isLoading ? (
+            <LoadingState />
+          ) : systemQuery.isError ? (
+            <ErrorState onRetry={() => void systemQuery.refetch()} />
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="hud-panel rounded p-2 border-primary/30">
+                <Database className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1 flex flex-wrap gap-1.5">
+                {componentRows.map((c) => (
+                  <span
+                    key={c.name}
+                    className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest ${TONE_CLASS[c.tone]}`}
+                  >
+                    {c.name}: {c.state}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </Panel>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Panel title="Camera Health Distribution">
-          <div className="grid grid-cols-12 gap-1">
-            {Array.from({ length: 48 }).map((_, i) => {
-              const h = i === 5 ? 0 : i === 11 ? 60 : 85 + (i % 12);
-              const color = h === 0 ? "var(--red-glow)" : h < 70 ? "var(--amber-glow)" : "var(--success)";
-              return (
-                <div
-                  key={i}
-                  title={`CAM-${String(i + 1).padStart(2, "0")} · ${h}%`}
-                  className="aspect-square rounded"
-                  style={{ background: color, opacity: 0.85, boxShadow: `0 0 8px ${color}` }}
-                />
-              );
-            })}
-          </div>
-          <div className="mt-3 flex gap-4 font-mono text-[10px] text-muted-foreground">
-            <span>46 Online</span><span className="text-amber-glow">1 Degraded</span><span className="text-red-glow">1 Offline</span>
-          </div>
+          {camerasQuery.isLoading ? (
+            <LoadingState />
+          ) : camerasQuery.isError ? (
+            <ErrorState onRetry={() => void camerasQuery.refetch()} />
+          ) : (camerasQuery.data ?? []).length === 0 ? (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              No cameras registered.
+            </span>
+          ) : (
+            <div className="grid grid-cols-12 gap-1">
+              {(camerasQuery.data ?? []).map((camera) => {
+                const health = cameraHealthById.get(camera.id);
+                const tone =
+                  health?.status === "CONNECTED"
+                    ? "var(--success)"
+                    : health?.status === "RECONNECTING"
+                      ? "var(--amber-glow)"
+                      : "var(--red-glow)";
+                return (
+                  <div
+                    key={camera.id}
+                    title={`${camera.name} · ${health?.status ?? camera.status}`}
+                    className="aspect-square rounded"
+                    style={{ background: tone, opacity: 0.85, boxShadow: `0 0 8px ${tone}` }}
+                  />
+                );
+              })}
+            </div>
+          )}
         </Panel>
 
         <Panel title="Event Log Stream">
-          <div className="font-mono text-[11px] space-y-1 max-h-64 overflow-auto">
-            {[
-              ["22:15:31", "detection", "CAM-12 · rifle detected · conf 0.99"],
-              ["22:15:20", "detection", "CAM-18 · machete detected · conf 0.86"],
-              ["22:14:52", "system", "Inference engine · warmup complete"],
-              ["22:14:12", "detection", "CAM-04 · bamboo detected · conf 0.78"],
-              ["22:12:04", "system", "MQTT reconnect · broker OK"],
-              ["22:11:00", "system", "Storage GC · reclaimed 128 GB"],
-              ["22:08:22", "system", "CAM-06 offline · last heartbeat 22:07:44"],
-              ["22:05:11", "detection", "CAM-23 · crowd density 21 · normal"],
-            ].map(([t, k, m], i) => (
-              <div key={i} className="grid grid-cols-[auto_auto_1fr] gap-3 items-center py-0.5">
-                <span className="text-muted-foreground">{t}</span>
-                <span className={k === "detection" ? "text-glow-amber" : "text-glow-cyan"}>[{k}]</span>
-                <span>{m}</span>
-              </div>
-            ))}
-          </div>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            Not yet available — awaiting a GET /audit-log endpoint (docs/FRONTEND_ARCHITECTURE.md
+            §10).
+          </span>
         </Panel>
       </div>
     </div>
+  );
+}
+
+function StoragePanel({
+  title,
+  icon: Icon,
+  query,
+}: {
+  title: string;
+  icon: typeof HardDrive;
+  query: ReturnType<typeof useStorageHealth>;
+}) {
+  return (
+    <Panel title={title}>
+      {query.isLoading ? (
+        <LoadingState />
+      ) : query.isError ? (
+        <ErrorState onRetry={() => void query.refetch()} />
+      ) : (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="hud-panel rounded p-2 border-primary/30">
+              <Icon className="h-5 w-5 text-primary" />
+            </div>
+            <div className="flex-1">
+              <div className="font-mono text-2xl font-bold text-glow-cyan">
+                {query.data?.usage_percent.toFixed(0) ?? 0}%
+              </div>
+              <div className="text-[10px] font-mono text-muted-foreground">
+                {query.data
+                  ? `${formatBytes(query.data.used_bytes)} / ${formatBytes(query.data.total_bytes)}`
+                  : ""}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3">
+            <Bar
+              value={query.data?.usage_percent ?? 0}
+              tone={
+                (query.data?.usage_percent ?? 0) > 95
+                  ? "red"
+                  : (query.data?.usage_percent ?? 0) > 85
+                    ? "amber"
+                    : "success"
+              }
+            />
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }

@@ -1,8 +1,10 @@
 # Radar Eye Command — Frontend Architecture
 
-**Status:** RM-13 Phase 2 (Existing-Screen Migration), building on Phase 0
-(Architecture Setup, approved) and Phase 1 (Infrastructure, approved). This
-document is the reference
+**Status:** RM-13 Phase 2 (Existing-Screen Migration) complete pending
+review — Camera Management, AI Analytics, System Health, and Incident
+Center migrated; Live Monitoring and Tactical Map remain on mock data,
+scoped for a later phase. Builds on Phase 0 (Architecture Setup, approved)
+and Phase 1 (Infrastructure, approved). This document is the reference
 architecture for this milestone and every frontend milestone after it. It
 describes the *target* production architecture; where Phase 0 has only
 defined an interface or written a design-only piece, that's stated
@@ -470,3 +472,70 @@ for whoever picks this up):
 Until one of these exists, every change to a WS-message-shaped schema in
 the backend repo must be manually mirrored in `src/ws/messages.ts` — there
 is no compiler or generator that will catch drift.
+
+---
+
+## 14. Phase 2 migration record: prototype content vs. backend reality
+
+Migrated: Camera Management (`routes/cameras.tsx`), AI Analytics
+(`routes/analytics.tsx`), System Health (`routes/health.tsx`), Incident
+Center (`routes/incidents.tsx`). Per RM-13's "backend wins" rule, each
+screen's real data availability was checked against the generated OpenAPI
+schema and `shared/schemas/*.py` before writing any UI, not assumed from
+the prototype. Fields/panels/actions with no backing endpoint were
+dropped, not fabricated or stubbed with placeholder numbers. Recorded here
+because several of these are large enough departures from the prototype's
+visual richness to need a permanent, findable reason, not just a commit
+message.
+
+**Cameras**: `CameraSchema`/`CameraHealthSchema` provide id/name/location/
+status/fps/last_frame_age only. Dropped: health %, latency (ms), AI
+on/off, recording indicator, storage used, and the entire configuration
+modal's resolution/codec/confidence-threshold/detection-types/privacy-
+mask/firmware fields — `CameraUpdateRequestSchema` (`PATCH /cameras/{id}`,
+admin-only) supports name/location/status only.
+
+**Analytics** — the largest departure. `shared/schemas/analytics.py`'s own
+docstring: "straightforward repository-query aggregations... not a new
+analytics computation engine." Real: counts by threat level, incident
+totals + counts by status, top cameras by incident count, system-wide
+totals. Dropped entirely (no endpoint of any kind): 24h hourly trend,
+precision/recall/F1/false-positive/false-negative, response-time
+percentiles, per-sector threat heatmap, weapon-frequency breakdown. GPU/
+inference metrics moved to System Health, where `/health/gpu` actually is.
+
+**System Health**: real endpoints cover GPU (nullable — honestly empty
+outside NVML/Jetson hardware), evidence storage, recording storage, per-
+camera health, and a fixed 5-key component-status map (database/
+event_bus/gpu/storage/cameras). Dropped: CPU, memory, ambient temperature,
+network uplink, MQTT broker, notification bus — no endpoint exists for any
+of them, consistent with CLAUDE.md's single-Jetson-SoC deployment target
+rather than the prototype's discrete-workstation assumption (RTX A6000 /
+EPYC CPU labels). Event Log Stream has no backing endpoint (`GET
+/audit-log` doesn't exist, §10) — shown as an explicit disabled panel,
+matching Settings' existing precedent for deferred tabs.
+
+**Incidents**: `IncidentSummarySchema`/`IncidentSchema` carry no weapon
+type, no assigned operator, no confidence score, no escalation field, no
+free-text location. Dropped: the "object"/"operator"/"confidence"/
+"escalation" fields, the "Resolved 24h"/"Avg. Response" stats (no time-
+windowed aggregate exists), the fabricated response-timeline steps
+(replaced with real `GET /incidents/{id}/events`), and the Assign/Export
+actions (no backend support; Export belongs to the future Evidence
+feature). Added: real Acknowledge/Resolve actions via `PATCH
+/incidents/{id}`, gated by both `Incident.canAcknowledge()`/`.canClose()`
+(state fact) and `usePermission("operator")` (authorization) per §12.
+
+**Mid-phase architecture refinement**: Phase 0's `Incident` domain model
+required all of track_id/incident_type/created_at/updated_at, but the list
+endpoints (`GET /incidents`, `GET /incidents/open`) return
+`IncidentSummarySchema` (id/camera_id/threat_level/status only) — a real
+DTO-shape mismatch Phase 0 didn't anticipate. Resolved by extracting the
+transition-check predicates into `domain/incidentStatus.ts` (pure
+functions) and adding `IncidentSummary` (`domain/models/IncidentSummary.ts`)
+as a list-context companion to `Incident`, both delegating to the same
+functions rather than one being constructed from the other's incomplete
+data. The equivalent `ThreatLevel` label/color mapping was extracted from
+`ThreatAssessment` into `domain/threatLevel.ts` the same way, since
+`Incident`/`IncidentSummary` needed it too and duplicating the switch
+statement would have violated "the ONLY place this mapping should exist."

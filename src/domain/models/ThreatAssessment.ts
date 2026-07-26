@@ -10,10 +10,12 @@
  * not adapt to prototype assumptions" direction).
  */
 
+import { threatLevelLabel, threatLevelColor, type ThreatLevel } from "../threatLevel";
+
+export type { ThreatLevel };
 export type WeaponType = "none" | "non_lethal" | "melee_lethal" | "ranged_lethal" | "fire";
 export type UniformClass = "military" | "civilian" | "unknown";
 export type DistanceZone = "zone_1" | "zone_2" | "zone_3";
-export type ThreatLevel = "ALLY" | "OBSERVE" | "LOW" | "MEDIUM" | "HIGH" | "HUMAN_REVIEW";
 
 export class ThreatAssessment {
   constructor(
@@ -25,24 +27,11 @@ export class ThreatAssessment {
     readonly threatLevel: ThreatLevel,
   ) {}
 
-  /** Human-readable label for the threat level -- the ONLY place this
-   * mapping should exist; components must not stringify threatLevel
-   * themselves. */
+  /** Human-readable label for the threat level -- delegates to
+   * domain/threatLevel.ts, the one place this mapping is allowed to
+   * exist; components must not stringify threatLevel themselves. */
   severityLabel(): string {
-    switch (this.threatLevel) {
-      case "ALLY":
-        return "Ally";
-      case "OBSERVE":
-        return "Observe";
-      case "LOW":
-        return "Low";
-      case "MEDIUM":
-        return "Medium";
-      case "HIGH":
-        return "High";
-      case "HUMAN_REVIEW":
-        return "Human Review";
-    }
+    return threatLevelLabel(this.threatLevel);
   }
 
   /** Returns a CSS custom-property reference, not a literal color -- stays
@@ -50,18 +39,7 @@ export class ThreatAssessment {
    * (src/styles.css: --red-glow, --amber-glow, --primary, --success),
    * preserving visual parity rather than inventing a new palette. */
   displayColor(): string {
-    switch (this.threatLevel) {
-      case "HIGH":
-        return "var(--red-glow)";
-      case "MEDIUM":
-      case "HUMAN_REVIEW":
-        return "var(--amber-glow)";
-      case "LOW":
-      case "OBSERVE":
-        return "var(--primary)";
-      case "ALLY":
-        return "var(--success)";
-    }
+    return threatLevelColor(this.threatLevel);
   }
 
   /** Matches CLAUDE.md's Alarm Rules exactly: HIGH is alarm-eligible; FIRE
