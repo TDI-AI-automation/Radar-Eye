@@ -153,6 +153,30 @@ instead:** step 0.3 wasn't completed — `.env` is missing or incomplete.
 **If it prints `NOT REACHABLE: ...`:** `.env` is read correctly but the
 database itself isn't up/reachable — fix that before step 7.
 
+0.5. Backend Database Initialization — if using a fresh PostgreSQL database
+(reachable per 0.4, but never migrated), the schema does not exist yet.
+Nothing in this repository applies migrations automatically — not
+`apps/api/app/main.py`'s startup, not `scripts/run_siv.py`,
+`check_environment.py`. Skipping this step is the single most common cause
+of a healthy-looking backend that still reports `database: unhealthy`
+(`/health/system`'s `CameraRepository.list()` query fails with
+`asyncpg.exceptions.UndefinedTableError: relation "cameras" does not
+exist`, since nothing has created the table yet):
+
+1. Activate the project's virtual environment.
+2. Run, from the repository root (`env.py` reads `.env` relative to the
+   current working directory):
+   ```bash
+   alembic -c apps/api/alembic.ini upgrade head
+   ```
+   **Expected:** ends with `Running upgrade 3bb1f0f0a294 -> 1f216fe63fe1,
+   audit_log`, no traceback, exit code `0`.
+3. Verify with the backend running:
+   ```bash
+   curl -s http://127.0.0.1:8000/health/system
+   ```
+   **Expected:** `"success": true` and `"data"` showing `db_healthy: true`.
+
 ---
 
 ## 1. Validate the environment — `check_environment.py`
