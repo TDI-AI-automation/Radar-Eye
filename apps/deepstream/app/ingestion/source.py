@@ -33,12 +33,12 @@ RM-12 Camera Runtime, Step 2 (Frame Distributor): the bin also owns one
 Tier 1 ``tee`` (see ``pipeline/frame_distributor.py``), positioned between
 the decoder and the valve so the raw, pre-AI frame resource is
 structurally independent of the valve's state -- toggling AI never affects
-Tier 1. This milestone only builds the raw branch's stub terminator
-(``tier1-raw-queue`` -> ``tier1-raw-sink``, safely draining, applying no
-backpressure); no real Tier 1 consumer exists yet (see
-``frame_distributor.Tier1FrameConsumer``). The AI path's element count and
-behavior are otherwise unchanged: decoder now feeds the tee instead of the
-valve directly, and the tee's other branch feeds the valve exactly as the
+Tier 1. The raw branch (``tier1-raw-queue`` -> ``tier1-raw-sink``) safely
+drains, applying no backpressure, whether or not a real Tier 1 consumer is
+currently attached (see ``media_publisher/tier1.py``'s ``Tier1Publisher``,
+RM-12 Camera Runtime Step 7). The AI path's element count and behavior are
+otherwise unchanged: decoder now feeds the tee instead of the valve
+directly, and the tee's other branch feeds the valve exactly as the
 decoder used to.
 """
 

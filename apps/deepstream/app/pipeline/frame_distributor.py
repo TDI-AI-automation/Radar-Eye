@@ -8,25 +8,26 @@ enable/disable state, per RM-12's Two-Tier Frame Distribution Pattern, Part
 A: Tier 1 never depends on AI, and toggling the valve must never affect
 Tier 1 branches. Element chain per camera becomes:
 
-    decoder -> tee -> { tier1-raw-queue -> tier1-raw-sink (this milestone's
-                         stub terminator, see Tier1FrameConsumer)
+    decoder -> tee -> { tier1-raw-queue -> tier1-raw-sink (terminator;
+                         Step 7's Tier1Publisher attaches a probe on the
+                         queue's src pad -- see media_publisher/tier1.py)
                        , valve -> [ghost src pad] (AI path, unchanged)
                        }
 
-This milestone builds the raw branch's terminator only -- a bounded, leaky
+This module builds the raw branch's terminator only -- a bounded, leaky
 queue feeding a non-blocking ``fakesink``, mirroring the already-proven
 backpressure-isolation shape from
-``visualization/pipeline_builder.py``'s ``viz-queue`` -- plus a named,
-unwired publish-interface contract for future Tier 1 consumers. No
-transport, no buffering beyond the terminator queue's own bounds, no
-subscriber registry: those are later milestones' (Media Publisher, Step 7)
-job.
+``visualization/pipeline_builder.py``'s ``viz-queue``. No transport, no
+subscriber registry lives here: that's ``media_publisher/tier1.py``'s job
+(RM-12 Camera Runtime Step 7), which finds this branch by name via
+``tier1_raw_queue_element_name`` and attaches/detaches its own probe on it
+-- this module is unchanged by, and has no dependency on, that subsystem.
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Any, Protocol
+from typing import Any
 
 _RAW_QUEUE_MAX_BUFFERS = 4
 """Same bounded, leaky, never-blocking shape as visualization/pipeline_builder.py's
@@ -34,22 +35,6 @@ viz-queue -- proven in that subsystem to isolate a tee's other branches from
 a slow/stalled consumer. Small and fixed: bounded purely by buffer count
 (max-size-bytes=0, max-size-time=0), combined with leaky=2 (downstream:
 drops the oldest buffered frame, never blocks the tee)."""
-
-
-class Tier1FrameConsumer(Protocol):
-    """The contract a future Tier 1 consumer (raw preview, raw recording,
-    Media Publisher) will implement to receive raw, pre-AI frames -- RM-12
-    Two-Tier Pattern Part A: "any capability that only needs the picture
-    attaches to Tier 1." Named seam only -- nothing in this module
-    constructs, registers, or invokes an implementation of this protocol.
-    The raw branch built by ``attach_tier1_branch`` terminates at a stub
-    sink until a later milestone replaces that terminator with a real
-    consumer."""
-
-    def on_raw_frame(self, camera_id: uuid.UUID, gst_buffer: Any) -> None:
-        """Called with each raw decoded frame's ``Gst.Buffer``, once a real
-        consumer exists. Not invoked by anything in this milestone."""
-        ...
 
 
 def tee_element_name(camera_id: uuid.UUID) -> str:
@@ -61,6 +46,20 @@ def tee_element_name(camera_id: uuid.UUID) -> str:
     return f"tier1-tee-{camera_id}"
 
 
+def tier1_raw_queue_element_name(camera_id: uuid.UUID) -> str:
+    """The Tier 1 raw branch's queue element name -- the discoverable
+    attachment point ``media_publisher/tier1.py``'s ``Tier1Publisher`` uses
+    to find and probe it via
+    ``bin_.get_by_name(tier1_raw_queue_element_name(camera_id))``, mirroring
+    ``valve_element_name``'s/``tee_element_name``'s discoverability
+    convention."""
+    return f"tier1-raw-queue-{camera_id}"
+
+
+def tier1_raw_sink_element_name(camera_id: uuid.UUID) -> str:
+    return f"tier1-raw-sink-{camera_id}"
+
+
 def attach_tier1_branch(Gst: Any, bin_: Any, upstream: Any, camera_id: uuid.UUID) -> Any:
     """Insert a Tier 1 tee between ``upstream`` (the decoder) and whatever
     ``upstream`` used to feed directly, adding a second, raw-stub branch off
@@ -70,15 +69,15 @@ def attach_tier1_branch(Gst: Any, bin_: Any, upstream: Any, camera_id: uuid.UUID
     element count and behavior otherwise unchanged.
 
     The raw branch (``tier1-raw-queue`` -> ``tier1-raw-sink``) terminates
-    safely so pipeline timing is unaffected by this milestone: the queue is
-    leaky/bounded (never blocks the tee), and the sink is a ``fakesink``
-    with ``sync=False, async=False`` (consumes frames as fast as they
-    arrive, applies no backpressure). No real consumer is attached -- see
-    ``Tier1FrameConsumer``.
+    safely so pipeline timing is unaffected: the queue is leaky/bounded
+    (never blocks the tee), and the sink is a ``fakesink`` with
+    ``sync=False, async=False`` (consumes frames as fast as they arrive,
+    applies no backpressure) -- true whether or not a Tier1Publisher probe
+    is currently attached to the queue's src pad.
     """
     tee = Gst.ElementFactory.make("tee", tee_element_name(camera_id))
-    raw_queue = Gst.ElementFactory.make("queue", f"tier1-raw-queue-{camera_id}")
-    raw_sink = Gst.ElementFactory.make("fakesink", f"tier1-raw-sink-{camera_id}")
+    raw_queue = Gst.ElementFactory.make("queue", tier1_raw_queue_element_name(camera_id))
+    raw_sink = Gst.ElementFactory.make("fakesink", tier1_raw_sink_element_name(camera_id))
 
     for name, element in (("tee", tee), ("queue", raw_queue), ("fakesink", raw_sink)):
         if element is None:

@@ -29,6 +29,7 @@ from apps.deepstream.app.health.heartbeat import FrameCounter
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
+from apps.deepstream.app.media_publisher.tier2 import Tier2Publisher
 from apps.deepstream.app.models_config import ModelConfigResolver
 from apps.deepstream.app.visualization.manager import VisualizationManager
 
@@ -78,6 +79,8 @@ class DeepStreamPipeline:
         instrumentation: PerformanceInstrumentation | None = None,
         visualization_settings: VisualizationSettings | None = None,
         visualization_manager: VisualizationManager | None = None,
+        media_publisher_enabled: bool = False,
+        tier2_publisher: Tier2Publisher | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
@@ -103,6 +106,18 @@ class DeepStreamPipeline:
         which is camera-independent."""
         self._visualization_tee: Any = None
         self._visualization_initialized = False
+        self._media_publisher_enabled = media_publisher_enabled
+        self._tier2_publisher = tier2_publisher
+        """RM-12 Camera Runtime Step 7 -- both optional/None-safe, same
+        idiom as visualization above. Only used when
+        media_publisher_enabled is true (see build()); otherwise the
+        pipeline is byte-for-byte identical to before this subsystem
+        existed. on_camera_added()/on_camera_removed() are called from
+        add_source()/remove_source() (not build()) since Tier 2's
+        per-camera branch depends on that camera's streammux pad_index,
+        only known once the camera is actually added -- mirrors
+        VisualizationManager's exact reasoning for the same split."""
+        self._nvstreamdemux: Any = None
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
         self._on_inference_buffer = on_inference_buffer
@@ -178,30 +193,39 @@ class DeepStreamPipeline:
         pgie.link(tracker)
         tracker.link(sgie)
 
-        if (
+        visualization_active = (
             self._visualization_settings is not None
             and self._visualization_settings.enabled
             and self._visualization_settings.stream_output_enabled
-        ):
-            # Visualization branch requested -- fork the shared metadata
-            # branch (unchanged: sgie -> fakesink, now via a queue off the
-            # tee) from the new visualization branch. Only the tee itself
-            # and this metadata-queue are built here; everything downstream
-            # of the tee's second pad is VisualizationPipelineBuilder's
-            # exclusive responsibility (see visualization/pipeline_builder.py).
+        )
+        needs_sgie_tee = visualization_active or self._media_publisher_enabled
+
+        if needs_sgie_tee:
+            # A branch beyond the tail/metadata sink was requested --
+            # visualization, Media Publisher Tier 2 (RM-12 Camera Runtime
+            # Step 7), or both share exactly one tee immediately after
+            # SGIE (an element's src pad can only feed one thing directly,
+            # so both subsystems necessarily fork off the same tee when
+            # both are active). Only the tee itself and this metadata-queue
+            # are built here; everything downstream of any other branch is
+            # that branch's own owner's exclusive responsibility
+            # (VisualizationPipelineBuilder for visualization,
+            # Tier2Publisher for Media Publisher -- see
+            # visualization/pipeline_builder.py and
+            # media_publisher/tier2.py respectively).
             #
             # buffer-pool-size: nvstreammux's own default (4) is tuned for
-            # this pipeline's single original consumer -- raised for a
-            # second consumer's extra headroom. Not, on its own, the fix for
-            # the real corruption bug found during RM-11.SIV Phase 5
-            # hardware verification (see pipeline_builder.py's
-            # disable-passthrough comment for the actual root cause and fix)
-            # -- kept anyway since two consumers genuinely do need more
-            # pool headroom than one.
+            # this pipeline's single original consumer -- raised for
+            # additional consumers' extra headroom. Not, on its own, the
+            # fix for the real corruption bug found during RM-11.SIV Phase
+            # 5 hardware verification (see pipeline_builder.py's
+            # disable-passthrough comment for the actual root cause and
+            # fix) -- kept anyway since more than one consumer genuinely
+            # needs more pool headroom than a single consumer does.
             streammux.set_property("buffer-pool-size", 16)
-            tee = Gst.ElementFactory.make("tee", "viz-tee")
+            tee = Gst.ElementFactory.make("tee", "sgie-tee")
             if tee is None:
-                raise RuntimeError("Failed to create tee (viz-tee)")
+                raise RuntimeError("Failed to create tee (sgie-tee)")
             self._pipeline.add(tee)
             metadata_queue = Gst.ElementFactory.make("queue", "metadata-queue")
             if metadata_queue is None:
@@ -211,10 +235,25 @@ class DeepStreamPipeline:
             sgie.link(tee)
             tee.link(metadata_queue)
             metadata_queue.link(fakesink)
-            self._visualization_tee = tee
+
+            if visualization_active:
+                self._visualization_tee = tee
+
+            if self._media_publisher_enabled:
+                demux = Gst.ElementFactory.make("nvstreamdemux", "tier2-demux")
+                if demux is None:
+                    raise RuntimeError("Failed to create nvstreamdemux")
+                self._pipeline.add(demux)
+                demux_branch_pad = tee.get_request_pad("src_%u")
+                if demux_branch_pad is None:
+                    raise RuntimeError("Failed to request tee src pad for tier2 demux")
+                demux_sink_pad = demux.get_static_pad("sink")
+                if demux_branch_pad.link(demux_sink_pad) != Gst.PadLinkReturn.OK:
+                    raise RuntimeError("Failed to link sgie tee to nvstreamdemux")
+                self._nvstreamdemux = demux
         else:
             # Disabled (default): identical to this pipeline's behavior
-            # before the visualization subsystem existed -- no tee, no
+            # before visualization/Media Publisher existed -- no tee, no
             # extra queue, nothing else constructed.
             sgie.link(fakesink)
 
@@ -363,6 +402,27 @@ class DeepStreamPipeline:
                 )
                 self._visualization_manager.mark_failed(str(exc))
 
+        # RM-12 Camera Runtime Step 7: Tier 2's per-camera branch depends on
+        # this camera's streammux pad_index, only known now. Idempotent on
+        # the reconnect path (Tier2Publisher.on_camera_added() itself
+        # no-ops for an already-known camera_id). Failure isolation:
+        # Media Publisher must never prevent the camera source itself from
+        # being wired up, matching visualization's own guarantee above.
+        if self._nvstreamdemux is not None and self._tier2_publisher is not None:
+            try:
+                self._tier2_publisher.on_camera_added(
+                    self._pipeline,
+                    self._nvstreamdemux,
+                    camera_id=source.camera_id,
+                    pad_index=pad_index,
+                )
+            except Exception:  # noqa: BLE001 -- must never take inference down with it
+                logger.exception(
+                    "Media Publisher Tier 2 failed to attach for camera %s -- continuing "
+                    "without it (inference is unaffected)",
+                    source.camera_id,
+                )
+
     def is_built(self) -> bool:
         """RM-12 Camera Runtime Step 5 (Telemetry): a passive readiness
         check -- true once ``build()`` has constructed the shared
@@ -400,6 +460,20 @@ class DeepStreamPipeline:
         }
         if source is None or source.bin is None:
             return
+
+        # RM-12 Camera Runtime Step 7: Tier 2's branch lives off the shared
+        # nvstreamdemux, entirely separate from the source bin torn down
+        # below -- failure isolation matches add_source()'s guarantee.
+        if self._tier2_publisher is not None:
+            try:
+                self._tier2_publisher.on_camera_removed(camera_id)
+            except Exception:  # noqa: BLE001 -- must never prevent source teardown
+                logger.exception(
+                    "Media Publisher Tier 2 failed to detach for camera %s -- continuing "
+                    "with source teardown",
+                    camera_id,
+                )
+
         source.bin.set_state(_import_gst().State.NULL)
         if sink_pad is not None:
             self._streammux.release_request_pad(sink_pad)
