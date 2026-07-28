@@ -40,16 +40,34 @@ from apps.deepstream.app.runtime_supervisor import RuntimeSupervisor
 
 logger = logging.getLogger(__name__)
 
-_ACTIVE_LIFECYCLE_STATES = frozenset({"OPERATIONAL"})
-"""Only an OPERATIONAL camera gets an active runtime source; every other
-lifecycle state (DRAFT, TESTING, VERIFIED, MAINTENANCE, DISABLED) converges
-to "no source". RM-12's own text settles the two poles explicitly
-(DISABLED -> remove source, OPERATIONAL -> ensure source exists) but not
-the states in between -- this is a deliberate, conservative reading (default
-to inactive until a camera is fully verified and promoted), consistent with
-RM-12 Design Principle 3 ("adding a camera must never auto-start AI")
-applied one level earlier, to the source itself. Disclosed for review, not
-silently assumed."""
+
+class LifecycleSourcePolicy(Protocol):
+    """Whether a camera in a given ``lifecycle_state`` should have an
+    active runtime source. Centralized behind this seam -- per review
+    feedback on the initial Step 4 implementation -- so future lifecycle
+    semantics (e.g. a state other than OPERATIONAL becoming active) can
+    change without touching ``DesiredStateSynchronizer``'s reconciliation
+    engine itself. The synchronizer depends on this policy; it does not
+    embed lifecycle-state judgment inline."""
+
+    def should_have_active_source(self, lifecycle_state: str) -> bool: ...
+
+
+class DefaultLifecycleSourcePolicy:
+    """Only an OPERATIONAL camera gets an active runtime source; every other
+    lifecycle state (DRAFT, TESTING, VERIFIED, MAINTENANCE, DISABLED)
+    converges to "no source". RM-12's own text settles the two poles
+    explicitly (DISABLED -> remove source, OPERATIONAL -> ensure source
+    exists) but not the states in between -- this is a deliberate,
+    conservative reading (default to inactive until a camera is fully
+    verified and promoted), consistent with RM-12 Design Principle 3
+    ("adding a camera must never auto-start AI") applied one level earlier,
+    to the source itself. Disclosed for review, not silently assumed."""
+
+    _ACTIVE_STATES = frozenset({"OPERATIONAL"})
+
+    def should_have_active_source(self, lifecycle_state: str) -> bool:
+        return lifecycle_state in self._ACTIVE_STATES
 
 
 class DesiredStateSource(Protocol):
@@ -92,11 +110,13 @@ class DesiredStateSynchronizer:
         pipeline: SynchronizablePipeline,
         bridge: AsyncBridge,
         runtime_supervisor: RuntimeSupervisor,
+        lifecycle_policy: LifecycleSourcePolicy | None = None,
     ) -> None:
         self._reader = reader
         self._pipeline = pipeline
         self._bridge = bridge
         self._runtime_supervisor = runtime_supervisor
+        self._lifecycle_policy = lifecycle_policy or DefaultLifecycleSourcePolicy()
         self._recording_pending: dict[uuid.UUID, bool] = {}
 
     def recording_desired(self, camera_id: uuid.UUID) -> bool | None:
@@ -128,7 +148,7 @@ class DesiredStateSynchronizer:
 
     async def _converge_one(self, desired: DesiredCameraState) -> list[str]:
         actions: list[str] = []
-        should_be_active = desired.lifecycle_state in _ACTIVE_LIFECYCLE_STATES
+        should_be_active = self._lifecycle_policy.should_have_active_source(desired.lifecycle_state)
         is_active = self._pipeline.bin_for(desired.camera_id) is not None
 
         if should_be_active and not is_active:

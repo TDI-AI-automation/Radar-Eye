@@ -117,13 +117,18 @@ def _desired(
 
 
 def _make_synchronizer(
-    loop: asyncio.AbstractEventLoop, states: list[DesiredCameraState]
+    loop: asyncio.AbstractEventLoop,
+    states: list[DesiredCameraState],
+    *,
+    lifecycle_policy: object | None = None,
 ) -> tuple[DesiredStateSynchronizer, FakePipeline, FakeDesiredStateReader]:
     pipeline = FakePipeline()
     bridge = _make_bridge(loop)
     supervisor = RuntimeSupervisor(pipeline, bridge, ConcurrentEnableLimiter(max_concurrent=10))
     reader = FakeDesiredStateReader(states)
-    synchronizer = DesiredStateSynchronizer(reader, pipeline, bridge, supervisor)
+    synchronizer = DesiredStateSynchronizer(
+        reader, pipeline, bridge, supervisor, lifecycle_policy=lifecycle_policy  # type: ignore[arg-type]
+    )
     return synchronizer, pipeline, reader
 
 
@@ -382,3 +387,29 @@ class TestPartialConvergence:
         assert f"enable_ai:{needs_enable}" in result.actions_taken
         assert f"add_source:{needs_add}" in result.actions_taken
         assert not any(str(already_fine) in action for action in result.actions_taken)
+
+
+@pytest.mark.asyncio
+class TestLifecyclePolicyIsInjectable:
+    """The synchronizer must depend on a LifecycleSourcePolicy, not embed
+    lifecycle-state judgment inline -- proven here by swapping in a policy
+    that treats a non-default state as active, with zero changes to
+    DesiredStateSynchronizer itself."""
+
+    async def test_custom_policy_overrides_the_default_active_state_set(self) -> None:
+        class AlwaysActivePolicy:
+            def should_have_active_source(self, lifecycle_state: str) -> bool:
+                return True
+
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        synchronizer, pipeline, _ = _make_synchronizer(
+            loop,
+            [_desired(camera_id, lifecycle_state="DRAFT")],
+            lifecycle_policy=AlwaysActivePolicy(),
+        )
+
+        result = await synchronizer.synchronize()
+
+        assert pipeline.bin_for(camera_id) is not None
+        assert f"add_source:{camera_id}" in result.actions_taken
