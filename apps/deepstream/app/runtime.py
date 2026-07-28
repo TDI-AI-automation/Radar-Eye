@@ -37,6 +37,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.deepstream.app.ai_runtime.detection import RuntimeAdapter
+from apps.deepstream.app.ai_runtime.threat_bridge import ThreatEngineRuntimeAdapter
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import (
     DeepStreamSettings,
@@ -52,9 +54,7 @@ from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.pipeline_trace import PipelineTracer
-from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from apps.deepstream.app.stage_logging import get_audit_logger
-from apps.deepstream.app.threat_runtime_adapter import ThreatEngineRuntimeAdapter
 from apps.deepstream.app.visualization.manager import VisualizationManager
 from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
@@ -132,7 +132,7 @@ class DeepStreamRuntime:
         # Phase 2: AlarmService is a long-lived singleton (its in-memory
         # _records state must persist across escalation calls, unlike
         # IncidentService/CalibrationService which are constructed fresh
-        # per short-lived session -- see threat_runtime_adapter.py).
+        # per short-lived session -- see ai_runtime/threat_bridge.py).
         self._alarm_service = AlarmService(bus=bus)
         self._threat_runtime_adapter = ThreatEngineRuntimeAdapter(
             session_factory=session_factory,

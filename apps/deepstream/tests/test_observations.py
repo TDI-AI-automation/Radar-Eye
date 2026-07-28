@@ -1,4 +1,4 @@
-"""Tests for apps.deepstream.app.observations.build_frame_observation.
+"""Tests for apps.deepstream.app.ai_runtime.observations.build_frame_observation.
 
 No pyds/Gst dependency -- exercises the pure construction step RuntimeAdapter
 hands off to after extracting raw pyds metadata (RM-11 Phase 1).
@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from apps.deepstream.app.observations import RawDetection, build_frame_observation
+from apps.deepstream.app.ai_runtime.observations import RawDetection, build_frame_observation
 
 _CAMERA = uuid.uuid4()
 _INGRESS = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)

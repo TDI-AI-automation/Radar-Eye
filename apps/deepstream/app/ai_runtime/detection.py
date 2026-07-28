@@ -1,5 +1,10 @@
 """Runtime Adapter -- the ADR-027 anti-corruption layer.
 
+RM-12 Camera Runtime Step 6: relocated from the top-level
+``apps/deepstream/app/runtime_adapter.py`` into the ``ai_runtime`` package
+(see that package's ``__init__.py``) -- a pure move, the class and its
+behavior are unchanged.
+
 Source: RM-07/RM-09/RM-10 design notes, which already named this component
 ("the Threat Engine Runtime Adapter, deferred until RM-11") and the RM-11
 design review, which confirmed it belongs here. Full scope (per-frame
@@ -9,9 +14,10 @@ connection-state transitions and the events DEEPSTREAM_PIPELINE_SPEC.md's
 "Failure Handling" section assigns to camera/ingestion failures
 (CameraDisconnectedEvent, SystemEvent). Phase 1 adds metadata extraction:
 converting PGIE/NvDCF output into ``FrameObservation``/``DetectionObservation``
-(see ``observations.py``) -- per ADR-027, this module is the *only* place
-in the repository allowed to import ``pyds`` or touch ``NvDsBatchMeta``/
-``NvDsFrameMeta``/``NvDsObjectMeta``; nothing DeepStream-specific leaves it.
+(see ``ai_runtime/observations.py``) -- per ADR-027, this module is the
+*only* place in the repository allowed to import ``pyds`` or touch
+``NvDsBatchMeta``/``NvDsFrameMeta``/``NvDsObjectMeta``; nothing
+DeepStream-specific leaves it.
 
 Async methods (``on_camera_connected``, ``on_frame_observation``, etc.) must
 only ever be invoked on the application asyncio loop -- GStreamer callbacks
@@ -36,9 +42,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from apps.deepstream.app.ai_runtime.observations import (
+    FrameObservation,
+    RawDetection,
+    build_frame_observation,
+)
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
-from apps.deepstream.app.observations import FrameObservation, RawDetection, build_frame_observation
 from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from shared.events.bus import EventBus
