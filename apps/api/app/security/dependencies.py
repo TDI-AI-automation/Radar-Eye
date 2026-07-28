@@ -22,6 +22,7 @@ from apps.api.app.audit import AuditLogger
 from apps.api.app.config import Settings
 from apps.api.app.models.user import ROLE_RANK
 from apps.api.app.security.auth import DecodedToken, TokenError, decode_token
+from shared.events.bus import EventBus
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -45,6 +46,10 @@ def get_settings(request: Request) -> Settings:
 
 def get_audit_logger(request: Request) -> AuditLogger:
     return request.app.state.audit_logger
+
+
+def get_event_bus(request: Request) -> EventBus:
+    return request.app.state.event_bus
 
 
 async def get_current_user(

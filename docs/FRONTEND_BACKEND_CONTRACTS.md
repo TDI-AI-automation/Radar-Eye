@@ -107,9 +107,13 @@ Operational situational awareness.
 
 GET /cameras
 
+POST /cameras
+
 GET /cameras/{camera_id}
 
 PATCH /cameras/{camera_id}
+
+PATCH /cameras/{camera_id}/lifecycle
 
 GET /cameras/{camera_id}/health
 
@@ -118,6 +122,16 @@ GET /cameras/{camera_id}/calibration
 Purpose:
 
 Camera administration.
+
+POST /cameras registers a new camera (Camera Registry, RM-12) -- creates
+both the camera record and its encrypted RTSP stream profile, initial
+lifecycle_state DRAFT.
+
+PATCH /cameras/{camera_id}/lifecycle transitions a camera's lifecycle_state
+(DRAFT/TESTING/VERIFIED/OPERATIONAL/MAINTENANCE/DISABLED, RM-12 Camera
+Runtime Ownership Refinement) -- independent of connection status, which
+remains Camera Runtime's exclusively and is never accepted from this or
+any operator-facing request.
 
 ---
 

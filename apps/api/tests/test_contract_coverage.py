@@ -40,6 +40,8 @@ def _all_route_paths(app) -> set[str]:
 # Tactical Map, and Camera Management).
 IMPLEMENTED_REST_ROUTES: set[tuple[str, str]] = {
     ("get", "/cameras"),
+    ("post", "/cameras"),
+    ("patch", "/cameras/{camera_id}/lifecycle"),
     ("get", "/threats/active"),
     ("get", "/incidents/open"),
     ("get", "/incidents"),

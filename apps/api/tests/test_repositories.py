@@ -27,8 +27,8 @@ from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
 
 
-async def _make_camera(session) -> Camera:
-    camera = Camera(name="cam-1", location="north gate", status="CONNECTED")
+async def _make_camera(session, name: str = "cam-1") -> Camera:
+    camera = Camera(name=name, location="north gate", status="CONNECTED")
     return await CameraRepository(session).add(camera)
 
 
@@ -49,8 +49,8 @@ class TestCameraRepository:
             await CameraRepository(db_session).add(camera)
 
     async def test_list_returns_all(self, db_session) -> None:
-        await _make_camera(db_session)
-        await _make_camera(db_session)
+        await _make_camera(db_session, name="cam-1")
+        await _make_camera(db_session, name="cam-2-b")
 
         cameras = await CameraRepository(db_session).list()
 

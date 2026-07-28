@@ -218,12 +218,17 @@ class TestCameraSchemas:
             camera_id=_CAMERA_ID,
             name="North Gate",
             status="CONNECTED",
+            lifecycle_state="OPERATIONAL",
+            ai_enabled=True,
+            recording_enabled=False,
             created_at=_NOW,
             updated_at=_NOW,
         )
         restored = _round_trip(schema)
         assert restored.name == "North Gate"
         assert restored.status == "CONNECTED"
+        assert restored.ai_enabled is True
+        assert restored.recording_enabled is False
 
     def test_camera_health_connected(self) -> None:
         health = CameraHealthSchema(
@@ -248,6 +253,9 @@ class TestCameraSchemas:
                 camera_id=_CAMERA_ID,
                 name="X",
                 status="BROKEN",  # type: ignore[arg-type]
+                lifecycle_state="DRAFT",
+                ai_enabled=False,
+                recording_enabled=False,
                 created_at=_NOW,
                 updated_at=_NOW,
             )

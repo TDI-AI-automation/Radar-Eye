@@ -31,6 +31,7 @@ from apps.api.app.models.human_review import HumanReviewItem
 from apps.api.app.models.incident import Incident
 from apps.api.app.models.user import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, User
 from apps.api.app.repositories.audit_log import AuditLogRepository
+from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
 from apps.api.app.security.auth import create_token_pair, hash_password
 from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
@@ -126,6 +127,27 @@ class TestCamerasPatch:
         assert len(matching) == 1
         assert matching[0].details == {"location": "south gate"}
 
+    async def test_admin_toggles_desired_state_flags(self, db_engine, db_session) -> None:
+        """RM-12 Runtime State Model -- ai_enabled/recording_enabled are
+        Desired state, operator-configurable via the same general PATCH
+        route as name/location; no dedicated endpoint, no Camera Runtime
+        call, no event published by this route (only lifecycle changes
+        publish an event -- these are plain persisted fields)."""
+        camera = await _make_camera(db_session)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}",
+                json={"ai_enabled": True, "recording_enabled": True},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["ai_enabled"] is True
+        assert data["recording_enabled"] is True
+
     async def test_returns_404_for_missing_camera(self, db_engine, db_session) -> None:
         admin = await _make_user(db_session, ROLE_ADMIN)
         app = create_app()
@@ -133,6 +155,186 @@ class TestCamerasPatch:
             response = await client.patch(
                 "/cameras/00000000-0000-0000-0000-000000000000",
                 json={"location": "x"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestCamerasPost:
+    """Camera Registry -- RM-12. POST /cameras is the fix for the gap the
+    RM-12 gap analysis found: no API path to register a camera existed
+    before this, only the out-of-band scripts/siv_register_camera.py."""
+
+    _BODY = {
+        "name": "gate-cam-1",
+        "location": "north gate",
+        "rtsp_url": "rtsp://192.0.2.10:554/stream1",
+        "username": "admin",
+        "password": "hunter2",
+        "transport": "tcp",
+    }
+
+    async def test_requires_authentication(self, db_engine, db_session) -> None:
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.post("/cameras", json=self._BODY)
+        assert response.status_code == 401
+
+    async def test_rejects_non_admin(self, db_engine, db_session) -> None:
+        operator = await _make_user(db_session, ROLE_OPERATOR)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.post(
+                "/cameras", json=self._BODY, headers=_auth_header(operator, ROLE_OPERATOR)
+            )
+        assert response.status_code == 403
+
+    async def test_admin_registers_camera_and_writes_audit_row(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.post(
+                "/cameras", json=self._BODY, headers=_auth_header(admin, ROLE_ADMIN)
+            )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["name"] == "gate-cam-1"
+        assert data["lifecycle_state"] == "DRAFT"
+        # RM-12 Design Principle 3: adding a camera must never auto-start AI;
+        # the same default applies symmetrically to recording.
+        assert data["ai_enabled"] is False
+        assert data["recording_enabled"] is False
+        assert "rtsp_url" not in data and "password" not in data
+
+        camera = await CameraRepository(db_session).get(uuid.UUID(data["camera_id"]))
+        assert camera is not None
+        profiles = await CameraStreamProfileRepository(db_session).list()
+        profile = next(p for p in profiles if p.camera_id == camera.id)
+        assert profile.transport == "tcp"
+        assert "hunter2" not in profile.rtsp_url_encrypted  # genuinely ciphertext, not plaintext
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [
+            e for e in entries if e.action == "REGISTER_CAMERA" and e.actor_user_id == admin.id
+        ]
+        assert len(matching) == 1
+
+    async def test_duplicate_name_rejected(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            first = await client.post(
+                "/cameras", json=self._BODY, headers=_auth_header(admin, ROLE_ADMIN)
+            )
+            assert first.status_code == 200
+            second = await client.post(
+                "/cameras", json=self._BODY, headers=_auth_header(admin, ROLE_ADMIN)
+            )
+        assert second.status_code == 409
+
+    async def test_desired_state_flags_can_be_set_explicitly_at_registration(
+        self, db_engine, db_session
+    ) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        body = {**self._BODY, "name": "gate-cam-2", "ai_enabled": True, "recording_enabled": True}
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.post(
+                "/cameras", json=body, headers=_auth_header(admin, ROLE_ADMIN)
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["ai_enabled"] is True
+        assert data["recording_enabled"] is True
+
+
+@pytest.mark.asyncio
+class TestCamerasLifecyclePatch:
+    """Camera Registry lifecycle transitions -- RM-12 §10's state machine,
+    independent of CameraConnectionStatus (Observed state, never touched
+    here)."""
+
+    async def test_requires_authentication(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}/lifecycle", json={"target_state": "TESTING"}
+            )
+        assert response.status_code == 401
+
+    async def test_rejects_non_admin(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
+        operator = await _make_user(db_session, ROLE_OPERATOR)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}/lifecycle",
+                json={"target_state": "TESTING"},
+                headers=_auth_header(operator, ROLE_OPERATOR),
+            )
+        assert response.status_code == 403
+
+    async def test_valid_transition_updates_state_and_writes_audit_row(
+        self, db_engine, db_session
+    ) -> None:
+        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}/lifecycle",
+                json={"target_state": "TESTING"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["lifecycle_state"] == "TESTING"
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [e for e in entries if e.action == "CHANGE_CAMERA_LIFECYCLE"]
+        assert len(matching) == 1
+        assert matching[0].details == {"previous_state": "DRAFT", "new_state": "TESTING"}
+
+    async def test_invalid_transition_rejected(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            # DRAFT -> OPERATIONAL skips TESTING/VERIFIED -- not a legal edge
+            # in RM-12 §10's state machine.
+            response = await client.patch(
+                f"/cameras/{camera.id}/lifecycle",
+                json={"target_state": "OPERATIONAL"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 422
+
+    async def test_idempotent_same_state_is_a_no_op(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session, lifecycle_state="TESTING")
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}/lifecycle",
+                json={"target_state": "TESTING"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["lifecycle_state"] == "TESTING"
+        entries = await AuditLogRepository(db_session).list()
+        assert [e for e in entries if e.action == "CHANGE_CAMERA_LIFECYCLE"] == []
+
+    async def test_returns_404_for_missing_camera(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                "/cameras/00000000-0000-0000-0000-000000000000/lifecycle",
+                json={"target_state": "TESTING"},
                 headers=_auth_header(admin, ROLE_ADMIN),
             )
         assert response.status_code == 404
