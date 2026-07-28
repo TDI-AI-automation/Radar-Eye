@@ -15,19 +15,22 @@ diffs, and dispatches the minimal set of actions -- reconciliation, not
 imperative one-shot execution: calling ``synchronize()`` repeatedly with an
 unchanged Desired State performs no additional work.
 
-Explicitly out of scope for this milestone: broker-specific transport,
-Media Publisher, Telemetry publication, Recording, Streaming, distributed
-coordination. ``synchronize()`` takes no transport-specific arguments and
-is safe to call from anywhere (startup code, an explicit refresh request, or
--- a later milestone's job -- an EventBus subscription) without changing its
-signature; this milestone does not poll and does not wire any automatic
-trigger for it.
+Explicitly out of scope for Step 4 itself: broker-specific transport, Media
+Publisher, Recording, Streaming, distributed coordination.
+``synchronize()`` takes no transport-specific arguments and is safe to call
+from anywhere (startup code, an explicit refresh request, or -- a later
+milestone's job -- an EventBus subscription) without changing its
+signature; Step 4 does not poll and does not wire any automatic trigger for
+it. Step 5 (Telemetry) added the read-only counters/accessors near the
+bottom of this class -- observational only, none of them feed back into
+this class's own reconciliation decisions.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -118,6 +121,15 @@ class DesiredStateSynchronizer:
         self._runtime_supervisor = runtime_supervisor
         self._lifecycle_policy = lifecycle_policy or DefaultLifecycleSourcePolicy()
         self._recording_pending: dict[uuid.UUID, bool] = {}
+        self._synchronization_count = 0
+        self._last_synchronization_duration_seconds: float | None = None
+        self._last_read_succeeded: bool | None = None
+        """RM-12 Camera Runtime Step 5 (Telemetry) instrumentation -- read
+        via the properties below, never consulted by this class's own
+        reconciliation decisions. ``_last_read_succeeded`` reflects
+        ``DesiredStateReader.read_all()``'s own outcome only (not the
+        reconciliation actions taken afterward) -- a passive signal for
+        Telemetry's database-readiness check, not a new active DB probe."""
 
     def recording_desired(self, camera_id: uuid.UUID) -> bool | None:
         """The most recently observed ``recording_enabled`` Desired State
@@ -128,23 +140,35 @@ class DesiredStateSynchronizer:
         return self._recording_pending.get(camera_id)
 
     async def synchronize(self) -> SynchronizationResult:
-        desired_states = await self._reader.read_all()
-        desired_by_id = {state.camera_id: state for state in desired_states}
-        actions: list[str] = []
+        started_at = time.monotonic()
+        try:
+            desired_states = await self._reader.read_all()
+        except Exception:
+            self._last_read_succeeded = False
+            raise
+        self._last_read_succeeded = True
 
-        for desired in desired_states:
-            actions.extend(await self._converge_one(desired))
+        try:
+            desired_by_id = {state.camera_id: state for state in desired_states}
+            actions: list[str] = []
 
-        # Orphaned sources: active in the pipeline but the camera no longer
-        # appears in Camera Registry's Desired State at all (as opposed to
-        # merely transitioning to an inactive lifecycle state, handled
-        # above per-camera). Converges to the same conservative default.
-        for camera_id in self._pipeline.active_camera_ids():
-            if camera_id not in desired_by_id:
-                await self._remove_source(camera_id)
-                actions.append(f"remove_source:{camera_id}")
+            for desired in desired_states:
+                actions.extend(await self._converge_one(desired))
 
-        return SynchronizationResult(actions_taken=tuple(actions))
+            # Orphaned sources: active in the pipeline but the camera no
+            # longer appears in Camera Registry's Desired State at all (as
+            # opposed to merely transitioning to an inactive lifecycle
+            # state, handled above per-camera). Converges to the same
+            # conservative default.
+            for camera_id in self._pipeline.active_camera_ids():
+                if camera_id not in desired_by_id:
+                    await self._remove_source(camera_id)
+                    actions.append(f"remove_source:{camera_id}")
+
+            return SynchronizationResult(actions_taken=tuple(actions))
+        finally:
+            self._synchronization_count += 1
+            self._last_synchronization_duration_seconds = time.monotonic() - started_at
 
     async def _converge_one(self, desired: DesiredCameraState) -> list[str]:
         actions: list[str] = []
@@ -196,3 +220,20 @@ class DesiredStateSynchronizer:
     async def _remove_source(self, camera_id: uuid.UUID) -> None:
         future = self._bridge.schedule_on_mainloop(lambda: self._pipeline.remove_source(camera_id))
         await asyncio.wrap_future(future)
+
+    # -- RM-12 Camera Runtime Step 5 (Telemetry): read-only accessors only.
+
+    @property
+    def synchronization_count(self) -> int:
+        """Cumulative count of completed ``synchronize()`` calls (counted
+        whether or not the read succeeded -- see ``last_read_succeeded``)."""
+        return self._synchronization_count
+
+    @property
+    def last_synchronization_duration_seconds(self) -> float | None:
+        return self._last_synchronization_duration_seconds
+
+    @property
+    def last_read_succeeded(self) -> bool | None:
+        """``None`` until ``synchronize()`` has run at least once."""
+        return self._last_read_succeeded

@@ -363,6 +363,16 @@ class DeepStreamPipeline:
                 )
                 self._visualization_manager.mark_failed(str(exc))
 
+    def is_built(self) -> bool:
+        """RM-12 Camera Runtime Step 5 (Telemetry): a passive readiness
+        check -- true once ``build()`` has constructed the shared
+        streammux/PGIE/tracker/SGIE topology. Does not distinguish "elements
+        constructed" from "TensorRT engines fully warmed" (``build()``
+        itself doesn't observably separate those two moments); Telemetry
+        reads this, nothing about pipeline construction changes because of
+        it."""
+        return self._streammux is not None
+
     def active_camera_ids(self) -> frozenset[uuid.UUID]:
         """Every camera_id with a currently active source. RM-12 Camera
         Runtime Step 4: ``DesiredStateSynchronizer`` uses this to find

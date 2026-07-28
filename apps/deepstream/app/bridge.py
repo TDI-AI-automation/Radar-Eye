@@ -90,6 +90,14 @@ class AsyncBridge:
             raise BridgeNotRunningError("AsyncBridge.start() has not been called")
         return self._mainloop
 
+    @property
+    def is_running(self) -> bool:
+        """RM-12 Camera Runtime Step 5 (Telemetry): a passive, read-only
+        readiness check -- true between ``start()`` and ``stop()``. Telemetry
+        reads this; nothing about the bridge's own behavior changes because
+        of it."""
+        return self._mainloop is not None
+
     def start(self) -> None:
         if self._thread is not None:
             raise RuntimeError("AsyncBridge is already started")

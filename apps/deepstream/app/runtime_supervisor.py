@@ -20,16 +20,19 @@ is scheduled onto the GLib main-loop thread via
 ``Gst.Element`` from its own (asyncio) thread directly, matching
 ``bridge.py``'s "no module reaches across threads on its own" rule.
 
-Explicitly out of scope for this milestone (see RM-12 Camera Runtime Step 3
-scope): Desired State synchronization (nothing here decides *when* to call
-EnableAI/DisableAI -- a later milestone wires that in), Event Bus
-publication, Telemetry, Media Publisher, Recording, Streaming.
+Explicitly out of scope for Step 3 itself: Desired State synchronization
+(nothing here decides *when* to call EnableAI/DisableAI -- Step 4 wires
+that in), Event Bus publication, Media Publisher, Recording, Streaming.
+Step 5 (Telemetry) added the read-only counters/accessors near the bottom
+of this class -- observational only, none of them feed back into this
+class's own decisions.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -66,8 +69,10 @@ class PipelineHandle(Protocol):
 
 
 class GpuAdmissionHook(Protocol):
-    """The extension point a future milestone (Step 5, Telemetry) is
-    expected to feed live GPU utilization into. ``try_admit`` is called
+    """The extension point a future milestone is expected to feed live GPU
+    utilization into (Step 5, Telemetry, is observational only and does not
+    touch this -- GPU admission policy remains owned by Runtime Supervisor).
+    ``try_admit`` is called
     once per EnableAI attempt that would actually change state (never for
     an idempotent no-op); a camera admitted via ``try_admit`` must later be
     ``release``d exactly once, when it stops being AI-enabled (DisableAI,
@@ -86,9 +91,10 @@ class ConcurrentEnableLimiter:
     executing cameras) thrashing the shared GPU, per the Operational
     Semantics Review's GPU/command-queue fairness finding, without needing
     live GPU telemetry (explicitly out of this milestone's scope) to be
-    useful. Step 5 (Telemetry) is expected to supply a real
-    utilization-based ``GpuAdmissionHook`` later; this one is the seam it
-    replaces, not a placeholder that does nothing."""
+    useful. A future milestone is expected to supply a real
+    utilization-based ``GpuAdmissionHook`` later (not Step 5, which is
+    observational only and does not change GPU admission policy); this one
+    is the seam it replaces, not a placeholder that does nothing."""
 
     def __init__(self, max_concurrent: int) -> None:
         if max_concurrent < 1:
@@ -141,6 +147,15 @@ class RuntimeSupervisor:
         self._bridge = bridge
         self._admission = admission
         self._workers: dict[uuid.UUID, _CameraWorker] = {}
+        self._valve_transition_count = 0
+        self._runtime_error_count = 0
+        self._last_command_latency_ms: float | None = None
+        """RM-12 Camera Runtime Step 5 (Telemetry) instrumentation --
+        counters/timing only, read via the properties below. Never read by
+        this class's own control flow (idempotency/admission/ordering
+        decisions are all unaffected by these values) -- purely additive,
+        matching HeartbeatRegistry/PerformanceInstrumentation's established
+        "observational, non-invasive" pattern elsewhere in this codebase."""
 
     def _worker_for(self, camera_id: uuid.UUID) -> _CameraWorker:
         worker = self._workers.get(camera_id)
@@ -167,6 +182,7 @@ class RuntimeSupervisor:
     async def _run_worker(self, camera_id: uuid.UUID, worker: _CameraWorker) -> None:
         while True:
             command = await worker.queue.get()
+            started_at = time.monotonic()
             try:
                 outcome = await self._execute(camera_id, worker, command.enable)
             except asyncio.CancelledError:
@@ -174,12 +190,14 @@ class RuntimeSupervisor:
                     command.future.cancel()
                 raise
             except Exception as exc:  # noqa: BLE001 -- propagated to the caller's future
+                self._runtime_error_count += 1
                 if not command.future.done():
                     command.future.set_exception(exc)
             else:
                 if not command.future.done():
                     command.future.set_result(outcome)
             finally:
+                self._last_command_latency_ms = (time.monotonic() - started_at) * 1000
                 worker.queue.task_done()
 
     async def _execute(
@@ -225,6 +243,55 @@ class RuntimeSupervisor:
 
         future = self._bridge.schedule_on_mainloop(_mutate)
         await asyncio.wrap_future(future)
+        self._valve_transition_count += 1
+
+    # -- RM-12 Camera Runtime Step 5 (Telemetry): read-only accessors only,
+    # below this point. Every one of these reports on state this class
+    # already owns for its own reasons -- none of them exist to feed a new
+    # decision back into RuntimeSupervisor itself.
+
+    def worker_camera_ids(self) -> frozenset[uuid.UUID]:
+        """Every camera this supervisor has ever handled a command for."""
+        return frozenset(self._workers.keys())
+
+    def ai_enabled_camera_ids(self) -> frozenset[uuid.UUID]:
+        return frozenset(
+            camera_id for camera_id, worker in self._workers.items() if worker.ai_enabled is True
+        )
+
+    def queued_command_count(self) -> int:
+        """Total commands currently waiting across every camera's queue
+        (excludes whichever single command each worker is actively
+        executing, if any)."""
+        return sum(worker.queue.qsize() for worker in self._workers.values())
+
+    def all_workers_alive(self) -> bool:
+        """True if no worker task has crashed or exited unexpectedly.
+        Vacuously true with zero workers -- "no workers yet" is not the same
+        condition as "a worker died"."""
+        return all(
+            worker.task is not None and not worker.task.done() for worker in self._workers.values()
+        )
+
+    @property
+    def valve_transition_count(self) -> int:
+        """Cumulative count of real valve mutations (both directions) since
+        construction -- excludes idempotent no-ops."""
+        return self._valve_transition_count
+
+    @property
+    def runtime_error_count(self) -> int:
+        """Cumulative count of commands that raised (e.g. no active source
+        bin) rather than resolving to a ``CommandOutcome``."""
+        return self._runtime_error_count
+
+    @property
+    def last_command_latency_ms(self) -> float | None:
+        """Wall-clock duration of the most recently completed command
+        (``enable_ai``/``disable_ai``, whether it mutated the valve or was
+        an idempotent no-op) -- ``None`` until at least one command has
+        completed."""
+        return self._last_command_latency_ms
 
     async def stop(self) -> None:
         """Cancels every camera's worker task and rejects any command still
