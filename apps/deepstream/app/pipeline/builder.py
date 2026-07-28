@@ -363,6 +363,15 @@ class DeepStreamPipeline:
                 )
                 self._visualization_manager.mark_failed(str(exc))
 
+    def active_camera_ids(self) -> frozenset[uuid.UUID]:
+        """Every camera_id with a currently active source. RM-12 Camera
+        Runtime Step 4: ``DesiredStateSynchronizer`` uses this to find
+        sources that must be removed because their camera no longer
+        appears in Camera Registry's Desired State at all (not merely
+        transitioned to an inactive lifecycle state, which ``bin_for()``
+        alone already covers per-camera)."""
+        return frozenset(self._sources.keys())
+
     def bin_for(self, camera_id: uuid.UUID) -> Any | None:
         """The camera's ``Gst.Bin``, or ``None`` if no source is currently
         active for it. RM-12 Camera Runtime Step 3: Runtime Supervisor's
