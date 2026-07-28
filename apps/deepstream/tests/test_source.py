@@ -26,6 +26,7 @@ from gi.repository import Gst  # noqa: E402
 
 from apps.deepstream.app.ingestion.camera_registry import CameraSource  # noqa: E402
 from apps.deepstream.app.ingestion.source import build_source_bin, valve_element_name  # noqa: E402
+from apps.deepstream.app.pipeline.frame_distributor import tee_element_name  # noqa: E402
 
 Gst.init(None)
 
@@ -33,7 +34,16 @@ Gst.init(None)
 def _missing_plugins() -> list[str]:
     return [
         name
-        for name in ("rtspsrc", "rtph264depay", "h264parse", "nvv4l2decoder", "valve")
+        for name in (
+            "rtspsrc",
+            "rtph264depay",
+            "h264parse",
+            "nvv4l2decoder",
+            "valve",
+            "tee",
+            "queue",
+            "fakesink",
+        )
         if Gst.ElementFactory.find(name) is None
     ]
 
@@ -80,14 +90,22 @@ class TestValveIntegration:
         ghost_pad = bin_.get_static_pad("src")
         assert ghost_pad.get_target() == valve.get_static_pad("src")
 
-    def test_decoder_links_directly_to_valve(self) -> None:
+    def test_decoder_links_to_tier1_tee_which_feeds_the_valve(self) -> None:
+        """RM-12 Camera Runtime Step 2: decoder -> tee -> valve. The tee is
+        the only element inserted between decode and the valve -- the AI
+        path's behavior must be unaffected by its presence."""
         source = _make_source()
         bin_ = build_source_bin(source)
         decoder = bin_.get_by_name(f"decoder-{source.camera_id}")
+        tee = bin_.get_by_name(tee_element_name(source.camera_id))
         valve = bin_.get_by_name(valve_element_name(source.camera_id))
         decoder_src = decoder.get_static_pad("src")
         assert decoder_src.is_linked()
-        assert decoder_src.get_peer() == valve.get_static_pad("sink")
+        assert decoder_src.get_peer() == tee.get_static_pad("sink")
+
+        valve_sink = valve.get_static_pad("sink")
+        assert valve_sink.is_linked()
+        assert valve_sink.get_peer().get_parent() == tee
 
     def test_valve_name_is_unique_per_camera(self) -> None:
         id_a, id_b = uuid.uuid4(), uuid.uuid4()
