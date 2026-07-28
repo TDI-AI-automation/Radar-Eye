@@ -363,6 +363,16 @@ class DeepStreamPipeline:
                 )
                 self._visualization_manager.mark_failed(str(exc))
 
+    def bin_for(self, camera_id: uuid.UUID) -> Any | None:
+        """The camera's ``Gst.Bin``, or ``None`` if no source is currently
+        active for it. RM-12 Camera Runtime Step 3: Runtime Supervisor's
+        sole read access into pipeline internals -- it locates the valve via
+        ``bin_.get_by_name(valve_element_name(camera_id))`` (see
+        ``ingestion/source.py``'s ``valve_element_name`` docstring), never
+        reaching into ``DeepStreamPipeline``'s other private state."""
+        source = self._sources.get(camera_id)
+        return source.bin if source is not None else None
+
     def remove_source(self, camera_id: uuid.UUID) -> None:
         source = self._sources.pop(camera_id, None)
         sink_pad = self._request_pads.pop(camera_id, None)
