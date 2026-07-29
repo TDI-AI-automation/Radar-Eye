@@ -85,6 +85,9 @@ class HeartbeatScheduler:
         status_provider: StatusProvider,
         interval_seconds: float = 1.0,
         on_tick: Callable[[], None] | None = None,
+        on_health_snapshot: (
+            Callable[[uuid.UUID, CameraConnectionStatus, float | None], None] | None
+        ) = None,
     ) -> None:
         self._health_collector = health_collector
         self._frame_counter = frame_counter
@@ -96,6 +99,15 @@ class HeartbeatScheduler:
         lets runtime.py record a "heartbeat" liveness beat on the shared
         HeartbeatRegistry without this (RM-09) module needing to know that
         registry exists."""
+        self._on_health_snapshot = on_health_snapshot
+        """Optional, per-camera hook called every tick with (camera_id,
+        status, fps) -- lets runtime.py persist Observed State without this
+        module taking any dependency on apps.api/the database (same
+        decoupling this module's own docstring already establishes for
+        HealthCollectorLike). Throttling to a coarser interval and skipping
+        unchanged values is the caller's responsibility, not this
+        scheduler's -- it fires every tick, same as the existing
+        health_collector.record_camera_heartbeat call above it."""
         self._task: asyncio.Task[None] | None = None
 
     def tick(self) -> None:
@@ -111,6 +123,8 @@ class HeartbeatScheduler:
             self._health_collector.record_camera_heartbeat(
                 camera_id, status=status, fps=fps, timestamp=now
             )
+            if self._on_health_snapshot is not None:
+                self._on_health_snapshot(camera_id, status, fps)
         if self._on_tick is not None:
             self._on_tick()
 

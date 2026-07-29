@@ -10,7 +10,13 @@ Define persistent data storage for Radar Eye.
 
 ## Description
 
-Registered camera sources.
+Registered camera sources. Two independent state groups (RM-12 Camera
+Runtime Ownership Refinement): Desired state (`lifecycle_state`,
+`ai_enabled`, `recording_enabled`) is written exclusively by Camera
+Registry (the API service); Observed state (`status` and the
+fps/latency/last_seen/reconnect/error fields below) is written
+exclusively by Camera Runtime (`apps.deepstream`), persisted directly
+since the two run as separate processes and don't share memory.
 
 ### Fields
 
@@ -18,6 +24,14 @@ id (UUID)
 name
 location
 status
+lifecycle_state (DRAFT / TESTING / VERIFIED / OPERATIONAL / MAINTENANCE / DISABLED)
+ai_enabled
+recording_enabled
+fps
+latency_ms
+last_seen_at
+reconnect_count
+last_stream_error
 created_at
 updated_at
 
@@ -27,7 +41,9 @@ updated_at
 
 ## Description
 
-Camera connection configuration.
+Camera connection configuration. `rtsp_url_encrypted` is generated
+server-side (never operator-entered) from brand + ip_address + port +
+stream_path + username + password.
 
 ### Fields
 
@@ -35,6 +51,13 @@ id (UUID)
 camera_id (FK)
 rtsp_url_encrypted
 transport
+brand
+model
+ip_address
+port
+stream_path
+username
+password_encrypted
 created_at
 updated_at
 

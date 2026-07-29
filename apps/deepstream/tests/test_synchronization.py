@@ -144,11 +144,45 @@ class TestStartupSynchronization:
         assert pipeline.add_source_calls == [camera_id]
         assert f"add_source:{camera_id}" in result.actions_taken
 
-    async def test_draft_camera_gets_no_source(self) -> None:
+    async def test_draft_camera_gets_a_source_but_ai_stays_off(self) -> None:
+        """Camera Connectivity and AI Runtime are independent (Operator
+        Acceptance Testing finding): a DRAFT camera connects immediately
+        -- even with ai_enabled=True, AI must not run until the camera is
+        promoted to OPERATIONAL."""
         loop = asyncio.get_running_loop()
         camera_id = uuid.uuid4()
         synchronizer, pipeline, _ = _make_synchronizer(
-            loop, [_desired(camera_id, lifecycle_state="DRAFT")]
+            loop, [_desired(camera_id, lifecycle_state="DRAFT", ai_enabled=True)]
+        )
+
+        result = await synchronizer.synchronize()
+
+        assert pipeline.add_source_calls == [camera_id]
+        assert f"add_source:{camera_id}" in result.actions_taken
+        assert f"enable_ai:{camera_id}" not in result.actions_taken
+        assert pipeline.bin_for(camera_id).valve.drop is True  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("lifecycle_state", ["TESTING", "VERIFIED", "MAINTENANCE"])
+    async def test_non_operational_non_disabled_camera_connects_but_ai_stays_off(
+        self, lifecycle_state: str
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        synchronizer, pipeline, _ = _make_synchronizer(
+            loop, [_desired(camera_id, lifecycle_state=lifecycle_state, ai_enabled=True)]
+        )
+
+        result = await synchronizer.synchronize()
+
+        assert pipeline.add_source_calls == [camera_id]
+        assert f"enable_ai:{camera_id}" not in result.actions_taken
+        assert pipeline.bin_for(camera_id).valve.drop is True  # type: ignore[union-attr]
+
+    async def test_disabled_camera_gets_no_source(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        synchronizer, pipeline, _ = _make_synchronizer(
+            loop, [_desired(camera_id, lifecycle_state="DISABLED")]
         )
 
         result = await synchronizer.synchronize()
@@ -241,20 +275,30 @@ class TestDesiredStateChanges:
         assert pipeline.remove_source_calls == [camera_id]
         assert f"remove_source:{camera_id}" in result.actions_taken
 
-    async def test_lifecycle_draft_to_operational_adds_the_source(self) -> None:
+    async def test_lifecycle_draft_to_operational_enables_ai_without_recreating_the_source(
+        self,
+    ) -> None:
+        """A DRAFT camera is already connected (Camera Connectivity is
+        independent of lifecycle except DISABLED) -- promoting it to
+        OPERATIONAL must only change AI eligibility, never tear down and
+        rebuild the source."""
         loop = asyncio.get_running_loop()
         camera_id = uuid.uuid4()
         synchronizer, pipeline, reader = _make_synchronizer(
-            loop, [_desired(camera_id, lifecycle_state="DRAFT")]
+            loop, [_desired(camera_id, lifecycle_state="DRAFT", ai_enabled=True)]
         )
         await synchronizer.synchronize()
-        assert pipeline.bin_for(camera_id) is None
+        assert pipeline.bin_for(camera_id) is not None
+        assert pipeline.bin_for(camera_id).valve.drop is True  # type: ignore[union-attr]
+        calls_before = list(pipeline.add_source_calls)
 
-        reader.states = [_desired(camera_id, lifecycle_state="OPERATIONAL")]
+        reader.states = [_desired(camera_id, lifecycle_state="OPERATIONAL", ai_enabled=True)]
         result = await synchronizer.synchronize()
 
-        assert pipeline.bin_for(camera_id) is not None
-        assert f"add_source:{camera_id}" in result.actions_taken
+        assert pipeline.add_source_calls == calls_before  # no re-add
+        assert f"add_source:{camera_id}" not in result.actions_taken
+        assert pipeline.bin_for(camera_id).valve.drop is False  # type: ignore[union-attr]
+        assert f"enable_ai:{camera_id}" in result.actions_taken
 
     async def test_ai_enabled_transition_opens_the_valve(self) -> None:
         loop = asyncio.get_running_loop()
@@ -283,6 +327,26 @@ class TestDesiredStateChanges:
         reader.states = [_desired(camera_id, ai_enabled=False)]
         result = await synchronizer.synchronize()
 
+        assert pipeline.bin_for(camera_id).valve.drop is True  # type: ignore[union-attr]
+        assert f"disable_ai:{camera_id}" in result.actions_taken
+
+    async def test_lifecycle_operational_to_maintenance_closes_the_valve_but_keeps_the_source(
+        self,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        synchronizer, pipeline, reader = _make_synchronizer(
+            loop, [_desired(camera_id, ai_enabled=True)]
+        )
+        await synchronizer.synchronize()
+        assert pipeline.bin_for(camera_id).valve.drop is False  # type: ignore[union-attr]
+        calls_before = list(pipeline.add_source_calls)
+
+        reader.states = [_desired(camera_id, lifecycle_state="MAINTENANCE", ai_enabled=True)]
+        result = await synchronizer.synchronize()
+
+        assert pipeline.add_source_calls == calls_before  # source untouched
+        assert pipeline.bin_for(camera_id) is not None
         assert pipeline.bin_for(camera_id).valve.drop is True  # type: ignore[union-attr]
         assert f"disable_ai:{camera_id}" in result.actions_taken
 
@@ -400,6 +464,9 @@ class TestLifecyclePolicyIsInjectable:
         class AlwaysActivePolicy:
             def should_have_active_source(self, lifecycle_state: str) -> bool:
                 return True
+
+            def should_allow_ai(self, lifecycle_state: str) -> bool:
+                return False
 
         loop = asyncio.get_running_loop()
         camera_id = uuid.uuid4()

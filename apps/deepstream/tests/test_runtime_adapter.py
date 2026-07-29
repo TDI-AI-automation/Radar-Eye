@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 
+from apps.api.app.models.camera import Camera
+from apps.api.app.repositories.camera import CameraRepository
 from apps.deepstream.app.ai_runtime.detection import RuntimeAdapter
 from apps.deepstream.app.ai_runtime.observations import FrameObservation, build_frame_observation
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
@@ -232,3 +234,94 @@ class TestHeartbeatRegistry:
         await adapter.on_camera_disconnected(_CAMERA, "RTSP timeout")
 
         assert heartbeat.status("camera", stale_after_seconds=5.0).counter == counter_after_connect
+
+
+@pytest.mark.asyncio
+class TestObservedStatePersistence:
+    """Camera Connectivity migration: Observed State must be persisted to
+    Postgres, event-driven, one write per connection-state transition --
+    not per frame. Requires real PostgreSQL (session_factory fixture),
+    skips if unreachable."""
+
+    async def test_session_factory_is_optional(self, bus: InProcessEventBus) -> None:
+        adapter = RuntimeAdapter(bus)  # no session_factory= passed
+
+        await adapter.on_camera_connected(_CAMERA)  # must not raise
+
+    async def test_on_camera_connected_persists_status_and_last_seen(
+        self, db_session, session_factory
+    ) -> None:
+        camera = await CameraRepository(db_session).add(
+            Camera(name="cam-1", status="DISCONNECTED", lifecycle_state="DRAFT")
+        )
+        await db_session.commit()
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.on_camera_connected(camera.id)
+
+        # A fresh session, not db_session -- db_session's identity map would
+        # otherwise return its own stale in-memory copy of `camera` rather
+        # than re-querying the row the adapter just wrote via a different
+        # session (same fix as this repo's other cross-session tests).
+        async with session_factory() as verify_session:
+            refreshed = await CameraRepository(verify_session).get(camera.id)
+        assert refreshed is not None
+        assert refreshed.status == "CONNECTED"
+        assert refreshed.last_seen_at is not None
+
+    async def test_on_camera_reconnecting_increments_reconnect_count(
+        self, db_session, session_factory
+    ) -> None:
+        camera = await CameraRepository(db_session).add(
+            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
+        )
+        await db_session.commit()
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.on_camera_reconnecting(camera.id)
+        await adapter.on_camera_reconnecting(camera.id)
+
+        async with session_factory() as verify_session:
+            refreshed = await CameraRepository(verify_session).get(camera.id)
+        assert refreshed is not None
+        assert refreshed.status == "RECONNECTING"
+        assert refreshed.reconnect_count == 2
+
+    async def test_on_camera_disconnected_persists_status_and_reason(
+        self, db_session, session_factory
+    ) -> None:
+        camera = await CameraRepository(db_session).add(
+            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
+        )
+        await db_session.commit()
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.on_camera_disconnected(camera.id, "RTSP timeout")
+
+        async with session_factory() as verify_session:
+            refreshed = await CameraRepository(verify_session).get(camera.id)
+        assert refreshed is not None
+        assert refreshed.status == "DISCONNECTED"
+        assert refreshed.last_stream_error == "RTSP timeout"
+
+    async def test_persist_health_snapshot_writes_fps_and_latency(
+        self, db_session, session_factory
+    ) -> None:
+        camera = await CameraRepository(db_session).add(
+            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
+        )
+        await db_session.commit()
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.persist_health_snapshot(camera.id, fps=24.5, latency_ms=5.1)
+
+        async with session_factory() as verify_session:
+            refreshed = await CameraRepository(verify_session).get(camera.id)
+        assert refreshed is not None
+        assert refreshed.fps == pytest.approx(24.5)
+        assert refreshed.latency_ms == pytest.approx(5.1)
+
+    async def test_persistence_for_unknown_camera_does_not_raise(self, session_factory) -> None:
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.on_camera_connected(uuid.uuid4())  # no matching row -- must not raise

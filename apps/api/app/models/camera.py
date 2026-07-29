@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import get_args
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -64,6 +64,17 @@ class Camera(Base):
     # claim -- Camera Runtime's first real connection attempt overwrites it
     # as a normal write, not a correction of something Registry got wrong.
     status: Mapped[str] = mapped_column(String, nullable=False)
+    fps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconnect_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_stream_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    """``fps``/``latency_ms``/``last_seen_at``/``reconnect_count``/
+    ``last_stream_error`` are Observed state, same ownership rule as
+    ``status`` above -- written exclusively by Camera Runtime. Persisted
+    (not just in-memory) so GET /cameras and GET /health/cameras reflect
+    real values across the apps.api/apps.deepstream process boundary,
+    which don't share memory."""
     lifecycle_state: Mapped[str] = mapped_column(String, nullable=False, server_default="DRAFT")
     ai_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     recording_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

@@ -14,12 +14,14 @@ introducing one is a real API-versioning decision requiring its own ADR):
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.health.collector import HealthCollector
+from apps.api.app.models.camera import Camera
 from apps.api.app.repositories.camera import CameraRepository
 from shared.schemas.api import ApiResponse
 from shared.schemas.camera import CameraHealthSchema
@@ -30,6 +32,29 @@ from shared.schemas.health import (
 )
 
 router = APIRouter(tags=["Health & Monitoring"])
+
+
+def _to_camera_health_schema(camera: Camera, *, now: datetime) -> CameraHealthSchema:
+    """Observed state is persisted by Camera Runtime (apps.deepstream) to
+    the same ``cameras`` row GET /cameras reads -- apps.api and
+    apps.deepstream are separate processes and don't share memory, so this
+    reads the database directly rather than HealthCollector's in-memory
+    camera-heartbeat dict, which nothing in a separate process can ever
+    feed."""
+    last_frame_age_seconds = (
+        max(0.0, (now - camera.last_seen_at).total_seconds())
+        if camera.last_seen_at is not None
+        else None
+    )
+    return CameraHealthSchema(
+        camera_id=camera.id,
+        status=camera.status,  # type: ignore[arg-type]
+        fps=camera.fps if camera.status == "CONNECTED" else None,
+        last_frame_age_seconds=last_frame_age_seconds,
+        latency_ms=camera.latency_ms,
+        reconnect_count=camera.reconnect_count,
+        last_stream_error=camera.last_stream_error,
+    )
 
 
 def _get_collector(request: Request) -> HealthCollector:
@@ -121,24 +146,13 @@ async def get_recording_health(
     summary="Get health metrics for all registered cameras",
 )
 async def get_all_cameras_health(
-    request: Request,
-    collector: HealthCollector = Depends(_get_collector),  # noqa: B008
     db_session: AsyncSession | None = Depends(_get_db_session),  # noqa: B008
 ) -> ApiResponse[list[CameraHealthSchema]]:
-    camera_ids: list[uuid.UUID] = []
-    if db_session is not None:
-        try:
-            repo = CameraRepository(db_session)
-            cameras = await repo.list()
-            camera_ids = [c.id for c in cameras]
-        except Exception:
-            pass
-
-    # Fallback to active heartbeats if no DB
-    if not camera_ids:
-        camera_ids = list(collector._camera_heartbeats.keys())
-
-    results = [collector.get_camera_health(cam_id) for cam_id in camera_ids]
+    if db_session is None:
+        return ApiResponse[list[CameraHealthSchema]](success=True, data=[])
+    cameras = await CameraRepository(db_session).list()
+    now = datetime.now(timezone.utc)
+    results = [_to_camera_health_schema(camera, now=now) for camera in cameras]
     return ApiResponse[list[CameraHealthSchema]](success=True, data=results)
 
 
@@ -149,7 +163,14 @@ async def get_all_cameras_health(
 )
 async def get_camera_health(
     camera_id: uuid.UUID,
-    collector: HealthCollector = Depends(_get_collector),  # noqa: B008
+    db_session: AsyncSession | None = Depends(_get_db_session),  # noqa: B008
 ) -> ApiResponse[CameraHealthSchema]:
-    health = collector.get_camera_health(camera_id)
-    return ApiResponse[CameraHealthSchema](success=True, data=health)
+    camera = await CameraRepository(db_session).get(camera_id) if db_session is not None else None
+    if camera is None:
+        return ApiResponse[CameraHealthSchema](
+            success=True,
+            data=CameraHealthSchema(camera_id=camera_id, status="DISCONNECTED"),
+        )
+    return ApiResponse[CameraHealthSchema](
+        success=True, data=_to_camera_health_schema(camera, now=datetime.now(timezone.utc))
+    )

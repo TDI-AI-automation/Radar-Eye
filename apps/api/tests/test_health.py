@@ -13,6 +13,8 @@ from httpx import ASGITransport, AsyncClient
 
 from apps.api.app.health import HealthCollector
 from apps.api.app.main import create_app
+from apps.api.app.models.camera import Camera
+from apps.api.app.repositories.camera import CameraRepository
 from shared.schemas.health import (
     CameraHealthSummarySchema,
     GPUHealthSchema,
@@ -126,16 +128,28 @@ def test_system_health_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_rest_endpoints(_default_env: None) -> None:
+async def test_health_rest_endpoints(db_session) -> None:
     """Test REST API responses match FRONTEND_BACKEND_CONTRACTS.md's documented
     System Health paths exactly (no version prefix -- see the RM-09
-    architectural review, Repository Integration Audit)."""
-    app = create_app()
-    cam_id = uuid.uuid4()
+    architectural review, Repository Integration Audit).
 
-    # Pre-populate heartbeat
-    collector: HealthCollector = app.state.health_collector
-    collector.record_camera_heartbeat(cam_id, status="CONNECTED", fps=30.0)
+    GET /health/cameras and GET /cameras/{id}/health read persisted
+    Observed State (Camera Connectivity migration) -- a real Camera row is
+    created here rather than pre-populating HealthCollector's in-memory
+    camera-heartbeat dict directly, since apps.api and apps.deepstream are
+    separate processes and that dict is never fed by anything real."""
+    app = create_app()
+    camera = await CameraRepository(db_session).add(
+        Camera(
+            name="cam-1",
+            status="CONNECTED",
+            lifecycle_state="OPERATIONAL",
+            fps=30.0,
+            latency_ms=5.2,
+        )
+    )
+    await db_session.commit()
+    cam_id = camera.id
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -173,6 +187,10 @@ async def test_health_rest_endpoints(_default_env: None) -> None:
         body = resp.json()
         assert body["success"] is True
         assert len(body["data"]) >= 1
+        entry = next(d for d in body["data"] if d["camera_id"] == str(cam_id))
+        assert entry["status"] == "CONNECTED"
+        assert entry["fps"] == pytest.approx(30.0)
+        assert entry["latency_ms"] == pytest.approx(5.2)
 
         # GET /cameras/{camera_id}/health
         resp = await client.get(f"/cameras/{cam_id}/health")
@@ -181,4 +199,6 @@ async def test_health_rest_endpoints(_default_env: None) -> None:
         assert body["success"] is True
         assert body["data"]["camera_id"] == str(cam_id)
         assert body["data"]["status"] == "CONNECTED"
+        assert body["data"]["fps"] == pytest.approx(30.0)
+        assert body["data"]["latency_ms"] == pytest.approx(5.2)
         assert body["data"]["fps"] == 30.0

@@ -42,6 +42,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from apps.api.app.repositories.camera import CameraRepository
 from apps.deepstream.app.ai_runtime.observations import (
     FrameObservation,
     RawDetection,
@@ -79,6 +82,7 @@ class RuntimeAdapter:
         instrumentation: PerformanceInstrumentation | None = None,
         heartbeat: HeartbeatRegistry | None = None,
         tracer: PipelineTracer | None = None,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         self._bus = bus
         self._instrumentation = instrumentation
@@ -86,6 +90,14 @@ class RuntimeAdapter:
         """RM-11.SIV Unified Heartbeat -- optional, see threat_runtime_adapter.py's
         identical pattern."""
         self._tracer = tracer or PipelineTracer(enabled=False)
+        self._session_factory = session_factory
+        """Optional, None-safe (same idiom as heartbeat/instrumentation
+        above) -- Operator Acceptance Testing finding: Observed state
+        (status/last_seen/reconnect_count/last_stream_error) must be
+        persisted to Postgres, not just tracked in ``self._status`` below,
+        since apps.api and apps.deepstream are separate processes and
+        don't share memory. Written here, event-driven, one write per
+        connection-state transition -- never per frame."""
         self._status: dict[uuid.UUID, CameraConnectionStatus] = {}
         self._observation_count = 0
         self.last_observation: FrameObservation | None = None
@@ -108,6 +120,7 @@ class RuntimeAdapter:
         self._beat("camera")
         _camera_logger.info("Camera %s connected", camera_id)
         _audit_logger.info("Camera Connected: camera=%s", camera_id)
+        await self._persist_observed_state(camera_id, status="CONNECTED")
         await self._bus.publish(
             SystemEvent(
                 event_type="SystemEvent",
@@ -122,6 +135,7 @@ class RuntimeAdapter:
 
     async def on_camera_reconnecting(self, camera_id: uuid.UUID) -> None:
         self._status[camera_id] = "RECONNECTING"
+        await self._persist_observed_state(camera_id, status="RECONNECTING", reconnect=True)
 
     async def on_camera_disconnected(self, camera_id: uuid.UUID, reason: str) -> None:
         """DEEPSTREAM_PIPELINE_SPEC.md 'Failure Handling' -> 'Camera Failure':
@@ -129,6 +143,7 @@ class RuntimeAdapter:
         self._status[camera_id] = "DISCONNECTED"
         _camera_logger.warning("Camera %s disconnected: %s", camera_id, reason)
         _audit_logger.warning("Camera Disconnected: camera=%s reason=%s", camera_id, reason)
+        await self._persist_observed_state(camera_id, status="DISCONNECTED", error=reason)
         await self._bus.publish(
             CameraDisconnectedEvent(
                 event_type="CameraDisconnectedEvent",
@@ -136,6 +151,61 @@ class RuntimeAdapter:
                 payload=CameraDisconnectedPayload(camera_id=camera_id, reason=reason),
             )
         )
+
+    async def _persist_observed_state(
+        self,
+        camera_id: uuid.UUID,
+        *,
+        status: CameraConnectionStatus,
+        reconnect: bool = False,
+        error: str | None = None,
+    ) -> None:
+        """Writes one connection-state transition to ``cameras``. Event-
+        driven, immediate: called exactly once per callback invocation
+        above, never on a per-frame/polling loop -- see this class's
+        constructor docstring for why persistence exists at all. A no-op
+        when no ``session_factory`` was supplied (tests, or any caller that
+        doesn't need persistence)."""
+        if self._session_factory is None:
+            return
+        try:
+            async with self._session_factory() as session:
+                camera = await CameraRepository(session).get(camera_id)
+                if camera is None:
+                    return
+                camera.status = status
+                if status == "CONNECTED":
+                    camera.last_seen_at = datetime.now(timezone.utc)
+                if reconnect:
+                    camera.reconnect_count += 1
+                if error is not None:
+                    camera.last_stream_error = error
+                await session.commit()
+        except Exception:
+            logger.exception("Failed to persist observed state for camera %s", camera_id)
+
+    async def persist_health_snapshot(
+        self, camera_id: uuid.UUID, *, fps: float | None, latency_ms: float | None
+    ) -> None:
+        """Writes one fps/latency sample. Unlike ``_persist_observed_state``
+        (called once per connection-state transition), this is called at a
+        deliberately coarse, configurable cadence -- see
+        ``HeartbeatScheduler``'s ``on_health_snapshot`` wiring in
+        ``runtime.py``, which throttles calls to this method and skips ones
+        whose values haven't changed meaningfully, so it is never invoked
+        per-frame or even every heartbeat tick."""
+        if self._session_factory is None:
+            return
+        try:
+            async with self._session_factory() as session:
+                camera = await CameraRepository(session).get(camera_id)
+                if camera is None:
+                    return
+                camera.fps = fps
+                camera.latency_ms = latency_ms
+                await session.commit()
+        except Exception:
+            logger.exception("Failed to persist health snapshot for camera %s", camera_id)
 
     async def on_pipeline_error(
         self, message: str, *, severity: Literal["ERROR", "CRITICAL"] = "ERROR"

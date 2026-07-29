@@ -80,10 +80,17 @@ the other three (§4) — it must never be a dependency anything else needs.
    `AsyncBridge.schedule_on_mainloop()` is usable.
 3. **Initial Desired State convergence** —
    `desired_state_synchronizer.synchronize()`: reads Camera Registry's
-   Desired State from the database, adds a source per `OPERATIONAL`
-   camera, converges `ai_enabled` for each. Must run *before* the
-   pipeline goes PLAYING so the first batch already reflects the correct
-   source set.
+   Desired State from the database, adds a source per camera whose
+   `lifecycle_state` is not `DISABLED` (Camera Connectivity is
+   independent of lifecycle_state and `ai_enabled` -- Operator
+   Acceptance Testing finding: a camera used to only connect once
+   promoted all the way to `OPERATIONAL`, so registering a camera and
+   having it connect were never the same step), then converges
+   `ai_enabled` only for cameras that are both `ai_enabled=true` and
+   `lifecycle_state == OPERATIONAL` (AI eligibility is unchanged from
+   before this fix -- only the connectivity gate moved). Must run
+   *before* the pipeline goes PLAYING so the first batch already reflects
+   the correct source set.
 4. Reconnect policy + `RuntimeAdapter.on_camera_connected()` for each
    camera now active.
 5. `pipeline.start()` — sets the `Gst.Pipeline` to PLAYING. Frames begin
@@ -170,7 +177,7 @@ one component, only one of them tears it down.
 | Threat assessment orchestration | `ThreatEngineRuntimeAdapter` | Owns the Calibration → Threat Engine → Incident/Alarm call chain per frame observation. |
 | Alarm records | `AlarmService` | Long-lived singleton (in-memory `_records` state persists across escalations, unlike per-call `IncidentService`/`CalibrationService`). |
 | Camera Desired State (`lifecycle_state`, `ai_enabled`, `recording_enabled`) | Camera Registry (API service, database) | `DeepStreamPipeline`/`RuntimeSupervisor` never write it — they only converge *toward* it, read-only via `DesiredStateReader`. |
-| Camera Observed State (`status`) | `RuntimeAdapter` (via Camera Runtime) | The reverse boundary: Camera Registry never writes this column. |
+| Camera Observed State (`status`, `fps`, `latency_ms`, `last_seen_at`, `reconnect_count`, `last_stream_error`) | `RuntimeAdapter` (connection-state fields, immediate) / `HeartbeatScheduler` via its `on_health_snapshot` hook (fps/latency, throttled) | The reverse boundary: Camera Registry never writes these columns. Persisted to Postgres directly from `apps.deepstream`, not routed through `apps.api`. |
 
 If ownership looks shared (e.g. Tier 1 tee), it is because construction
 and consumption are genuinely different responsibilities — the owner
@@ -296,8 +303,34 @@ another's), and the rebuild is scheduled back onto the GLib thread.
   state.
 - Desired State (`lifecycle_state`, `ai_enabled`, `recording_enabled`)
   is owned exclusively by Camera Registry; Camera Runtime only reads it.
-- Camera Observed State (`status`) is owned exclusively by Camera
-  Runtime; Camera Registry never writes it.
+- Camera Observed State (`status`, `fps`, `latency_ms`, `last_seen_at`,
+  `reconnect_count`, `last_stream_error`) is owned exclusively by Camera
+  Runtime; Camera Registry never writes it. Persisted to Postgres (not
+  just tracked in-memory) since `apps.api` and `apps.deepstream` are
+  separate processes and don't share memory -- `RuntimeAdapter` writes
+  connection-state transitions immediately, event-driven, one write per
+  transition; `HeartbeatScheduler`'s `on_health_snapshot` hook writes
+  fps/latency at a deliberately coarser, configurable interval
+  (`observed_state_flush_interval_seconds`, default 3s) to keep database
+  write volume low -- never per-frame.
+- Camera Connectivity is independent of `ai_enabled` and independent of
+  `lifecycle_state` except `DISABLED`: every non-DISABLED camera gets an
+  active source. AI eligibility is unchanged and remains its own,
+  separate gate: `RuntimeSupervisor.enable_ai` only actually runs when
+  `ai_enabled=true` **and** `lifecycle_state == OPERATIONAL`
+  (`DefaultLifecycleSourcePolicy.should_have_active_source`/
+  `.should_allow_ai` in `synchronization.py` -- two independent methods
+  on one policy object, not one combined check).
+- `DesiredStateSynchronizer` still owns calling `_ensure_source`/
+  `_remove_source` directly (unchanged) -- only the *policy* deciding
+  when to call them changed. Known gap, found during Operator Acceptance
+  Testing hardware validation, not fixed here (out of scope -- requires
+  its own design, not a "smallest correct change"): `runtime.py`'s
+  `_schedule_reconnect`/`_reconnect` GLib-timeout retry loop has no exit
+  condition tied to Desired State -- once a reconnect chain is in
+  flight, transitioning the camera to `DISABLED` does not stop it. Track
+  before relying on `DISABLED` to halt an in-flight reconnect storm
+  against real hardware.
 - Telemetry is observational only — it never feeds back into any
   reconciliation or valve decision.
 - Tier 1 must remain structurally independent of AI state (its tee sits

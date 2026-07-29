@@ -131,6 +131,7 @@ class DeepStreamRuntime:
             instrumentation=self._instrumentation,
             heartbeat=self.heartbeat_registry,
             tracer=self._tracer,
+            session_factory=session_factory,
         )
 
         # Phase 2: AlarmService is a long-lived singleton (its in-memory
@@ -206,6 +207,14 @@ class DeepStreamRuntime:
         self._telemetry_task: asyncio.Task[None] | None = None
         self._desired_state_sync_task: asyncio.Task[None] | None = None
         self._desired_state_sync_running = False
+        self._observed_state_flush_tasks: set[asyncio.Task[None]] = set()
+        self._last_health_flush: dict[uuid.UUID, float] = {}
+        """camera_id -> monotonic time of its last persisted fps/latency
+        write. Throttles HeartbeatScheduler's on_health_snapshot hook
+        (which fires every heartbeat tick) down to
+        observed_state_flush_interval_seconds, per the Camera Connectivity
+        migration's write-volume constraint -- high-frequency metrics must
+        not be written every tick."""
 
     async def start(self) -> None:
         self._instrumentation.mark_pipeline_build_start()
@@ -214,9 +223,10 @@ class DeepStreamRuntime:
 
         # RM-12 Camera Runtime v1: initial Desired State convergence
         # replaces the previous unconditional "add every registered camera"
-        # loop -- only cameras Camera Registry marks OPERATIONAL get an
-        # active source, and ai_enabled is converged for each one that does
-        # (see synchronization.py's DefaultLifecycleSourcePolicy).
+        # loop -- every camera except DISABLED gets an active source (Camera
+        # Connectivity is independent of lifecycle_state/ai_enabled), and AI
+        # is converged only for cameras that are both ai_enabled and
+        # OPERATIONAL (see synchronization.py's DefaultLifecycleSourcePolicy).
         result = await self.desired_state_synchronizer.synchronize()
         logger.info("Initial Desired State synchronization: %s", result.actions_taken)
 
@@ -243,6 +253,7 @@ class DeepStreamRuntime:
             status_provider=self._runtime_adapter.status_for,
             interval_seconds=self._settings.heartbeat_interval_seconds,
             on_tick=lambda: self.heartbeat_registry.beat("heartbeat"),
+            on_health_snapshot=self._on_health_snapshot,
         )
         self._heartbeat.start()
 
@@ -259,6 +270,32 @@ class DeepStreamRuntime:
         DeepStreamRuntime doesn't hard-import apps.api.app.main at module
         load time."""
         self._health_collector = health_collector
+
+    def _on_health_snapshot(self, camera_id: uuid.UUID, status: Any, fps: float | None) -> None:
+        """HeartbeatScheduler's on_health_snapshot hook -- fires every
+        heartbeat tick (default 1s). Throttled here to
+        observed_state_flush_interval_seconds (default 3s) before actually
+        persisting, per the write-volume constraint: high-frequency metrics
+        must not be written every tick. Skipped entirely for a
+        non-CONNECTED camera (nothing meaningful to persist). Latency is a
+        single pipeline-wide rolling average (PerformanceInstrumentation
+        has no per-camera figure today), applied to every connected camera
+        -- a known simplification, not a per-camera measurement."""
+        if status != "CONNECTED":
+            return
+        now = time.monotonic()
+        last_flush = self._last_health_flush.get(camera_id)
+        if last_flush is not None and (
+            now - last_flush < self._settings.observed_state_flush_interval_seconds
+        ):
+            return
+        self._last_health_flush[camera_id] = now
+        latency_ms = self._instrumentation.snapshot().end_to_end_latency_ms
+        task = asyncio.get_event_loop().create_task(
+            self._runtime_adapter.persist_health_snapshot(camera_id, fps=fps, latency_ms=latency_ms)
+        )
+        self._observed_state_flush_tasks.add(task)
+        task.add_done_callback(self._observed_state_flush_tasks.discard)
 
     def get_metrics_snapshot(self) -> PerformanceSnapshot:
         """RM-11 Phase 1 approval: 'collect and expose' performance
@@ -392,7 +429,20 @@ class DeepStreamRuntime:
 
     def _schedule_reconnect(self, source: RtspSource) -> None:
         GLib, _Gst = _import_glib()
-        policy = self._policies[source.camera_id]
+        # self._policies is only pre-populated in start() for cameras
+        # already active at startup -- a camera added later (the normal
+        # case now that Camera Connectivity is independent of lifecycle_state,
+        # not just for a camera newly promoted to OPERATIONAL as before)
+        # has no entry yet. Lazily create one here rather than requiring
+        # every add_source path to remember to do it.
+        policy = self._policies.setdefault(
+            source.camera_id,
+            ReconnectPolicy(
+                initial_backoff_seconds=self._settings.reconnect_initial_backoff_seconds,
+                max_backoff_seconds=self._settings.reconnect_max_backoff_seconds,
+                multiplier=self._settings.reconnect_backoff_multiplier,
+            ),
+        )
         delay = policy.next_delay_seconds()
         logger.info(
             "Scheduling reconnect for camera %s in %.1fs (attempt %d)",

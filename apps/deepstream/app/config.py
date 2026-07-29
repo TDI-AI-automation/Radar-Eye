@@ -97,6 +97,17 @@ class DeepStreamSettings(BaseModel):
     changes reach the running pipeline without a process restart, until a
     later milestone replaces it with event-driven synchronization."""
 
+    observed_state_flush_interval_seconds: float = 3.0
+    """How often Observed State's high-frequency metrics (fps, latency_ms)
+    are persisted to Postgres -- deliberately coarser than
+    ``heartbeat_interval_seconds`` (which drives the in-memory/dashboard
+    heartbeat tick). Connection-state transitions (connected/disconnected/
+    reconnecting) are written immediately, event-driven, regardless of this
+    setting -- this interval only throttles the high-frequency metrics
+    write, to keep database write volume low and avoid a per-frame or
+    per-second write pattern (Operator Acceptance Testing's Camera
+    Connectivity migration's own performance constraint)."""
+
 
 def _load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:

@@ -54,6 +54,9 @@ class CameraHealthSchema(BaseModel):
     """Current decoded frames per second; None when disconnected."""
     last_frame_age_seconds: float | None = None
     """Seconds since the last frame was received; None when disconnected."""
+    latency_ms: float | None = None
+    reconnect_count: int = 0
+    last_stream_error: str | None = None
 
 
 class CameraDisconnectedSchema(BaseModel):
