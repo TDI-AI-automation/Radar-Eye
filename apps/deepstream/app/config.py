@@ -304,13 +304,36 @@ class WatchdogSettings(BaseModel):
 class FrameTraceSettings(BaseModel):
     enabled: bool = False
     """RM-11.SIV: off by default -- verbose per-frame stage tracing, see
-    apps/deepstream/app/siv/pipeline_trace.py."""
+    apps/deepstream/app/pipeline_trace.py."""
+
+
+class ProductionValidationModeSettings(BaseModel):
+    enabled: bool = False
+    """Off by default -- normal production logging, no dashboard, no
+    watchdog. When true, main.py additionally: forces frame_trace.enabled
+    (the existing per-frame FRAME RECEIVED -> ... -> EVENT PUBLISHED
+    trace) on regardless of this file's own frame_trace section, elevates
+    every radar_eye.stage.* logger to DEBUG (stage_logging.py's
+    enable_maximum_observability()), and starts the existing
+    Dashboard/Watchdog (apps/deepstream/app/siv/) against the real
+    production runtime's own HeartbeatRegistry/PerformanceInstrumentation
+    -- no new metric collection, purely reusing what Camera Runtime v1
+    and RM-11.SIV already built. A single flag, read once at process
+    startup like every other setting in this file -- not hot-reloadable."""
+    dashboard_interval_seconds: float = 2.0
+    """How often the console dashboard redraws. Independent of
+    watchdog.check_interval_seconds (the watchdog's own stale-detection
+    cadence) -- the dashboard just renders whatever the watchdog/heartbeat
+    registry currently holds, on its own schedule."""
 
 
 class ValidationSettings(BaseModel):
     feature_flags: SIVFeatureFlags = SIVFeatureFlags()
     watchdog: WatchdogSettings = WatchdogSettings()
     frame_trace: FrameTraceSettings = FrameTraceSettings()
+    production_validation_mode: ProductionValidationModeSettings = (
+        ProductionValidationModeSettings()
+    )
 
 
 def load_validation_settings(validation_path: Path | None = None) -> ValidationSettings:

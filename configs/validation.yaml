@@ -31,3 +31,16 @@ watchdog:
 
 frame_trace:
   enabled: false
+
+# Production Validation Mode -- a single switch for the first end-to-end
+# hardware validation run. OFF by default (today's normal production
+# logging, no dashboard, no watchdog, no per-frame trace). When enabled:
+# forces frame_trace on regardless of the section above, elevates every
+# radar_eye.stage.* logger to DEBUG, and starts the console
+# dashboard/watchdog inside the real production entrypoint
+# (apps.deepstream.app.main) -- no separate script required. Read once at
+# process startup; flip this back to false and restart for normal
+# production operation.
+production_validation_mode:
+  enabled: false
+  dashboard_interval_seconds: 2.0

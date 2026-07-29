@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 
 from apps.deepstream.app.config import STAGE_LOGGER_NAMES, LoggingSettings
+from apps.deepstream.app.pipeline_trace import get_trace_logger
 
 _STAGE_PREFIX = "radar_eye.stage"
 AUDIT_LOGGER_NAME = "radar_eye.audit"
@@ -59,3 +60,19 @@ def configure_stage_logging(settings: LoggingSettings) -> None:
         level = settings.loggers.get(name, default_level).upper()
         get_stage_logger(name).setLevel(level)
     get_audit_logger().setLevel(logging.INFO)
+
+
+def enable_maximum_observability() -> None:
+    """Production Validation Mode's logging half: elevates every
+    ``radar_eye.stage.*`` logger (regardless of what
+    ``configs/logging.yaml`` set) plus the frame-trace logger to DEBUG.
+    Call once at startup, after ``configure_stage_logging()``, only when
+    ``validation.production_validation_mode.enabled`` is true -- an
+    override layered on top of the normal config-driven levels, not a
+    replacement for them (calling ``configure_stage_logging()`` again
+    would restore the configured levels). Never called in normal
+    production operation, so this has zero effect on today's default
+    logging behavior."""
+    for name in STAGE_LOGGER_NAMES:
+        get_stage_logger(name).setLevel(logging.DEBUG)
+    get_trace_logger().setLevel(logging.DEBUG)
