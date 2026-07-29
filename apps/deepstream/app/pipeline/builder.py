@@ -18,6 +18,7 @@ only module permitted to parse it).
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -128,6 +129,17 @@ class DeepStreamPipeline:
         self._sgie: Any = None
         self._sources: dict[uuid.UUID, RtspSource] = {}
         self._request_pads: dict[uuid.UUID, Any] = {}
+        """The streammux sink request pad ever assigned to a given camera_id
+        -- kept here for its *entire process lifetime*, not just while a
+        source is currently active. See remove_source()'s docstring for why
+        this pad is deliberately never released."""
+        self._camera_pad_index: dict[uuid.UUID, int] = {}
+        """The stable pad_index (== streammux source_id) assigned to a
+        camera_id the first time it is ever added -- reused, never
+        reassigned, across any number of later remove/re-add cycles for the
+        same camera_id. Monotonically growing (bounded by the number of
+        distinct cameras ever registered during this process's life, not by
+        how often any one camera is added/removed)."""
         self._pad_index_to_camera_id: dict[int, uuid.UUID] = {}
         self._ingress_timestamps: dict[int, tuple[float, datetime]] = {}
         self.pgie_is_placeholder = True
@@ -136,6 +148,17 @@ class DeepStreamPipeline:
         callers (runtime.py, RM-11.SIV's dashboard/report) can tell real
         model results apart from placeholder-model results without
         re-reading configs/models.yaml themselves."""
+
+    def set_tier2_publisher(self, tier2_publisher: Tier2Publisher) -> None:
+        """Breaks the DeepStreamPipeline <-> MediaPublisher circular
+        construction dependency: MediaPublisher needs a real pipeline
+        reference at construction time (Tier1Publisher reads bin_for()
+        lazily), but DeepStreamPipeline needs a Tier2Publisher reference
+        before build() runs. Mirrors DeepStreamRuntime.set_health_collector()'s
+        identical "setter for a not-yet-available dependency" pattern.
+        Must be called before build(), the only place ``self._tier2_publisher``
+        is read."""
+        self._tier2_publisher = tier2_publisher
 
     def build(self) -> None:
         Gst = _import_gst()
@@ -356,19 +379,33 @@ class DeepStreamPipeline:
         if self._pipeline is None or self._streammux is None:
             raise RuntimeError("build() must be called before add_source()")
 
-        pad_index = len(self._request_pads)
         bin_ = source.build(latency_ms=self._settings.rtsp_default_latency_ms)
         self._pipeline.add(bin_)
 
-        sink_pad = self._streammux.get_request_pad(f"sink_{pad_index}")
-        if sink_pad is None:
-            sink_pad = self._streammux.request_pad_simple(f"sink_{pad_index}")
+        # Stable pad slot: NVIDIA's own nvstreammux/nvstreamdemux plugins
+        # are only ever exercised (by NVIDIA's own reference deepstream-app,
+        # deepstream_source_bin.c's reset_source_pipeline()) with a
+        # pre-allocated, permanently-held request pad per source -- a
+        # camera being removed and later re-added reuses the exact same
+        # pad_index/sink_pad rather than requesting a fresh one. See
+        # remove_source()'s docstring for the full rationale (this is the
+        # other half of that fix).
+        if source.camera_id in self._camera_pad_index:
+            pad_index = self._camera_pad_index[source.camera_id]
+            sink_pad = self._request_pads[source.camera_id]
+        else:
+            pad_index = len(self._camera_pad_index)
+            sink_pad = self._streammux.get_request_pad(f"sink_{pad_index}")
+            if sink_pad is None:
+                sink_pad = self._streammux.request_pad_simple(f"sink_{pad_index}")
+            self._camera_pad_index[source.camera_id] = pad_index
+            self._request_pads[source.camera_id] = sink_pad
+
         src_pad = bin_.get_static_pad("src")
         if src_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
             raise RuntimeError(f"Failed to link source bin for camera {source.camera_id}")
 
         self._sources[source.camera_id] = source
-        self._request_pads[source.camera_id] = sink_pad
         self._pad_index_to_camera_id[pad_index] = source.camera_id
         bin_.sync_state_with_parent()
 
@@ -453,17 +490,86 @@ class DeepStreamPipeline:
         return source.bin if source is not None else None
 
     def remove_source(self, camera_id: uuid.UUID) -> None:
+        """Tears down this camera's decoder bin. Does **not** release its
+        streammux sink request pad -- see the comment at the end of this
+        method's body for the full, hardware-confirmed rationale. ``_request_pads``
+        and ``_camera_pad_index`` are deliberately left untouched (they
+        persist for the process's life); only ``_sources`` and
+        ``_pad_index_to_camera_id`` -- which track *currently active*
+        cameras -- are cleared here.
+        """
         source = self._sources.pop(camera_id, None)
-        sink_pad = self._request_pads.pop(camera_id, None)
+        sink_pad = self._request_pads.get(camera_id)
         self._pad_index_to_camera_id = {
             index: cid for index, cid in self._pad_index_to_camera_id.items() if cid != camera_id
         }
         if source is None or source.bin is None:
             return
 
+        Gst = _import_gst()
+        ghost_src_pad = source.bin.get_static_pad("src")
+
+        # Officially-supported NVIDIA synchronization primitive (not a
+        # hand-rolled substitute): GST_NVEVENT_STREAM_RESET is the
+        # nvstreammux-specific, per-source-id, DOWNSTREAM|SERIALIZED|STICKY
+        # custom event (gst-nvevent.h, shipped with the DeepStream SDK)
+        # NVIDIA's own reference deepstream-app sends before tearing down a
+        # source's state (apps-common/src/deepstream_source_bin.c,
+        # reset_source_pipeline()) -- exposed to Python via
+        # pyds.gst_element_send_nvevent_new_stream_reset(), whose own
+        # docstring says it exists to "reset the source in case RTSP
+        # reconnection is required". Being SERIALIZED, it queues in-band
+        # with this source's already-batched buffers rather than jumping
+        # the queue, letting nvstreammux settle this source_id's internal
+        # state at the correct point in the data flow before its pad goes
+        # quiet. Sent on the streammux element itself (the "element to
+        # which the generated event needs to be sent", per the function's
+        # own docstring), addressed by this camera's stable pad_index.
+        pad_index = self._camera_pad_index.get(camera_id)
+        if pad_index is not None:
+            try:
+                import pyds  # noqa: PLC0415 -- deferred, DeepStream SDK-provided
+
+                pyds.gst_element_send_nvevent_new_stream_reset(hash(self._streammux), pad_index)
+            except Exception:  # noqa: BLE001 -- best-effort notification, never fatal
+                logger.exception(
+                    "Failed to send stream-reset nvevent for camera %s -- continuing anyway",
+                    camera_id,
+                )
+
+        # Defense in depth alongside the nvevent above: block this bin's
+        # own ghost "src" pad with an IDLE probe before destroying the
+        # decoder. An IDLE probe's callback only fires once the pad has no
+        # buffer currently mid-push through it -- since this bin has no
+        # queue between the decoder and the ghost pad on the AI path (see
+        # ingestion/source.py's docstring), that guarantees streammux's
+        # chain() function for this source's sink pad has already returned
+        # by the time the probe fires, and the block guarantees no further
+        # buffer follows. The callback fires on whichever thread is
+        # currently pushing through this pad (the decoder's own internal
+        # streaming thread, never the GLib main-loop thread this method
+        # runs on), so waiting here cannot deadlock against it. Bounded
+        # with a timeout, matching this module's own "log and proceed"
+        # failure-isolation convention (e.g. AsyncBridge.stop()).
+        quiesced = threading.Event()
+
+        def _on_idle(_pad: Any, _info: Any) -> Any:
+            quiesced.set()
+            return Gst.PadProbeReturn.OK
+
+        probe_id = ghost_src_pad.add_probe(Gst.PadProbeType.IDLE, _on_idle)
+        if not quiesced.wait(timeout=1.0):
+            logger.warning(
+                "Timed out quiescing camera %s's source before teardown -- proceeding anyway",
+                camera_id,
+            )
+        ghost_src_pad.remove_probe(probe_id)
+
         # RM-12 Camera Runtime Step 7: Tier 2's branch lives off the shared
         # nvstreamdemux, entirely separate from the source bin torn down
-        # below -- failure isolation matches add_source()'s guarantee.
+        # below -- failure isolation matches add_source()'s guarantee. Its
+        # own request pad on nvstreamdemux is, by the same rationale as
+        # streammux's below, never released either (see tier2.py).
         if self._tier2_publisher is not None:
             try:
                 self._tier2_publisher.on_camera_removed(camera_id)
@@ -474,10 +580,37 @@ class DeepStreamPipeline:
                     camera_id,
                 )
 
-        source.bin.set_state(_import_gst().State.NULL)
-        if sink_pad is not None:
-            self._streammux.release_request_pad(sink_pad)
+        if sink_pad is not None and ghost_src_pad.is_linked():
+            ghost_src_pad.unlink(sink_pad)
+        source.bin.set_state(Gst.State.NULL)
         self._pipeline.remove(source.bin)
+        # sink_pad is deliberately NOT released here:
+        #
+        # Root cause (confirmed on real hardware): the original
+        # implementation called self._streammux.release_request_pad(sink_pad)
+        # immediately after tearing down the source. This reproduced a real
+        # segfault in libgstnvvideoconvert.so (on the visualization branch's
+        # viz-queue streaming thread) every time a camera was removed while
+        # Visualization + Media Publisher (Tier 2/nvstreamdemux) were both
+        # active. Blocking the decoder-side race alone (the IDLE probe
+        # above) did NOT stop the crash on its own -- it reproduced
+        # identically with that guard already in place, proving the pad
+        # *release* itself, not just decoder teardown timing, is what
+        # nvstreammux/nvstreamdemux cannot tolerate while the pipeline is
+        # live. This matches NVIDIA's own reference implementation
+        # (deepstream-app's apps-common/src/deepstream_source_bin.c) and
+        # multiple independent NVIDIA Developer Forum threads on dynamic
+        # source add/remove: request pads on nvstreammux/nvstreamdemux are
+        # meant to be requested once and never released while sources are
+        # added and removed at runtime -- only linked and unlinked. This
+        # codebase adopts that exact pattern: __init__'s
+        # ``_camera_pad_index``/``_request_pads`` assign each camera_id a
+        # pad_index/sink_pad exactly once, kept for the rest of the
+        # process's life; remove_source() only unlinks; add_source() reuses
+        # the same slot on any later re-add for that same camera_id.
+        # Tier2Publisher.on_camera_removed() (tier2.py) follows the
+        # identical pattern for nvstreamdemux's per-camera request pad, for
+        # the same documented reason.
 
     def start(self) -> None:
         Gst = _import_gst()

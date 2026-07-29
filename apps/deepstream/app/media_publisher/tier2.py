@@ -66,6 +66,16 @@ class Tier2Publisher(_TieredPublisher[Tier2FrameConsumer]):
     def __init__(self, bridge: GstBridge) -> None:
         super().__init__(bridge)
         self._branches: dict[uuid.UUID, _Tier2Branch] = {}
+        self._demux_pads: dict[uuid.UUID, Any] = {}
+        """nvstreamdemux's request src pad for a camera_id, kept for this
+        publisher's *entire process lifetime* once requested -- never
+        released on removal. See on_camera_removed()'s docstring: this
+        mirrors DeepStreamPipeline.remove_source()'s identical,
+        hardware-confirmed fix for the same class of bug (NVIDIA's own
+        reference implementation and multiple NVIDIA Developer Forum
+        threads: nvstreammux/nvstreamdemux request pads must be requested
+        once and only ever linked/unlinked afterward, never dynamically
+        released while the pipeline is live)."""
         self._gst_pipeline: Any = None
 
     def on_camera_added(
@@ -77,7 +87,10 @@ class Tier2Publisher(_TieredPublisher[Tier2FrameConsumer]):
         future work). Idempotent: a camera already present is left alone
         (the reconnect path calls ``add_source()`` again for an
         already-known camera; this mirrors ``VisualizationManager``'s own
-        "never re-initialize" guard)."""
+        "never re-initialize" guard). The queue/sink pair is rebuilt fresh
+        each time (cheap, disposable); the demux's request pad itself is
+        reused if this camera_id has ever been added before -- see
+        ``_demux_pads``."""
         if camera_id in self._branches:
             return
 
@@ -101,13 +114,16 @@ class Tier2Publisher(_TieredPublisher[Tier2FrameConsumer]):
         if not queue.link(sink):
             raise RuntimeError(f"Failed to link tier2 queue to sink for camera {camera_id}")
 
-        demux_pad = demux.get_request_pad(f"src_{pad_index}")
+        demux_pad = self._demux_pads.get(camera_id)
         if demux_pad is None:
-            demux_pad = demux.request_pad_simple(f"src_{pad_index}")
-        if demux_pad is None:
-            raise RuntimeError(
-                f"Failed to request nvstreamdemux src_{pad_index} for camera {camera_id}"
-            )
+            demux_pad = demux.get_request_pad(f"src_{pad_index}")
+            if demux_pad is None:
+                demux_pad = demux.request_pad_simple(f"src_{pad_index}")
+            if demux_pad is None:
+                raise RuntimeError(
+                    f"Failed to request nvstreamdemux src_{pad_index} for camera {camera_id}"
+                )
+            self._demux_pads[camera_id] = demux_pad
         queue_sink_pad = queue.get_static_pad("sink")
         if demux_pad.link(queue_sink_pad) != Gst.PadLinkReturn.OK:
             raise RuntimeError(
@@ -121,11 +137,20 @@ class Tier2Publisher(_TieredPublisher[Tier2FrameConsumer]):
         self._branches[camera_id] = _Tier2Branch(queue=queue, sink=sink, demux_pad=demux_pad)
 
     def on_camera_removed(self, camera_id: uuid.UUID) -> None:
-        """Deterministic teardown order (mirrors
-        visualization/pipeline_builder.py's documented sequence): remove
-        probe (if attached) -> NULL every element -> remove from pipeline
-        -> release the demux's request pad. Safe to call for a camera with
-        no Tier 2 branch (nothing to do)."""
+        """Deterministic teardown order: remove probe (if attached) -> NULL
+        queue/sink -> remove them from the pipeline -> unlink (never
+        release) the demux's request pad. Safe to call for a camera with no
+        Tier 2 branch (nothing to do).
+
+        The demux request pad is deliberately kept (see ``_demux_pads``):
+        the original implementation called
+        ``demux.release_request_pad(branch.demux_pad)`` here, which was
+        confirmed on real hardware to be unsafe while the pipeline is
+        PLAYING -- releasing an nvstreamdemux request pad at runtime is
+        exactly the operation NVIDIA's own reference deepstream-app and
+        multiple NVIDIA Developer Forum threads warn never to do
+        dynamically; only linking/unlinking is supported. This method now
+        only unlinks."""
         branch = self._branches.pop(camera_id, None)
         if branch is None:
             return
@@ -136,14 +161,13 @@ class Tier2Publisher(_TieredPublisher[Tier2FrameConsumer]):
             queue_src_pad.remove_probe(probe_id)
 
         Gst = _import_gst()
+        queue_sink_pad = branch.queue.get_static_pad("sink")
+        if branch.demux_pad.is_linked():
+            branch.demux_pad.unlink(queue_sink_pad)
         for element in (branch.queue, branch.sink):
             element.set_state(Gst.State.NULL)
         for element in (branch.queue, branch.sink):
             self._gst_pipeline.remove(element)
-
-        demux = branch.demux_pad.get_parent()
-        if demux is not None:
-            demux.release_request_pad(branch.demux_pad)
 
     def _find_pad(self, camera_id: uuid.UUID) -> Any | None:
         branch = self._branches.get(camera_id)

@@ -186,13 +186,38 @@ class TestOnCameraRemoved:
         assert not publisher.is_attached(camera_id)
 
     async def test_repeated_add_remove_across_cameras_does_not_leak_names(self) -> None:
+        # Distinct cameras get distinct pad_index values -- mirrors
+        # DeepStreamPipeline's real, stable per-camera assignment
+        # (_camera_pad_index): nvstreamdemux's request pads are never
+        # released (see on_camera_removed()'s docstring), so two different
+        # cameras must never be assigned the same pad_index within one
+        # publisher's lifetime, exactly like the real pipeline guarantees.
         pipeline, demux = _make_pipeline_and_demux()
         publisher = Tier2Publisher(_make_bridge(asyncio.get_running_loop()))
 
-        for _ in range(3):
+        for pad_index in range(3):
             camera_id = uuid.uuid4()
-            publisher.on_camera_added(pipeline, demux, camera_id=camera_id, pad_index=0)
+            publisher.on_camera_added(pipeline, demux, camera_id=camera_id, pad_index=pad_index)
             publisher.on_camera_removed(camera_id)
 
         # Bin reaches NULL cleanly afterward -- nothing left half-linked.
+        assert pipeline.set_state(Gst.State.NULL) != Gst.StateChangeReturn.FAILURE
+
+    async def test_repeated_add_remove_of_the_same_camera_reuses_the_demux_pad(self) -> None:
+        # The actual scenario the "never release" fix targets: a single
+        # camera cycling through remove/re-add (lifecycle transitions,
+        # RTSP reconnects) many times must reuse its one demux request pad
+        # rather than requesting "src_0" again each time -- confirmed here
+        # by never seeing a link failure across repeated cycles.
+        pipeline, demux = _make_pipeline_and_demux()
+        publisher = Tier2Publisher(_make_bridge(asyncio.get_running_loop()))
+        camera_id = uuid.uuid4()
+
+        for _ in range(5):
+            publisher.on_camera_added(pipeline, demux, camera_id=camera_id, pad_index=0)
+            assert pipeline.get_by_name(tier2_queue_element_name(camera_id)) is not None
+            publisher.on_camera_removed(camera_id)
+            assert pipeline.get_by_name(tier2_queue_element_name(camera_id)) is None
+
+        assert camera_id in publisher._demux_pads  # noqa: SLF001 -- kept, not released
         assert pipeline.set_state(Gst.State.NULL) != Gst.StateChangeReturn.FAILURE
