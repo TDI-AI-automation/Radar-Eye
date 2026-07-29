@@ -19,6 +19,7 @@ export const queryKeys = {
   cameras: {
     all: () => ["cameras"] as const,
     list: () => [...queryKeys.cameras.all(), "list"] as const,
+    brands: () => [...queryKeys.cameras.all(), "brands"] as const,
     detail: (cameraId: string) => [...queryKeys.cameras.all(), "detail", cameraId] as const,
     calibration: (cameraId: string) =>
       [...queryKeys.cameras.all(), "detail", cameraId, "calibration"] as const,

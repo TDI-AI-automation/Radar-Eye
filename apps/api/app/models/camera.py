@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import get_args
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -71,12 +71,34 @@ class Camera(Base):
     updated_at: Mapped[datetime] = updated_at_column()
 
 
+_CAMERA_BRAND_VALUES = ("HIKVISION", "DAHUA", "UNIVIEW", "AXIS", "HANWHA")
+
+
 class CameraStreamProfile(Base):
     """Camera connection configuration. ``rtsp_url_encrypted`` is opaque
     ciphertext -- see apps.api.app.security.encryption.CredentialEncryptionProvider.
+
+    ``brand``/``ip_address``/``port``/``stream_path``/``username`` are the
+    structured connection fields an operator actually edits (Camera
+    Management workflow) -- ``rtsp_url_encrypted`` is derived from them via
+    apps.api.app.services.rtsp_url_generator and kept in sync on every
+    write; Camera Runtime's own read path (apps.deepstream.app.
+    desired_state.DesiredStateReader) is unchanged, it still only ever
+    reads ``rtsp_url_encrypted``/``transport``. All nullable -- a profile
+    predating this milestone (or one row missing one field) degrades to
+    "can't be edited via the structured form," never to a crash.
+    ``password_encrypted`` is separate from ``rtsp_url_encrypted`` so an
+    edit that doesn't resupply a password can still recover the current
+    one to rebuild the URL, without ever exposing it back to the API.
     """
 
     __tablename__ = "camera_stream_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "brand IS NULL OR brand IN (" + ", ".join(repr(v) for v in _CAMERA_BRAND_VALUES) + ")",
+            name="ck_camera_stream_profiles_brand",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     camera_id: Mapped[uuid.UUID] = mapped_column(
@@ -84,6 +106,13 @@ class CameraStreamProfile(Base):
     )
     rtsp_url_encrypted: Mapped[str] = mapped_column(String, nullable=False)
     transport: Mapped[str] = mapped_column(String, nullable=False)
+    brand: Mapped[str | None] = mapped_column(String, nullable=True)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stream_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    password_encrypted: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
 

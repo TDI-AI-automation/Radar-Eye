@@ -14,15 +14,26 @@ written here, only read.
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.models.camera import Camera, CameraStreamProfile
-from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
+from apps.api.app.repositories.camera import (
+    CameraCalibrationRepository,
+    CameraRepository,
+    CameraStreamProfileRepository,
+)
 from apps.api.app.security.encryption import CredentialEncryptionProvider
+from apps.api.app.services.rtsp_url_generator import (
+    default_port_for_brand,
+    default_stream_path_for_brand,
+    generate_rtsp_url,
+)
 from shared.events.bus import EventBus
 from shared.events.payloads import CameraLifecycleChangedPayload, CameraRegisteredPayload
 from shared.events.types import CameraLifecycleChangedEvent, CameraRegisteredEvent
-from shared.schemas.camera import CameraLifecycleState
+from shared.schemas.camera import CameraBrand, CameraLifecycleState
 
 LIFECYCLE_TRANSITIONS: dict[str, frozenset[str]] = {
     "DRAFT": frozenset({"TESTING", "DISABLED"}),
@@ -57,6 +68,7 @@ class CameraRegistryService:
         self._session = session
         self._cameras = CameraRepository(session)
         self._profiles = CameraStreamProfileRepository(session)
+        self._calibrations = CameraCalibrationRepository(session)
         self._encryption = encryption
         self._bus = bus
 
@@ -65,10 +77,14 @@ class CameraRegistryService:
         *,
         name: str,
         location: str | None,
-        rtsp_url: str,
+        brand: CameraBrand,
+        ip_address: str,
+        port: int | None,
+        stream_path: str | None,
         username: str | None,
         password: str | None,
         transport: str,
+        model: str | None = None,
         ai_enabled: bool = False,
         recording_enabled: bool = False,
     ) -> Camera:
@@ -78,6 +94,12 @@ class CameraRegistryService:
         to the DB's unique constraint alone) so the router can return a
         precise 409 rather than a generic 500 on constraint violation.
 
+        The operator never supplies an RTSP URL -- ``brand``/``ip_address``/
+        ``port``/``stream_path``/``username``/``password`` go to
+        ``apps.api.app.services.rtsp_url_generator.generate_rtsp_url()``;
+        only the generated URL (and the individually-encrypted password)
+        are ever stored.
+
         ``ai_enabled``/``recording_enabled`` are persisted as-given, purely
         as Desired state -- this method performs no AI/recording behavior
         and never calls Camera Runtime."""
@@ -85,10 +107,16 @@ class CameraRegistryService:
         if any(c.name == name for c in existing):
             raise CameraNameConflictError(f"a camera named {name!r} is already registered")
 
-        url = rtsp_url
-        if username and password and "@" not in url:
-            scheme, _, rest = url.partition("://")
-            url = f"{scheme}://{username}:{password}@{rest}"
+        resolved_port = port if port is not None else default_port_for_brand(brand)
+        resolved_stream_path = stream_path if stream_path else default_stream_path_for_brand(brand)
+        url = generate_rtsp_url(
+            brand=brand,
+            ip_address=ip_address,
+            port=resolved_port,
+            username=username,
+            password=password,
+            stream_path=resolved_stream_path,
+        )
 
         camera = await self._cameras.add(
             Camera(
@@ -105,6 +133,13 @@ class CameraRegistryService:
                 camera_id=camera.id,
                 rtsp_url_encrypted=self._encryption.encrypt(url),
                 transport=transport,
+                brand=brand,
+                model=model,
+                ip_address=ip_address,
+                port=resolved_port,
+                stream_path=resolved_stream_path,
+                username=username,
+                password_encrypted=self._encryption.encrypt(password) if password else None,
             )
         )
         await self._publish(
@@ -115,6 +150,87 @@ class CameraRegistryService:
             )
         )
         return camera
+
+    async def update_connection(
+        self,
+        camera_id: uuid.UUID,
+        *,
+        brand: CameraBrand | None = None,
+        model: str | None = None,
+        ip_address: str | None = None,
+        port: int | None = None,
+        stream_path: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        transport: str | None = None,
+    ) -> CameraStreamProfile | None:
+        """Merges whichever connection fields are given with the camera's
+        existing profile, regenerates and re-encrypts the RTSP URL, and
+        persists it. Fields left as ``None`` keep their current value --
+        including ``password``, which is write-only (never returned by any
+        route), so an edit that only changes e.g. the IP must still be able
+        to rebuild a working URL without the operator re-typing a password
+        they can't see. Returns ``None`` (no-op) if this camera has no
+        stream profile at all -- callers decide whether that's an error.
+        """
+        profile = await self._profiles.get_by_camera_id(camera_id)
+        if profile is None:
+            return None
+
+        resolved_brand: CameraBrand = brand or profile.brand or "HIKVISION"  # type: ignore[assignment]
+        resolved_ip = ip_address or profile.ip_address or ""
+        resolved_port = port if port is not None else profile.port
+        resolved_stream = stream_path or profile.stream_path
+        resolved_username = username if username is not None else profile.username
+        if password:
+            resolved_password: str | None = password
+        elif profile.password_encrypted:
+            resolved_password = self._encryption.decrypt(profile.password_encrypted)
+        else:
+            resolved_password = None
+
+        url = generate_rtsp_url(
+            brand=resolved_brand,
+            ip_address=resolved_ip,
+            port=resolved_port,
+            username=resolved_username,
+            password=resolved_password,
+            stream_path=resolved_stream,
+        )
+
+        profile.brand = resolved_brand
+        profile.model = model if model is not None else profile.model
+        profile.ip_address = resolved_ip
+        profile.port = resolved_port
+        profile.stream_path = resolved_stream
+        profile.username = resolved_username
+        if password:
+            profile.password_encrypted = self._encryption.encrypt(password)
+        profile.transport = transport or profile.transport
+        profile.rtsp_url_encrypted = self._encryption.encrypt(url)
+        await self._session.flush()
+        return profile
+
+    async def delete(self, camera: Camera) -> None:
+        """Removes a camera and its own setup data (stream profile,
+        calibration history) in one transaction. Does not touch incidents,
+        human review items, or recordings referencing this camera --
+        those are evidence (CLAUDE.md's Evidence Preservation principle),
+        never cascade-deleted; if any exist, the database's own foreign
+        key constraint raises IntegrityError, which the router translates
+        into a clear 409 rather than silently destroying history.
+
+        Camera Runtime picks this up for free: DesiredStateSynchronizer
+        already removes a source whose camera_id no longer appears in
+        Desired State at all (synchronization.py), which is exactly what
+        deleting the row here produces -- no DeepStream-side change
+        needed."""
+        profile = await self._profiles.get_by_camera_id(camera.id)
+        if profile is not None:
+            await self._profiles.delete(profile)
+        for calibration in await self._calibrations.list_for_camera(camera.id):
+            await self._calibrations.delete(calibration)
+        await self._cameras.delete(camera)
 
     async def transition_lifecycle(
         self, camera: Camera, target_state: CameraLifecycleState

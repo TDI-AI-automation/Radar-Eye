@@ -62,6 +62,30 @@ async def _make_camera(session: AsyncSession, **overrides) -> Camera:
     return camera
 
 
+async def _make_camera_with_profile(session: AsyncSession, **overrides) -> Camera:
+    from apps.api.app.config import get_settings as _get_settings
+    from apps.api.app.models.camera import CameraStreamProfile
+    from apps.api.app.security.encryption import get_credential_encryption_provider
+
+    camera = await _make_camera(session, **overrides)
+    encryption = get_credential_encryption_provider(_get_settings())
+    profile = CameraStreamProfile(
+        camera_id=camera.id,
+        rtsp_url_encrypted=encryption.encrypt("rtsp://admin:hunter2@192.0.2.10:554/stream1"),
+        transport="tcp",
+        brand="HIKVISION",
+        model="DS-2CD2143G0-I",
+        ip_address="192.0.2.10",
+        port=554,
+        stream_path="/stream1",
+        username="admin",
+        password_encrypted=encryption.encrypt("hunter2"),
+    )
+    session.add(profile)
+    await session.commit()
+    return camera
+
+
 async def _make_incident(session: AsyncSession, camera: Camera, **overrides) -> Incident:
     fields = {
         "camera_id": camera.id,
@@ -148,6 +172,64 @@ class TestCamerasPatch:
         assert data["ai_enabled"] is True
         assert data["recording_enabled"] is True
 
+    async def test_editing_ip_regenerates_url_and_preserves_password(
+        self, db_engine, db_session
+    ) -> None:
+        camera = await _make_camera_with_profile(db_session)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}",
+                json={"ip_address": "192.0.2.99"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["ip_address"] == "192.0.2.99"
+        assert "password" not in data
+
+        from apps.api.app.config import get_settings as _get_settings
+        from apps.api.app.security.encryption import get_credential_encryption_provider
+
+        profile = await CameraStreamProfileRepository(db_session).get_by_camera_id(camera.id)
+        assert profile is not None
+        encryption = get_credential_encryption_provider(_get_settings())
+        url = encryption.decrypt(profile.rtsp_url_encrypted)
+        assert "192.0.2.99" in url
+        assert "hunter2" in url  # password preserved, not cleared by the omitted field
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [
+            e for e in entries if e.action == "UPDATE_CAMERA" and e.actor_user_id == admin.id
+        ]
+        assert len(matching) == 1
+        assert matching[0].details == {"connection_fields_changed": ["ip_address"]}
+
+    async def test_editing_password_never_reaches_audit_log(self, db_engine, db_session) -> None:
+        camera = await _make_camera_with_profile(db_session)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}",
+                json={"password": "new-secret-value"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 200
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [
+            e for e in entries if e.action == "UPDATE_CAMERA" and e.actor_user_id == admin.id
+        ]
+        assert len(matching) == 1
+        assert matching[0].details == {
+            "connection_fields_changed": [],
+            "password_changed": True,
+        }
+        assert "new-secret-value" not in str(matching[0].details)
+
     async def test_returns_404_for_missing_camera(self, db_engine, db_session) -> None:
         admin = await _make_user(db_session, ROLE_ADMIN)
         app = create_app()
@@ -159,6 +241,34 @@ class TestCamerasPatch:
             )
         assert response.status_code == 404
 
+    async def test_editing_model_is_purely_descriptive(self, db_engine, db_session) -> None:
+        """model is stored on the same profile row as the connection
+        fields but plays no part in RTSP URL generation -- editing it alone
+        must not disturb the existing URL/password."""
+        camera = await _make_camera_with_profile(db_session)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.patch(
+                f"/cameras/{camera.id}",
+                json={"model": "DS-2CD2386G2-IU"},
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["model"] == "DS-2CD2386G2-IU"
+        assert data["ip_address"] == "192.0.2.10"
+
+        from apps.api.app.config import get_settings as _get_settings
+        from apps.api.app.security.encryption import get_credential_encryption_provider
+
+        profile = await CameraStreamProfileRepository(db_session).get_by_camera_id(camera.id)
+        assert profile is not None
+        encryption = get_credential_encryption_provider(_get_settings())
+        url = encryption.decrypt(profile.rtsp_url_encrypted)
+        assert "hunter2" in url  # password preserved
+
 
 @pytest.mark.asyncio
 class TestCamerasPost:
@@ -169,7 +279,9 @@ class TestCamerasPost:
     _BODY = {
         "name": "gate-cam-1",
         "location": "north gate",
-        "rtsp_url": "rtsp://192.0.2.10:554/stream1",
+        "brand": "HIKVISION",
+        "model": "DS-2CD2143G0-I",
+        "ip_address": "192.0.2.10",
         "username": "admin",
         "password": "hunter2",
         "transport": "tcp",
@@ -207,6 +319,10 @@ class TestCamerasPost:
         assert data["ai_enabled"] is False
         assert data["recording_enabled"] is False
         assert "rtsp_url" not in data and "password" not in data
+        assert data["brand"] == "HIKVISION"
+        assert data["model"] == "DS-2CD2143G0-I"
+        assert data["ip_address"] == "192.0.2.10"
+        assert data["username"] == "admin"
 
         camera = await CameraRepository(db_session).get(uuid.UUID(data["camera_id"]))
         assert camera is not None
@@ -214,6 +330,9 @@ class TestCamerasPost:
         profile = next(p for p in profiles if p.camera_id == camera.id)
         assert profile.transport == "tcp"
         assert "hunter2" not in profile.rtsp_url_encrypted  # genuinely ciphertext, not plaintext
+        assert profile.rtsp_url_encrypted  # a URL was actually generated and stored
+        assert profile.port == 554  # brand default, applied server-side
+        assert profile.stream_path == "/Streaming/Channels/101"  # brand default
 
         entries = await AuditLogRepository(db_session).list()
         matching = [
@@ -338,6 +457,107 @@ class TestCamerasLifecyclePatch:
                 headers=_auth_header(admin, ROLE_ADMIN),
             )
         assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestCamerasDelete:
+    async def test_requires_authentication(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(f"/cameras/{camera.id}")
+        assert response.status_code == 401
+
+    async def test_rejects_non_admin(self, db_engine, db_session) -> None:
+        camera = await _make_camera(db_session)
+        operator = await _make_user(db_session, ROLE_OPERATOR)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(
+                f"/cameras/{camera.id}", headers=_auth_header(operator, ROLE_OPERATOR)
+            )
+        assert response.status_code == 403
+
+    async def test_admin_deletes_camera_and_its_profile(self, db_engine, db_session) -> None:
+        camera = await _make_camera_with_profile(db_session)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(
+                f"/cameras/{camera.id}", headers=_auth_header(admin, ROLE_ADMIN)
+            )
+
+        assert response.status_code == 200
+        # The router's own request-scoped session committed the delete on a
+        # different session than this test's db_session fixture -- whose
+        # identity map still holds the pre-delete objects from
+        # _make_camera_with_profile() above. A fresh session, scoped to the
+        # same engine, has no stale identity-map entries to return instead
+        # of re-querying.
+        from apps.api.app.db import create_session_factory
+
+        async with create_session_factory(db_engine)() as fresh_session:
+            assert await CameraRepository(fresh_session).get(camera.id) is None
+            assert (
+                await CameraStreamProfileRepository(fresh_session).get_by_camera_id(camera.id)
+                is None
+            )
+
+        entries = await AuditLogRepository(db_session).list()
+        matching = [
+            e for e in entries if e.action == "DELETE_CAMERA" and e.actor_user_id == admin.id
+        ]
+        assert len(matching) == 1
+
+    async def test_returns_404_for_missing_camera(self, db_engine, db_session) -> None:
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(
+                "/cameras/00000000-0000-0000-0000-000000000000",
+                headers=_auth_header(admin, ROLE_ADMIN),
+            )
+        assert response.status_code == 404
+
+    async def test_rejects_deleting_a_camera_with_an_incident(self, db_engine, db_session) -> None:
+        """Evidence Preservation (CLAUDE.md) -- deleting a camera must
+        never cascade-delete incident history; the database's own foreign
+        key constraint is the enforcement mechanism, this route just
+        translates the resulting IntegrityError into a clear 409."""
+        camera = await _make_camera(db_session)
+        await _make_incident(db_session, camera)
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(
+                f"/cameras/{camera.id}", headers=_auth_header(admin, ROLE_ADMIN)
+            )
+        assert response.status_code == 409
+        assert await CameraRepository(db_session).get(camera.id) is not None
+
+
+@pytest.mark.asyncio
+class TestCamerasBrands:
+    async def test_requires_authentication(self, db_engine, db_session) -> None:
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.get("/cameras/brands")
+        assert response.status_code == 401
+
+    async def test_lists_every_supported_brand_with_defaults(self, db_engine, db_session) -> None:
+        viewer = await _make_user(db_session, ROLE_VIEWER)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.get(
+                "/cameras/brands", headers=_auth_header(viewer, ROLE_VIEWER)
+            )
+        assert response.status_code == 200
+        brands = {b["brand"] for b in response.json()["data"]}
+        assert brands == {"HIKVISION", "DAHUA", "UNIVIEW", "AXIS", "HANWHA"}
+        for entry in response.json()["data"]:
+            assert entry["default_port"] == 554
+            assert entry["default_stream_path"]
+            assert entry["label"]
 
 
 @pytest.mark.asyncio

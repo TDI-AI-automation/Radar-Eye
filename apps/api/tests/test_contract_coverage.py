@@ -41,6 +41,8 @@ def _all_route_paths(app) -> set[str]:
 IMPLEMENTED_REST_ROUTES: set[tuple[str, str]] = {
     ("get", "/cameras"),
     ("post", "/cameras"),
+    ("delete", "/cameras/{camera_id}"),
+    ("get", "/cameras/brands"),
     ("patch", "/cameras/{camera_id}/lifecycle"),
     ("get", "/threats/active"),
     ("get", "/incidents/open"),

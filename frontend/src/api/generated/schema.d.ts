@@ -1095,12 +1095,30 @@ export interface components {
             stalled_count: number;
         };
         /**
+         * CameraBrand
+         * @description Supported camera brands for RTSP URL generation.
+         * @enum {string}
+         */
+        CameraBrand: "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
+        /**
+         * CameraBrandInfoSchema
+         * @description One entry of ``GET /cameras/brands``.
+         */
+        CameraBrandInfoSchema: {
+            brand: components["schemas"]["CameraBrand"];
+            /** Label */
+            label: string;
+            /** Default Port */
+            default_port: number;
+            /** Default Stream Path */
+            default_stream_path: string;
+        };
+        /**
          * CameraSchema
          * @description Full camera representation.
          *
          *     Returned by ``GET /cameras`` (list) and ``GET /cameras/{camera_id}``.
-         *     RTSP credentials are excluded from API responses (stored encrypted,
-         *     per RM-03 / DATABASE_SCHEMA.md).
+         *     ``password`` is never returned (write-only, stored encrypted).
          */
         CameraSchema: {
             /**
@@ -1118,6 +1136,28 @@ export interface components {
              */
             status: "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
             /**
+             * Lifecycle State
+             * @enum {string}
+             */
+            lifecycle_state: "DRAFT" | "TESTING" | "VERIFIED" | "OPERATIONAL" | "MAINTENANCE" | "DISABLED";
+            /** Ai Enabled */
+            ai_enabled: boolean;
+            /** Recording Enabled */
+            recording_enabled: boolean;
+            brand?: components["schemas"]["CameraBrand"] | null;
+            /** Model */
+            model?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Stream Path */
+            stream_path?: string | null;
+            /** Username */
+            username?: string | null;
+            /** Transport */
+            transport?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -1131,16 +1171,83 @@ export interface components {
         /**
          * CameraUpdateRequestSchema
          * @description Body of ``PATCH /cameras/{camera_id}`` -- partial update, every field
-         *     optional. RTSP credentials are never updated through this route (they
-         *     live in ``camera_stream_profiles``, encrypted -- out of scope here).
+         *     optional. Any connection field present (brand/ip_address/port/
+         *     username/password/transport/stream_path) regenerates the RTSP URL,
+         *     merged with the camera's existing connection info for whichever of
+         *     these fields are omitted. ``password`` is write-only.
          */
         CameraUpdateRequestSchema: {
             /** Name */
             name?: string | null;
             /** Location */
             location?: string | null;
-            /** Status */
-            status?: ("CONNECTED" | "DISCONNECTED" | "RECONNECTING") | null;
+            /** Ai Enabled */
+            ai_enabled?: boolean | null;
+            /** Recording Enabled */
+            recording_enabled?: boolean | null;
+            brand?: components["schemas"]["CameraBrand"] | null;
+            /** Model */
+            model?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Username */
+            username?: string | null;
+            /** Password */
+            password?: string | null;
+            /** Transport */
+            transport?: string | null;
+            /** Stream Path */
+            stream_path?: string | null;
+        };
+        /**
+         * CameraCreateRequestSchema
+         * @description Body of ``POST /cameras`` -- register a new camera. The operator
+         *     never supplies an RTSP URL -- brand + ip_address + credentials go to
+         *     the RTSP URL generator; only the generated, encrypted URL is stored.
+         */
+        CameraCreateRequestSchema: {
+            /** Name */
+            name: string;
+            /** Location */
+            location?: string | null;
+            brand: components["schemas"]["CameraBrand"];
+            /** Model */
+            model?: string | null;
+            /** Ip Address */
+            ip_address: string;
+            /** Port */
+            port?: number | null;
+            /** Stream Path */
+            stream_path?: string | null;
+            /** Username */
+            username?: string | null;
+            /** Password */
+            password?: string | null;
+            /**
+             * Transport
+             * @default tcp
+             */
+            transport: string;
+            /**
+             * Ai Enabled
+             * @default false
+             */
+            ai_enabled: boolean;
+            /**
+             * Recording Enabled
+             * @default false
+             */
+            recording_enabled: boolean;
+        };
+        /**
+         * CameraLifecycleUpdateRequestSchema
+         * @description Body of ``PATCH /cameras/{camera_id}/lifecycle``.
+         */
+        CameraLifecycleUpdateRequestSchema: {
+            /** @enum {string} */
+            target_state: "DRAFT" | "TESTING" | "VERIFIED" | "OPERATIONAL" | "MAINTENANCE" | "DISABLED";
         };
         /**
          * DistanceZone

@@ -9,12 +9,32 @@
 
 export type CameraConnectionStatus = "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
 
+export type CameraLifecycleState =
+  | "DRAFT"
+  | "TESTING"
+  | "VERIFIED"
+  | "OPERATIONAL"
+  | "MAINTENANCE"
+  | "DISABLED";
+
+export type CameraBrand = "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
+
 export class Camera {
   constructor(
     readonly id: string,
     readonly name: string,
     readonly location: string | null,
     readonly status: CameraConnectionStatus,
+    readonly lifecycleState: CameraLifecycleState,
+    readonly aiEnabled: boolean,
+    readonly recordingEnabled: boolean,
+    readonly brand: CameraBrand | null,
+    readonly model: string | null,
+    readonly ipAddress: string | null,
+    readonly port: number | null,
+    readonly streamPath: string | null,
+    readonly username: string | null,
+    readonly transport: string | null,
     readonly createdAt: Date,
     readonly updatedAt: Date,
   ) {}
