@@ -88,6 +88,15 @@ class DeepStreamSettings(BaseModel):
     subprocess/``/proc`` -- deliberately not per-frame, so instrumentation
     stays lightweight (RM-11 Phase 1 approval's instrumentation constraint)."""
 
+    desired_state_sync_interval_seconds: float = 1.0
+    """RM-12 Camera Runtime v1: how often runtime.py re-invokes the
+    already-implemented DesiredStateSynchronizer.synchronize() after
+    startup. synchronization.py's own docstring is explicit that Step 4
+    deliberately did not wire any automatic trigger for it -- this is
+    temporary polling infrastructure so UI-driven lifecycle/ai_enabled
+    changes reach the running pipeline without a process restart, until a
+    later milestone replaces it with event-driven synchronization."""
+
 
 def _load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:

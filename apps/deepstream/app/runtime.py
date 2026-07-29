@@ -46,15 +46,19 @@ from apps.deepstream.app.config import (
     ValidationSettings,
     VisualizationSettings,
 )
+from apps.deepstream.app.desired_state import DesiredStateReader
 from apps.deepstream.app.health.heartbeat import FrameCounter, HeartbeatScheduler
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
-from apps.deepstream.app.ingestion.camera_registry import CameraRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
+from apps.deepstream.app.media_publisher.media_publisher import MediaPublisher
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.pipeline_trace import PipelineTracer
+from apps.deepstream.app.runtime_supervisor import ConcurrentEnableLimiter, RuntimeSupervisor
 from apps.deepstream.app.stage_logging import get_audit_logger
+from apps.deepstream.app.synchronization import DesiredStateSynchronizer
+from apps.deepstream.app.telemetry import TelemetryCollector
 from apps.deepstream.app.visualization.manager import VisualizationManager
 from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
@@ -156,29 +160,74 @@ class DeepStreamRuntime:
             instrumentation=self._instrumentation,
             visualization_settings=visualization,
             visualization_manager=self.visualization_manager,
+            media_publisher_enabled=True,
         )
+
+        # RM-12 Camera Runtime v1 (Steps 1-7): first production wiring of
+        # the completed blueprint. Runtime Supervisor owns AI enable/
+        # disable (Step 3); Desired State Synchronization converges the
+        # pipeline toward Camera Registry's Desired State (Step 4),
+        # replacing the previous unconditional "load every registered
+        # camera" behavior in start() below; Media Publisher owns Tier 1/
+        # Tier 2 publisher lifecycle (Step 7); Telemetry observes all of
+        # the above without ever influencing them (Step 5). Construction
+        # order matters: MediaPublisher needs self._pipeline to already
+        # exist (Tier1Publisher reads bin_for() lazily), but
+        # DeepStreamPipeline needs a Tier2Publisher reference before
+        # build() runs -- broken via set_tier2_publisher(), the same
+        # "setter for a not-yet-available dependency" pattern already used
+        # by set_health_collector() below.
+        self.runtime_supervisor = RuntimeSupervisor(
+            self._pipeline,
+            self._bridge,
+            ConcurrentEnableLimiter(max_concurrent=settings.streammux_batch_size),
+        )
+        self.media_publisher = MediaPublisher(self._pipeline, self._bridge)
+        self._pipeline.set_tier2_publisher(self.media_publisher.tier2)
+        self._desired_state_reader = DesiredStateReader(session_factory, encryption)
+        self.desired_state_synchronizer = DesiredStateSynchronizer(
+            self._desired_state_reader,
+            self._pipeline,
+            self._bridge,
+            self.runtime_supervisor,
+        )
+        self.telemetry = TelemetryCollector(
+            pipeline=self._pipeline,
+            runtime_supervisor=self.runtime_supervisor,
+            synchronizer=self.desired_state_synchronizer,
+            bridge=self._bridge,
+            instrumentation=self._instrumentation,
+        )
+
         self._policies: dict[uuid.UUID, ReconnectPolicy] = {}
         self._heartbeat: HeartbeatScheduler | None = None
         self._health_collector: Any | None = None
         self._metrics_task: asyncio.Task[None] | None = None
+        self._telemetry_task: asyncio.Task[None] | None = None
+        self._desired_state_sync_task: asyncio.Task[None] | None = None
+        self._desired_state_sync_running = False
 
     async def start(self) -> None:
-        async with self._session_factory() as session:
-            registry = CameraRegistry(session, self._encryption)
-            camera_sources = await registry.load_camera_sources()
-
         self._instrumentation.mark_pipeline_build_start()
         self._pipeline.build()
         self._bridge.start()
 
-        for camera_source in camera_sources:
-            self._policies[camera_source.camera_id] = ReconnectPolicy(
+        # RM-12 Camera Runtime v1: initial Desired State convergence
+        # replaces the previous unconditional "add every registered camera"
+        # loop -- only cameras Camera Registry marks OPERATIONAL get an
+        # active source, and ai_enabled is converged for each one that does
+        # (see synchronization.py's DefaultLifecycleSourcePolicy).
+        result = await self.desired_state_synchronizer.synchronize()
+        logger.info("Initial Desired State synchronization: %s", result.actions_taken)
+
+        active_camera_ids = list(self._pipeline.active_camera_ids())
+        for camera_id in active_camera_ids:
+            self._policies[camera_id] = ReconnectPolicy(
                 initial_backoff_seconds=self._settings.reconnect_initial_backoff_seconds,
                 max_backoff_seconds=self._settings.reconnect_max_backoff_seconds,
                 multiplier=self._settings.reconnect_backoff_multiplier,
             )
-            self._pipeline.add_source(RtspSource(camera=camera_source))
-            await self._runtime_adapter.on_camera_connected(camera_source.camera_id)
+            await self._runtime_adapter.on_camera_connected(camera_id)
 
         self._pipeline.start()
 
@@ -190,14 +239,18 @@ class DeepStreamRuntime:
         self._heartbeat = HeartbeatScheduler(
             health_collector=self._health_collector,
             frame_counter=self._frame_counter,
-            camera_ids=[c.camera_id for c in camera_sources],
+            camera_ids=active_camera_ids,
             status_provider=self._runtime_adapter.status_for,
             interval_seconds=self._settings.heartbeat_interval_seconds,
             on_tick=lambda: self.heartbeat_registry.beat("heartbeat"),
         )
         self._heartbeat.start()
 
-        self._metrics_task = asyncio.get_event_loop().create_task(self._sample_metrics_forever())
+        self.telemetry.start()
+        loop = asyncio.get_event_loop()
+        self._metrics_task = loop.create_task(self._sample_metrics_forever())
+        self._telemetry_task = loop.create_task(self._sample_telemetry_forever())
+        self._desired_state_sync_task = loop.create_task(self._synchronize_desired_state_forever())
 
     def set_health_collector(self, health_collector: Any) -> None:
         """Injects the shared apps.api ``HealthCollector`` instance (RM-11
@@ -223,10 +276,62 @@ class DeepStreamRuntime:
         except asyncio.CancelledError:
             pass
 
+    async def _sample_telemetry_forever(self) -> None:
+        """RM-12 Camera Runtime Step 5 activation: Telemetry is
+        observational-only and was designed with no HTTP endpoint of its
+        own (see telemetry.py's module docstring) -- periodic logging,
+        mirroring _sample_metrics_forever's identical established pattern,
+        is the mechanism by which its snapshot() becomes observable at all
+        until a real endpoint exists."""
+        try:
+            while True:
+                await asyncio.sleep(self._settings.metrics_sample_interval_seconds)
+                logger.info("Camera Runtime telemetry snapshot: %s", self.telemetry.snapshot())
+        except asyncio.CancelledError:
+            pass
+
+    async def _synchronize_desired_state_forever(self) -> None:
+        """RM-12 Camera Runtime v1: temporary polling loop, until a later
+        milestone replaces it with event-driven synchronization (see
+        synchronization.py's module docstring -- Step 4 deliberately shipped
+        with no automatic trigger). Reuses
+        DesiredStateSynchronizer.synchronize() exactly as implemented; this
+        method adds no reconciliation logic of its own, only the periodic
+        call. Skips a tick if the previous synchronize() call from this same
+        loop is still running, rather than allowing overlapping calls. Logs
+        only when synchronize() actually did something (SynchronizationResult's
+        own docstring: empty actions_taken means already converged) or when
+        it raises -- no per-tick spam on the common no-op case."""
+        try:
+            while True:
+                await asyncio.sleep(self._settings.desired_state_sync_interval_seconds)
+                if self._desired_state_sync_running:
+                    continue
+                self._desired_state_sync_running = True
+                try:
+                    result = await self.desired_state_synchronizer.synchronize()
+                    if result.actions_taken:
+                        logger.info("Desired State synchronization: %s", result.actions_taken)
+                except Exception:
+                    logger.exception("Desired State synchronization failed")
+                finally:
+                    self._desired_state_sync_running = False
+        except asyncio.CancelledError:
+            pass
+
     async def stop(self) -> None:
         if self._metrics_task is not None:
             self._metrics_task.cancel()
             self._metrics_task = None
+        if self._telemetry_task is not None:
+            self._telemetry_task.cancel()
+            self._telemetry_task = None
+        if self._desired_state_sync_task is not None:
+            self._desired_state_sync_task.cancel()
+            self._desired_state_sync_task = None
+        self.telemetry.stop()
+        await self.media_publisher.shutdown()
+        await self.runtime_supervisor.stop()
         if self._heartbeat is not None:
             self._heartbeat.stop()
         self._pipeline.stop()
