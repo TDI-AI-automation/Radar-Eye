@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import re
 import shutil
@@ -374,6 +375,35 @@ def load_dotenv_into_environ() -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
+def ensure_development_administrator() -> bool:
+    """Guarantees the dev admin login used throughout local
+    validation exists, without ever touching it if it's already there.
+
+    Root cause this exists for: this account is a database row, not
+    application state -- it does not survive a database reset (this
+    environment's PostgreSQL data has been observed not to persist
+    across sandbox resets during development), and nothing previously
+    re-created it automatically after one. Reuses
+    scripts.create_test_user.ensure_test_user() (create-if-missing only)
+    rather than create_test_user() (that one's CLI-facing, deliberately
+    overwrites on every re-run -- wrong semantics for something the
+    launcher calls unattended on every startup).
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    from scripts.create_test_user import DEFAULT_PASSWORD, DEFAULT_USERNAME, ensure_test_user
+
+    try:
+        created = asyncio.run(ensure_test_user(DEFAULT_USERNAME, DEFAULT_PASSWORD))
+    except Exception as exc:  # noqa: BLE001 -- reported, not fatal to the rest of startup
+        print(_warn(f"Could not verify development administrator: {exc}"))
+        return False
+    if created:
+        print(_pass(f"Development administrator created (username={DEFAULT_USERNAME})"))
+    else:
+        print(_pass("Development administrator verified"))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Validation Mode -- temporarily flips configs/validation.yaml's
 # production_validation_mode.enabled to true before starting DeepStream,
@@ -645,6 +675,7 @@ def main() -> int:
     load_dotenv_into_environ()
     if not run_migrations():
         return 1
+    ensure_development_administrator()
 
     orchestrator = Orchestrator(validation_mode=args.validation)
     signal.signal(signal.SIGTERM, lambda *_: orchestrator.shutdown())
