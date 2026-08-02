@@ -1,5 +1,10 @@
 """ThreatEngineRuntimeAdapter -- RM-11 Phase 2 orchestration layer.
 
+RM-12 Camera Runtime Step 6: relocated from the top-level
+``apps/deepstream/app/threat_runtime_adapter.py`` into the ``ai_runtime``
+package (see that package's ``__init__.py``) -- a pure move, the class and
+its behavior are unchanged.
+
 Source: RM-07/RM-09/RM-10 design notes, which named this exact component
 ("a Threat Engine Runtime Adapter... explicitly deferred until a real
 per-frame pipeline exists to feed it (RM-11)"), and the RM-11 Phase 2
@@ -39,9 +44,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.deepstream.app.ai_runtime.observations import DetectionObservation, FrameObservation
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
-from apps.deepstream.app.observations import DetectionObservation, FrameObservation
 from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry

@@ -40,6 +40,25 @@ TRACK_LOST_SECONDS = 10.0
 
 TrackKey = tuple[uuid.UUID, int]
 
+EXTERNALLY_REQUESTABLE_TRANSITIONS: dict[IncidentStatus, frozenset[IncidentStatus]] = {
+    IncidentStatus.ACTIVE: frozenset({IncidentStatus.ACKNOWLEDGED, IncidentStatus.RESOLVED}),
+    IncidentStatus.ACKNOWLEDGED: frozenset({IncidentStatus.RESOLVED}),
+}
+"""Transitions a non-system-pipeline caller (currently: the API's
+``PATCH /incidents/{id}`` route; potentially other callers later) may
+request via ``IncidentService.request_transition()``. Per
+docs/INCIDENT_LIFECYCLE.md's Ownership section -- System: NEW, ACTIVE;
+Operator: ACKNOWLEDGED, RESOLVED; System Retention Service: ARCHIVED --
+and RESOLVED's Entry Conditions prose ("Threat disappears" [system, via
+``sweep_track_lost``] or "Operator closes incident" [this path]), both
+ACTIVE -> ACKNOWLEDGED -> RESOLVED and the direct ACTIVE -> RESOLVED close
+are allowed; NEW, ACTIVE, and ARCHIVED can never be requested externally."""
+
+
+class IncidentTransitionError(Exception):
+    """Raised by ``request_transition`` for a transition no external caller
+    may request (see ``EXTERNALLY_REQUESTABLE_TRANSITIONS``)."""
+
 
 @dataclass
 class _TrackMetadata:
@@ -154,6 +173,33 @@ class IncidentService:
             await self._transition(incident, IncidentStatus.RESOLVED)
             closed.append(incident)
         return closed
+
+    async def request_transition(
+        self, incident: Incident, new_status: IncidentStatus, *, now: datetime
+    ) -> Incident:
+        """Single entry point for any non-system-pipeline-driven status
+        change (docs/RM-12_ARCHITECTURE.md §3.3) -- currently the API's
+        ``PATCH /incidents/{id}`` route, potentially other callers later
+        (automation, a future CLI). Validates the request against
+        ``EXTERNALLY_REQUESTABLE_TRANSITIONS`` and then reuses the same
+        ``_transition()`` that ``handle_escalation()``/``sweep_track_lost()``
+        already use -- one canonical state machine, never a second,
+        divergent transition path for externally-requested changes.
+
+        Callers must resolve ``incident`` themselves (e.g.
+        ``IncidentRepository.get()``, 404 if missing) -- this method makes
+        no assumption about how the caller identifies "not found".
+        """
+        allowed = EXTERNALLY_REQUESTABLE_TRANSITIONS.get(incident.status, frozenset())
+        if new_status not in allowed:
+            raise IncidentTransitionError(
+                f"Cannot transition incident {incident.id} from "
+                f"{incident.status.value} to {new_status.value}"
+            )
+        if new_status == IncidentStatus.RESOLVED:
+            incident.resolved_at = now
+        await self._transition(incident, new_status)
+        return incident
 
     async def _transition(self, incident: Incident, new_status: IncidentStatus) -> None:
         old_status = incident.status

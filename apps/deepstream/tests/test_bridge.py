@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 
 import pytest
 
@@ -115,6 +116,83 @@ class TestSchedule:
         thread.join(timeout=2)
 
         assert result == ["scheduled-from-foreign-thread"]
+
+
+@pytest.mark.asyncio
+class TestScheduleOnMainloop:
+    async def test_raises_before_start(self) -> None:
+        loop = asyncio.get_running_loop()
+        bridge = AsyncBridge(loop, mainloop_factory=FakeMainLoop, idle_add=lambda cb: 0)
+        with pytest.raises(BridgeNotRunningError):
+            bridge.schedule_on_mainloop(lambda: None)
+
+    async def test_result_is_available_once_the_idle_callback_runs(self) -> None:
+        loop = asyncio.get_running_loop()
+        captured: list[Callable[[], bool]] = []
+
+        def idle_add(callback: Callable[[], bool]) -> int:
+            captured.append(callback)
+            return 0
+
+        bridge = AsyncBridge(loop, mainloop_factory=FakeMainLoop, idle_add=idle_add)
+        bridge.start()
+        try:
+            future = bridge.schedule_on_mainloop(lambda: 42)
+            assert not future.done()  # idle_add captured it but hasn't run it
+
+            captured[0]()  # simulate GLib actually running the idle source
+            result = await asyncio.wrap_future(future)
+            assert result == 42
+        finally:
+            bridge.stop()
+
+    async def test_exception_in_func_propagates_to_the_future(self) -> None:
+        loop = asyncio.get_running_loop()
+
+        def idle_add(callback: Callable[[], bool]) -> int:
+            callback()
+            return 0
+
+        bridge = AsyncBridge(loop, mainloop_factory=FakeMainLoop, idle_add=idle_add)
+        bridge.start()
+        try:
+
+            def _boom() -> None:
+                raise ValueError("boom")
+
+            future = bridge.schedule_on_mainloop(_boom)
+            with pytest.raises(ValueError, match="boom"):
+                await asyncio.wrap_future(future)
+        finally:
+            bridge.stop()
+
+    async def test_callable_from_a_foreign_thread(self) -> None:
+        loop = asyncio.get_running_loop()
+
+        def idle_add(callback: Callable[[], bool]) -> int:
+            callback()
+            return 0
+
+        bridge = AsyncBridge(loop, mainloop_factory=FakeMainLoop, idle_add=idle_add)
+        bridge.start()
+        results: list[int] = []
+        done = threading.Event()
+
+        def _foreign_thread_body() -> None:
+            future = bridge.schedule_on_mainloop(lambda: 7)
+            results.append(future.result(timeout=2))
+            done.set()
+
+        thread = threading.Thread(target=_foreign_thread_body)
+        thread.start()
+        for _ in range(50):
+            if done.wait(timeout=0.05):
+                break
+            await asyncio.sleep(0)
+        thread.join(timeout=2)
+        bridge.stop()
+
+        assert results == [7]
 
 
 def test_default_mainloop_factory_requires_gi() -> None:

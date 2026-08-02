@@ -1,4 +1,4 @@
-"""Tests for apps.deepstream.app.runtime_adapter.RuntimeAdapter -- Phase 0 scope.
+"""Tests for apps.deepstream.app.ai_runtime.detection.RuntimeAdapter -- Phase 0 scope.
 
 Uses the real InProcessEventBus (RM-04) rather than a fake, matching the
 pattern established by tests/shared/test_event_bus.py and
@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 
+from apps.deepstream.app.ai_runtime.detection import RuntimeAdapter
+from apps.deepstream.app.ai_runtime.observations import FrameObservation, build_frame_observation
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
-from apps.deepstream.app.observations import FrameObservation, build_frame_observation
-from apps.deepstream.app.runtime_adapter import RuntimeAdapter
 from shared.events.bus import InProcessEventBus
 
 _CAMERA = uuid.uuid4()

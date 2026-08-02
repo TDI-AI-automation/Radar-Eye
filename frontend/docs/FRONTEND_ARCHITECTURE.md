@@ -1,0 +1,743 @@
+# Radar Eye Command — Frontend Architecture
+
+**Status:** RM-13 final migration phase complete pending review — every
+screen (Live Monitoring, Tactical Map, Cameras, Incidents, Threat Review
+Center, Calibration Center, Evidence Viewer, AI Analytics, System Health,
+Settings) now runs on real backend data; the Lovable prototype's mock
+data and mock-only components are fully retired (§18, §19). Builds on
+Phase 0 (Architecture Setup, approved), Phase 1 (Infrastructure,
+approved), Phase 2 (Existing-Screen Migration, approved), and Phase 3
+(New Screens, approved). This document is the reference
+architecture for this milestone and every frontend milestone after it. It
+describes the *target* production architecture; where Phase 0 has only
+defined an interface or written a design-only piece, that's stated
+explicitly rather than implied as done.
+
+**Relationship to the prototype:** the pre-RM-13 codebase (Lovable-generated,
+see `AGENTS.md`) is treated as a **visual/UX reference only** — layout,
+navigation, interaction design, and visual styling are the parts of it worth
+preserving. Its internal data flow (direct `mock-data.ts` imports, ad hoc
+per-route mock arrays, a 3-level `1|2|3` threat model) is not architecture
+and is being replaced entirely by what's described here. Where backend
+reality and prototype assumptions disagree, the backend wins — see
+`docs/RM-12_ARCHITECTURE.md` and `docs/FRONTEND_BACKEND_CONTRACTS.md` in the
+`Radar-Eye` backend repository, which remain the authoritative sources for
+every data shape and endpoint referenced below.
+
+---
+
+## 1. Module boundaries
+
+```
+src/
+  api/           Transport layer. The ONLY code allowed to call fetch().
+    generated/     openapi-typescript output (Phase 1). Read-only — never
+                   hand-edited. If a generated type is wrong, the fix is a
+                   backend contract change, not an edit here.
+    client.ts      ApiClient — auth, correlation ID, timeout, cancellation,
+                   retry, error/response normalization. (Phase 0: written.)
+    endpoints/     Thin per-domain functions (cameras.ts, incidents.ts, …)
+                   calling client.ts, returning generated DTOs. (Phase 1.)
+
+  domain/
+    models/        Domain models — DTOs mapped into real classes carrying
+                    business behavior (§6). (Phase 0: Incident, ThreatAssessment,
+                    Camera written as the reference examples; the rest follow
+                    the same pattern in Phase 1/2 as each domain is migrated.)
+    mappers/        DTO → domain model, one file per domain. (Phase 1+.)
+
+  queries/          TanStack Query hooks — the only place components touch
+                    server state. Built on endpoints/ + mappers/.
+    queryKeys.ts    Centralized Query Key Factory. (Phase 0: written.)
+
+  ws/               WebSocket layer. connection.ts (manager) + hooks.ts
+                    (per-channel hooks that write into the Query cache).
+                    (Phase 1.)
+
+  auth/             AuthProvider, ProtectedRoute, usePermission. (Phase 1.)
+
+  video/
+    VideoProvider.ts            Interface + capability flags. (Phase 0: written.)
+    PlaceholderVideoProvider.ts The only concrete implementation today.
+                                (Phase 0: written.)
+
+  features/         One folder per screen (business capability), each owning
+                    only its own components/ hooks/ view-models/ utils/.
+                    Cross-feature imports are avoided — shared code is
+                    promoted to shared/ instead (§9).
+
+  components/
+    ui/               Unchanged from the prototype (shadcn/Radix primitives).
+    hud/               Kept and extended (CameraTile, Panel, StatTile, …).
+    shared/            New: ErrorBoundary, loading/empty states — used by
+                       more than one feature.
+
+  routes/            Thin — a route file defines the route and renders its
+                    feature's top-level component. No business logic here.
+```
+
+**Rule:** `domain/` never imports from `api/generated/` outside its own
+`mappers/`. `features/` never imports `api/` or `domain/` directly except
+through `queries/`. `queries/` never imports `ws/` (the dependency runs the
+other way: `ws/` writes into `queries/`'s cache via `queryClient`).
+
+---
+
+## 2. Data flow (end to end)
+
+```
+Backend (Radar-Eye)
+  │  REST: ApiResponse<T> envelope           WS: EventEnvelope<Payload>
+  ▼                                            ▼
+api/generated/*.ts (OpenAPI DTO)           ws/hooks.ts (raw message)
+  │                                            │
+  ▼                                            ▼
+domain/mappers/*.ts  ─────────────────────────►│  (same mapper — one DTO shape
+  │                                                per domain, whichever
+  ▼                                                transport produced it)
+domain/models/*.ts (business behavior)
+  │
+  ▼
+queries/*.ts (TanStack Query cache — single source of truth for server state)
+  │
+  ▼
+features/*/view-models/*.ts (screen-ready shapes: formatted dates, sorted/
+  │                          grouped lists, display strings — derived from
+  │                          domain models, never re-deriving business rules)
+  ▼
+features/*/components/*.tsx → JSX
+```
+
+No component reads `api/generated/` types directly. No component computes a
+date format, a status color, or a permission check inline — those are domain
+model methods or view-model fields, never JSX-local logic (§7).
+
+---
+
+## 3. Authentication flow
+
+**Token storage: `localStorage`.** Decision and rationale (recorded here per
+architecture review):
+
+- The backend contract (RM-12, frozen except review-driven fixes) already
+  returns tokens in the JSON response body for the client to store and
+  attach itself — this requires no backend change.
+- `httpOnly` cookies are the stronger security posture but would require
+  RM-12 to `Set-Cookie` on `/auth/login`/`/auth/refresh` and would introduce
+  CSRF exposure that doesn't exist today — out of scope while RM-12 is frozen.
+- Deployment context narrows the realistic risk: air-gapped (no remote
+  attacker path in), single-tenant, operator-facing C2 tool, not a public
+  web app.
+- `sessionStorage` and in-memory storage were rejected on operational
+  grounds specific to this deployment: a 24/7 watch-room display should not
+  force re-login on every tab reload, and `localStorage` is the only option
+  that both survives reloads and shares a session across multiple tabs/
+  monitors, a real usage pattern for a command-center UI.
+- Access tokens are short-lived (900s) already, bounding exposure if leaked.
+  Refresh-token rotation on `/auth/refresh` should be confirmed against
+  actual RM-12 behavior during Phase 1 as a companion hardening measure.
+- **Migration path stays open:** if backend changes come back into scope,
+  moving to `httpOnly` cookies only touches `AuthProvider`/`ApiClient`'s
+  config, not `features/` or `domain/` — nothing above the API layer knows
+  how the token is stored.
+
+**Flow:**
+```
+User submits login form
+  → POST /auth/login (via api/endpoints/auth.ts)
+  → { access_token, refresh_token } stored in localStorage
+  → AuthProvider context updates → ProtectedRoute allows navigation
+
+Every subsequent request
+  → ApiClient.getAuthToken() reads localStorage → Authorization: Bearer header
+
+Access token expires (or any request returns 401 with a token present)
+  → ApiClient.onUnauthorized() fires
+  → AuthProvider attempts POST /auth/refresh using the stored refresh token
+  → success: new tokens stored, original request's caller retries
+  → failure: tokens cleared, redirect to /login
+
+WebSocket connections
+  → token passed as ?token= query param (browsers cannot set custom
+    headers on the WS handshake — this is RM-12's own existing scheme,
+    not something the frontend invents)
+```
+
+---
+
+## 4. Request lifecycle (`ApiClient.request()`)
+
+```
+1. Generate a request ID (crypto.randomUUID()) — sent as X-Request-Id.
+2. hooks.onRequestStart (no-op today; metrics/tracing/telemetry seam).
+3. Build headers: Content-Type, X-Request-Id, Authorization (if a token exists).
+4. Race the fetch against a per-request timeout (default 10s) using a
+   combined AbortSignal — the caller's own signal (e.g. TanStack Query's
+   queryFn signal) is honored simultaneously, whichever fires first wins.
+5. Parse the ApiResponse<T> envelope.
+   - Transport/parse failure → AppError("network_error").
+   - HTTP !ok or envelope.success === false → AppError(envelope.error.code, …).
+   - 401 specifically → config.onUnauthorized() fires, no retry.
+6. GET requests with retry:true retry up to 3 attempts on failure (excluding
+   401). POST/PATCH/DELETE never auto-retry — not safe to replay blindly.
+7. hooks.onRequestEnd (success|error) — same seam as step 2.
+8. Return envelope.data, or throw the normalized AppError.
+```
+
+Downloads (`GET /recordings/{id}/download`, `GET /snapshots/{id}/download`)
+use `ApiClient.requestBlob()` instead — those endpoints return the raw file,
+not an `ApiResponse` envelope.
+
+---
+
+## 5. WebSocket lifecycle
+
+```
+Screen mounts → ws/hooks.ts's useXChannel() calls ws/connection.ts.connect(channel, token)
+  → on open: nothing else happens yet — REST queries already established
+    baseline state via queries/*.ts on mount (REST first, WS incremental,
+    per the architecture review's explicit rule)
+  → on message: map the raw payload through the SAME domain/mappers/*.ts
+    used by REST, then:
+      - if it can be merged safely into the existing cache entry
+        → queryClient.setQueryData(matching key, updater)
+      - if it cannot be merged safely
+        → queryClient.invalidateQueries({ queryKey: matching key })
+        (correctness over cleverness — an incremental update is only
+        applied when it's unambiguous how to merge it; anything else
+        triggers a real refetch)
+  → on disconnect: connection.ts backs off and reconnects; on reconnect,
+    re-subscribes to the same channel (no separate re-fetch needed — an
+    open reconnect gap is exactly what a REST re-fetch on remount /
+    window-focus already covers via TanStack Query's own defaults)
+Screen unmounts → disconnect(channel)
+```
+
+There is never a second, WS-only store. `ws/` writes exclusively into the
+same `queryClient` cache `queries/` populates — a component subscribed via
+`useIncidentsQuery()` sees both the initial REST fetch and every live WS
+update through one cache entry.
+
+---
+
+## 6. DTO → Domain → ViewModel transformation
+
+```
+OpenAPI DTO (generated/, transport shape, matches the backend 1:1)
+   │  mapper (domain/mappers/incident.ts)
+   ▼
+Domain Model (domain/models/Incident.ts — a real class: readonly fields +
+   │           business-behavior methods, e.g. canAcknowledge()/canClose().
+   │           These methods drive UI affordances only; the backend
+   │           re-validates every mutation regardless of what the UI shows.)
+   │  selector (features/incidents/view-models/incidentRow.ts)
+   ▼
+View Model (screen-ready: formatted timestamp, resolved display color via
+   │         the domain model's own displayColor(), pre-joined camera name —
+   │         never re-implements a business rule the domain model already owns)
+   ▼
+React Component (renders the view model — no date formatting, no status
+             mapping, no color logic inline in JSX)
+```
+
+Phase 0 delivered three worked examples of the DTO→Domain step —
+`Incident`, `ThreatAssessment`, `Camera` (`src/domain/models/`) — establishing
+the pattern before it's replicated for Review, CameraCalibration, Evidence,
+and User during Phase 1/2's actual screen migrations.
+
+---
+
+## 7. Query lifecycle
+
+- `queryKeys.ts` (§1) is the only source of query key arrays — never a
+  literal `["incidents", id]` inline in a hook or component.
+- Query hooks live in `queries/`, one module per REST domain, built on
+  `api/endpoints/` + `domain/mappers/`.
+- `staleTime`/`gcTime` are set per data class, not globally: live-feed data
+  (threats, incidents) relies on WS for freshness and can have a longer
+  `staleTime` since WS keeps it current; reference data (cameras, users)
+  can cache longer still; analytics aggregates longest.
+- React component state (`useState`/`useReducer`) holds **only** transient
+  UI state — selected tab, open dialog, form draft. Server data never lives
+  in component state; if a component needs server data, it calls a
+  `queries/` hook, full stop.
+- Mutations (`useMutation`) call `api/endpoints/`, then either update the
+  cache optimistically where safe or `invalidateQueries()` — same
+  correctness-over-cleverness rule as WS (§5).
+
+---
+
+## 8. VideoProvider abstraction
+
+See `src/video/VideoProvider.ts` (interface, Phase 0) and
+`PlaceholderVideoProvider.ts` (Phase 0's only implementation). `CameraTile`
+depends on the `VideoProvider` interface only; it never imports a concrete
+provider class. Capability flags (`supportsLiveVideo()`,
+`supportsSnapshots()`, `supportsRecordingPlayback()`) let a component ask
+"can the active provider do X" instead of assuming — a future
+`RTSPProvider`/`WebRTCProvider`/`HLSProvider` implements the same interface
+and simply advertises real capability, with zero change required in
+`CameraTile` or any feature that consumes it.
+
+**Open backend dependency, not resolved by this abstraction:** no live
+video delivery mechanism or contract exists yet (`ADR-011` mandates
+"backend-controlled video delivery," but no endpoint/URL scheme is defined
+in `FRONTEND_BACKEND_CONTRACTS.md`, and the backend's `ThreatAssessmentEvent`
+carries no bounding-box coordinates for the detection-overlay feature
+either). This is real, separate work spanning `apps/deepstream` and
+`apps/api` in the backend repo — the `VideoProvider` seam exists so that
+work can land later without touching this codebase's screens again.
+
+---
+
+## 9. Feature boundaries
+
+Each `features/<name>/` folder owns only code specific to that screen:
+`components/`, `hooks/` (screen-specific query/mutation wrappers, if any
+beyond the shared `queries/` hooks), `view-models/`, `utils/`. Anything a
+second feature needs is promoted to `components/shared/`, `domain/`, or
+`queries/` — never imported cross-feature directly. If two features start
+needing the same thing, that's the signal to promote it, not to import
+across the feature boundary.
+
+Features (§ RM-13 scope): `live-monitoring`, `incidents`, `tactical-map`,
+`cameras`, `analytics`, `health`, `settings`, `threat-review`,
+`calibration`, `evidence`, `auth`. All built as of the final migration
+phase (§14, §15, §18).
+
+---
+
+## 10. Known open items (tracked, not resolved by Phase 0)
+
+| Item | Owner | Status |
+|---|---|---|
+| CORS policy on `apps/api` | Backend | Not yet configured — needed before any real integration testing |
+| `GET /audit-log`-equivalent endpoint | Backend | Doesn't exist; `audit_log` table does (RM-12 Phase 2) |
+| Live video delivery contract | Backend (`apps/deepstream` + `apps/api`) | No contract; `VideoProvider` seam is ready for it |
+| `/ws/tracking` | Backend | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-015) |
+| AI Model / Notifications settings tabs | Backend (Configuration Service) | Explicitly deferred (`docs/OPEN_QUESTIONS.md` Q-014) — rendered as an explicit disabled state, not removed |
+| Refresh-token rotation | Backend | Assumed present, not yet confirmed against actual RM-12 behavior |
+
+---
+
+## 11. Pre-Phase-1 pipeline validation
+
+Performed before any Phase 1 code was written, per Phase 0 review. Checks
+every planned feature against: generated DTO → mapper → domain model →
+query → WebSocket event (if applicable) → feature module. Four domains
+required an explicit architectural decision rather than a straight
+pass-through; each is recorded here so the decision is traceable, not
+silently made during implementation.
+
+| Domain | DTO | Mapper | Domain model | Query | WS | Feature module | Result |
+|---|---|---|---|---|---|---|---|
+| Cameras | `CameraSchema` (RM-12) | needed, not yet written | `Camera` (Phase 0) | `queryKeys.cameras.*` | `/ws/camera-health` | `features/cameras` | Fits cleanly |
+| Threats | `ThreatAssessmentSchema` | needed | `ThreatAssessment` (Phase 0) | `queryKeys.threats.*` | `/ws/threats` | `features/live-monitoring` | Fits cleanly |
+| Incidents | `IncidentSchema` | needed | `Incident` (Phase 0) | `queryKeys.incidents.*` | `/ws/incidents` | `features/incidents` | Fits cleanly |
+| Tactical map | reuses Cameras/Threats/Incidents | reuses existing | reuses existing | reuses existing | reuses existing | `features/tactical-map` | Fits cleanly — no new domain. Known gaps (no `/ws/tracking`, no camera lat/lng in `CameraSchema`) are already tracked in §10, not new findings |
+| Reviews | `HumanReviewItemSchema` | needed | new `HumanReviewItem` domain model | `queryKeys.reviews.*` | `/ws/reviews` (creation only) | `features/threat-review` (new) | **Gap found — see below** |
+| Calibration | `CalibrationResultSchema` | needed | new `CalibrationResult` domain model | `queryKeys.calibration.*` | none (by design) | `features/calibration` (new) | Fits — no WS channel is correct, not a gap: calibration is an infrequent, on-demand operator workflow |
+| Evidence | `RecordingSchema`/`SnapshotSchema` | needed | new `Evidence` domain model | `queryKeys.evidence.*` | none (by design) | `features/evidence` (new) | Fits — same reasoning as Calibration |
+| Analytics | aggregate report DTOs | needed | **exception — see below** | `queryKeys.analytics.*` | none (by design) | `features/analytics` | Intentional pipeline exception |
+| Health (GPU/CPU/storage) | `SystemHealthSchema` | needed | thin/pass-through (same exception as Analytics) | `queryKeys.health.*` | **Gap found — see below** | `features/health` | REST-polling exception |
+| Users / Settings | `UserSchema` | needed | new `User` domain model | `queryKeys.users.*` | none | `features/settings` | Fits — one open design question, not a gap, see below |
+| Auth | login/token DTOs | needed | no domain model needed (token is not a business entity) | not a TanStack Query concern — held in `AuthProvider` | none | `features/auth` (new) | Fits |
+
+**Finding 1 — Reviews: no resolution-event WS channel.** `/ws/reviews`
+carries `HumanReviewItemCreatedEvent` only (RM-12 Phase 5 scope). There is
+no backend event for a review item being resolved/escalated/dismissed, so
+a second operator's browser will not get a live push when someone else
+resolves a review item — only the acting client's own REST response
+updates their own view. This is a real gap, but not one Phase 0/1
+architecture needs to solve: it is a Phase 3 (`features/threat-review`)
+implementation decision. Mitigation recorded here so it isn't rediscovered
+later: give the reviews list query a short `staleTime` and
+`refetchOnWindowFocus: true` rather than treating it as WS-driven like
+Incidents/Threats. Not a blocker for Phase 1.
+
+**Finding 2 — Health: no WS channel for periodic metrics.**
+`/ws/camera-health` carries `CameraDisconnectedEvent`/`SystemEvent`
+(discrete events), not periodic GPU/CPU/storage telemetry. The System
+Health screen's metric widgets have no event source to subscribe to and
+must use REST polling (a bounded `refetchInterval` on the query). This is
+in tension with `FRONTEND_BACKEND_CONTRACTS.md`'s "avoid polling where
+practical" principle, but is a reasonable, documented exception — the
+data is genuinely poll-shaped (a periodic gauge, not a discrete event) and
+no backend event stream exists for it. Recorded here, not silently
+implemented in Phase 3 as if it were the default pattern.
+
+**Finding 3 — Analytics / Health: pass-through domain model is correct,
+not a violation.** The `DTO → Domain (business behavior) → ViewModel`
+pattern assumes a domain entity with behavior worth modeling
+(`Incident.canAcknowledge()`, `ThreatAssessment.requiresImmediateAction()`,
+etc.). Analytics and health-metrics data is pure aggregate/reporting
+output with no business behavior to express — inventing methods on an
+`AnalyticsSummary` class to satisfy the pattern would be exactly the kind
+of fabricated capability the Phase 0 review warned against
+(`canEscalate()` precedent). For these two domains only, the mapper may
+produce a thin pass-through object (or the view model directly), skipping
+a behavior-bearing domain model. This is an intentional, narrow exception,
+not a gap in the pipeline design.
+
+**Finding 4 — Users: role-check placement is a design question, not a
+gap.** Whether `hasRole()`/permission-check logic belongs on a `User`
+domain model or purely inside the `usePermission()` hook is undecided.
+Both fit the pipeline; this is deferred to Phase 2 as an implementation
+detail, not an architectural blocker.
+
+**Conclusion:** every planned domain maps to the DTO → mapper → domain →
+query → (WS) → feature pipeline. No domain requires a pipeline redesign.
+Two real, backend-driven gaps were found (Reviews resolution events,
+Health metric events) and are recorded as scoped implementation
+exceptions rather than blockers. Phase 1 may proceed.
+
+---
+
+## 12. Domain facts vs. authorization (resolved before Phase 2)
+
+Rule, decided before any Phase 2 code: **domain models expose facts;
+authorization decisions belong to the auth layer, never to a domain
+model.**
+
+- `Incident.canAcknowledge()` / `.canClose()` / `.isTerminal()` (Phase 0)
+  are *not* an exception to this rule — they encode backend-enforced
+  **business state transitions** (`EXTERNALLY_REQUESTABLE_TRANSITIONS`),
+  the same fact for every caller regardless of who's asking. They answer
+  "is this incident in a state where X is possible," not "is *this user*
+  allowed to do X."
+- Authorization — "can *this* user do X" — is a function of the current
+  user's role, not of the entity being acted on. It belongs exclusively in
+  `usePermission()` (`src/auth/usePermission.ts`) and nowhere else. No
+  domain model gets a `hasRole()`, `canEdit()`-meaning-role-gated, or
+  similar method.
+- Two distinct `User`-shaped types exist for two distinct purposes and
+  must not be conflated:
+  - `AuthUser` (`src/auth/types.ts`) — the current session's identity,
+    decoded from the JWT + login input. Auth infrastructure, not a REST
+    domain entity. Consumed by `AuthProvider`/`usePermission()` only.
+  - `User` (`src/domain/models/User.ts`, Phase 3 — Settings/Users screen)
+    — the full `UserSchema` entity (`user_id`, `username`, `role`,
+    `created_at`) returned by `GET /users`, for an admin managing other
+    users. Exposes `role` as a plain fact (`readonly role: string`); it
+    does **not** get a `hasRole()` method, including for the admin's own
+    authorization checks against list rows — that composition still goes
+    through `usePermission()` at the call site (e.g. "does the *current
+    operator* have permission to edit *this listed user's* role" is two
+    facts — `usePermission("admin")` and the target row's `user.role` —
+    combined in the component/view model, not fused into the entity).
+
+UI components combine both: `usePermission()` answers "is the current
+operator allowed," a domain model's own methods (if any) answer "is this
+action possible given the entity's state." A role-gated mutation button
+checks both independently and never encodes the role check inside the
+entity.
+
+---
+
+## 13. Technical debt: WebSocket contracts are not generated
+
+Tracked here per Phase 1 review — explicitly **not** solved during RM-13.
+A future infrastructure milestone's job, not this one's.
+
+**Current state:** `src/ws/messages.ts` hand-declares every `/ws/*`
+message shape (`ThreatAssessmentMessage` reuses the generated
+`ActiveThreatSchema` where a REST-exposed twin exists; `ReviewMessage`
+reuses generated `HumanReviewSchema` likewise; `IncidentCreatedMessage`,
+`IncidentUpdatedMessage`, `CameraDisconnectedMessage`, `SystemEventMessage`,
+`AlarmMessage` are fully hand-typed, with no REST-exposed twin at all).
+Two of the five channels (`incidents`, `camera_health`) additionally carry
+more than one message shape with no on-the-wire discriminator field,
+requiring structural type guards (`isIncidentUpdatedMessage`,
+`isSystemEventMessage`) instead of a tagged union.
+
+**Source of truth:** `shared/schemas/*.py` in the `Radar-Eye` backend repo
+— specifically the classes cited in each type's docstring in
+`src/ws/messages.ts`. FastAPI's `.openapi()` output (what
+`openapi-typescript` consumes for the REST layer) has no WebSocket
+representation at all — this isn't a gap in how the schema was exported,
+it's a structural limit of OpenAPI itself, so the existing REST
+type-generation pipeline cannot be pointed at it.
+
+**Future code-generation possibilities** (not evaluated in depth, listed
+for whoever picks this up):
+- A small backend-side export script that introspects the WS-message
+  Pydantic classes already declared in `shared/schemas/*.py` (they're
+  ordinary `BaseModel` subclasses, not FastAPI-route-bound) and emits a
+  JSON Schema document per channel, consumed by the same
+  `openapi-typescript`-style generator already in the frontend toolchain.
+- Adopting AsyncAPI as a parallel spec alongside OpenAPI, with the
+  WS-bridge's `_CHANNEL_BY_EVENT_TYPE`/`_TRANSLATOR_BY_EVENT_TYPE` mapping
+  (`apps/api/app/websockets/bridge.py`) as the source the spec would need
+  to be generated from or kept consistent with.
+- At minimum, a contract test (backend-side) asserting each translator's
+  output still matches its schema's field set, so a silent backend field
+  rename is caught in CI rather than discovered as a frontend runtime bug.
+
+Until one of these exists, every change to a WS-message-shaped schema in
+the backend repo must be manually mirrored in `src/ws/messages.ts` — there
+is no compiler or generator that will catch drift.
+
+---
+
+## 14. Phase 2 migration record: prototype content vs. backend reality
+
+Migrated: Camera Management (`routes/cameras.tsx`), AI Analytics
+(`routes/analytics.tsx`), System Health (`routes/health.tsx`), Incident
+Center (`routes/incidents.tsx`). Per RM-13's "backend wins" rule, each
+screen's real data availability was checked against the generated OpenAPI
+schema and `shared/schemas/*.py` before writing any UI, not assumed from
+the prototype. Fields/panels/actions with no backing endpoint were
+dropped, not fabricated or stubbed with placeholder numbers. Recorded here
+because several of these are large enough departures from the prototype's
+visual richness to need a permanent, findable reason, not just a commit
+message.
+
+**Cameras**: `CameraSchema`/`CameraHealthSchema` provide id/name/location/
+status/fps/last_frame_age only. Dropped: health %, latency (ms), AI
+on/off, recording indicator, storage used, and the entire configuration
+modal's resolution/codec/confidence-threshold/detection-types/privacy-
+mask/firmware fields — `CameraUpdateRequestSchema` (`PATCH /cameras/{id}`,
+admin-only) supports name/location/status only.
+
+**Analytics** — the largest departure. `shared/schemas/analytics.py`'s own
+docstring: "straightforward repository-query aggregations... not a new
+analytics computation engine." Real: counts by threat level, incident
+totals + counts by status, top cameras by incident count, system-wide
+totals. Dropped entirely (no endpoint of any kind): 24h hourly trend,
+precision/recall/F1/false-positive/false-negative, response-time
+percentiles, per-sector threat heatmap, weapon-frequency breakdown. GPU/
+inference metrics moved to System Health, where `/health/gpu` actually is.
+
+**System Health**: real endpoints cover GPU (nullable — honestly empty
+outside NVML/Jetson hardware), evidence storage, recording storage, per-
+camera health, and a fixed 5-key component-status map (database/
+event_bus/gpu/storage/cameras). Dropped: CPU, memory, ambient temperature,
+network uplink, MQTT broker, notification bus — no endpoint exists for any
+of them, consistent with CLAUDE.md's single-Jetson-SoC deployment target
+rather than the prototype's discrete-workstation assumption (RTX A6000 /
+EPYC CPU labels). Event Log Stream has no backing endpoint (`GET
+/audit-log` doesn't exist, §10) — shown as an explicit disabled panel,
+matching Settings' existing precedent for deferred tabs.
+
+**Incidents**: `IncidentSummarySchema`/`IncidentSchema` carry no weapon
+type, no assigned operator, no confidence score, no escalation field, no
+free-text location. Dropped: the "object"/"operator"/"confidence"/
+"escalation" fields, the "Resolved 24h"/"Avg. Response" stats (no time-
+windowed aggregate exists), the fabricated response-timeline steps
+(replaced with real `GET /incidents/{id}/events`), and the Assign/Export
+actions (no backend support; Export belongs to the future Evidence
+feature). Added: real Acknowledge/Resolve actions via `PATCH
+/incidents/{id}`, gated by both `Incident.canAcknowledge()`/`.canClose()`
+(state fact) and `usePermission("operator")` (authorization) per §12.
+
+**Mid-phase architecture refinement**: Phase 0's `Incident` domain model
+required all of track_id/incident_type/created_at/updated_at, but the list
+endpoints (`GET /incidents`, `GET /incidents/open`) return
+`IncidentSummarySchema` (id/camera_id/threat_level/status only) — a real
+DTO-shape mismatch Phase 0 didn't anticipate. Resolved by extracting the
+transition-check predicates into `domain/incidentStatus.ts` (pure
+functions) and adding `IncidentSummary` (`domain/models/IncidentSummary.ts`)
+as a list-context companion to `Incident`, both delegating to the same
+functions rather than one being constructed from the other's incomplete
+data. The equivalent `ThreatLevel` label/color mapping was extracted from
+`ThreatAssessment` into `domain/threatLevel.ts` the same way, since
+`Incident`/`IncidentSummary` needed it too and duplicating the switch
+statement would have violated "the ONLY place this mapping should exist."
+
+---
+
+## 15. Phase 3 migration record: Threat Review Center, Calibration Center, Evidence Viewer
+
+Three new screens (`routes/{reviews,calibration,evidence}.tsx`), the
+operational core per the Phase 3 review. Same pipeline as every migrated
+screen (DTO → mapper → domain → query → view model → UI), no exceptions.
+
+**Threat Review Center**: `HumanReviewItem` domain model
+(`domain/models/HumanReviewItem.ts`), one fact (`canResolve()`) backing
+all four resolution actions — `apps/api/app/routers/reviews.py::_resolve()`
+rejects any resolution once `status != "OPEN"`, identically across all
+four, so one fact covers all of them rather than four near-duplicate
+methods. Keyboard-driven per the review's "special attention" instruction:
+J/K navigate the queue, M/C/E/X arm the four actions, a second press
+within 3s confirms (armed-then-confirm, not a modal — a modal would
+defeat a keyboard-driven queue's purpose). `/ws/reviews` (creation-only,
+§11 Finding 1) invalidates the list; the documented staleTime +
+refetch-on-focus mitigation covers resolutions made by other operators.
+
+**Calibration Center**: `CameraCalibration` domain model
+(`domain/models/CameraCalibration.ts`). `referencePointCount()` is sourced
+from `services/calibration/service.py::calibrate()`'s actual persisted
+shape (`{"points": [...]}`), not the OpenAPI schema, which types
+`reference_points`/`homography_matrix` as opaque dicts — verified against
+the source, not guessed. No live/reference camera frame endpoint exists
+anywhere in RM-12 (§16 below), so reference points are entered as numeric
+coordinates rather than clicked on an image — the one real constraint
+that shaped this screen's interaction model. `useVideoHandle()` (existing
+seam, not a new placeholder) fills the space where a live view would go.
+Calibration history is a real, full historical log (`GET
+/calibration/results`, append-only per `docs/DATABASE_SCHEMA.md`), not
+just current state — matches the "engineering workstation, not an
+admin settings page" instruction.
+
+**Evidence Viewer**: `Evidence` domain model (`domain/models/Evidence.ts`).
+`apps/api/app/routers/evidence.py` has zero mutation routes for evidence —
+this UI mirrors that exactly: no rename/delete/annotate/edit affordance
+anywhere, an explicit "Read-only — evidence cannot be edited or deleted"
+notice in the detail panel, and only two actions (inline preview,
+download). Preview requires fetching the file as a Blob and creating an
+object URL (`useEvidencePreview`) rather than a plain `<img src>`/
+`<video src>`, because the download routes require a Bearer token a
+browser won't attach to a plain element `src`. Recording preview is
+best-effort only (see §16 — H.265 browser support).
+
+---
+
+## 16. Backend capability gaps (candidate RM-14+ backlog)
+
+Maintained per the Phase 3 review's explicit instruction: document, never
+work around, never invent an API. Consolidated here from every phase's
+findings (§11's two gaps are cross-referenced, not duplicated).
+
+| Gap | Screens affected | Detail |
+|---|---|---|
+| No `/ws/reviews` resolution/status-change event | Threat Review Center | §11 Finding 1. Creation-only; mitigated with staleTime + refetch-on-focus, not solved. |
+| No WS channel for periodic health metrics | System Health | §11 Finding 2. REST-polled instead. |
+| WS message schemas have no generated-type coverage | All WS-consuming screens | §13. Hand-typed in `ws/messages.ts`, manually kept in sync. |
+| No `GET /auth/me` | Auth | Username has no server source post-login; carried from the login form input (`docs/FRONTEND_ARCHITECTURE.md` §3/Phase 1). |
+| `CameraUpdateRequestSchema` supports only name/location/status | Camera Management | No resolution/codec/confidence-threshold/detection-type/privacy-mask/firmware field exists on the backend at all. |
+| `/analytics/*` are coarse aggregate counts only | AI Analytics | No time-windowed trends, precision/recall, response-time percentiles, per-sector heatmap, or weapon-frequency breakdown anywhere in RM-12. |
+| No CPU/memory/ambient-temperature/network-uplink/MQTT/notification-bus health metrics | System Health | Only GPU/storage/cameras/component-status exist. Consistent with the single-Jetson-SoC target, not necessarily a gap to close. |
+| No `GET /audit-log` (or equivalent) | System Health | Event Log Stream has no data source; shown as an explicit disabled panel. Already tracked in §10. |
+| `Incident`/`IncidentSummary` carry no weapon type, assigned operator, confidence score, escalation field, or free-text location | Incident Center | None of these exist on `IncidentSchema`/`IncidentSummarySchema`. |
+| No time-windowed incident aggregates (e.g. "resolved in the last 24h", average response time) | Incident Center, AI Analytics | `IncidentAnalyticsSchema` is all-time totals only. |
+| No server-side filtering or pagination on `GET /evidence`, `GET /recordings`, or `GET /reviews` | Evidence Viewer, Threat Review Center | Always the full table; fine at current scale (single node, 20 cameras) but worth flagging before evidence/review volume grows. |
+| No endpoint to retrieve a live or reference frame for a camera | Calibration Center | An operator cannot visually place reference points on an image; numeric entry is the only option today. The single most impactful gap for that screen's usability. |
+| Evidence download responses don't expose the original filename/extension/content-type | Evidence Viewer | The suggested save-as filename is a best-effort guess (`snapshot-{id}.jpg` / `recording-{id}.mp4`), not sourced from the backend. |
+| `HumanReviewSchema` has no `created_at`/timestamp field | Threat Review Center | The review queue cannot be sorted or aged chronologically — every other list-bearing schema (Incident, Camera, Recording) has one; this one doesn't. |
+| Recordings are stored as H.265; browser `<video>` playback support is unreliable | Evidence Viewer | Inline preview is best-effort; download (the raw, unmodified file) always works regardless. Not fixable frontend-side — a transcode-on-demand or a browser-compatible mezzanine format would be a backend/DeepStream-side decision. |
+
+**Priority for RM-14+ triage** (set at the Phase 3 review, not by the frontend):
+
+- **Tier 1 (highest impact):** live/reference frame endpoint for calibration; `HumanReviewItem` timestamps; `GET /audit-log`; WS schema generation or a contract test.
+- **Tier 2:** evidence/reviews pagination; recording streaming/range-request support; `/ws/reviews` completion events; richer analytics endpoints.
+- **Tier 3:** expanded camera configuration; additional operational/dashboard metrics.
+
+This is a backlog for backend milestones, not a to-do list for the frontend — no item above is to be worked around or simulated client-side.
+
+---
+
+## 17. Performance thresholds (objective criteria for future work)
+
+Set so RM-14+ planning has a concrete trigger instead of a vague "if it gets slow." These are engineering judgment calls made now, not measurements taken under real production load (this deployment has 20 cameras and no production evidence/review volume yet) — revisit the numbers once real volume exists, don't treat them as validated.
+
+| Screen | Current approach | Threshold that would require work |
+|---|---|---|
+| Evidence Viewer | Fetches the entire `GET /evidence` table, filters client-side | Pagination/server-side filtering needed above ~1,000 items — comfortably below what a single unpaginated `<select>`/grid can render and filter smoothly in-browser |
+| Evidence Viewer (recording preview) | Fetches the whole file as a `Blob` before playback | Streaming/range-request support needed above ~200 MB per recording — the point at which a full-file `Blob` fetch starts to noticeably delay preview and pressure browser memory on a kiosk-class device |
+| Threat Review Center | Renders the full open-queue as a plain list, no virtualization | Virtualization needed above ~100 simultaneously visible rows — the usual point a plain DOM list starts costing noticeable render/scroll performance |
+| Calibration Center | Full historical calibration log rendered as one table | Pagination needed above ~500 rows — an append-only, low-frequency table, unlikely to hit this soon, but has no ceiling today |
+
+These thresholds are about client-side rendering/interaction cost, not about the backend gaps in §16 (e.g. Evidence's lack of server-side pagination is the *precondition* for hitting the first row above, not the same issue).
+
+---
+
+## 18. Final migration phase: Live Monitoring, Tactical Map, Settings
+
+The last three prototype screens, framed as system integration rather than
+isolated migrations — every hook/domain model/view model used below
+already existed from Phases 1–3; nothing new was built to support them
+except `useActiveThreats` (`queries/useThreats.ts`, the one REST domain
+with no prior consumer) and `User`/`useUsers` (Settings' Roles & Users tab).
+
+**Live Monitoring** (`routes/index.tsx`): the prototype's bounding-box
+detection overlay and autoplay demo video are dropped, not replaced —
+§8 already flagged in Phase 0 that no bounding-box coordinates or live
+video delivery mechanism exist on the backend; this is that flag acted
+on, not a new finding. `components/hud/CameraTile.tsx` (fabricated
+fps/latency/confidence/health/detections props) is replaced by
+`components/shared/LiveCameraTile.tsx`, which renders only real data:
+`VideoProvider`'s honest "No Signal" state, real per-camera fps
+(nullable), and active threats as `ThreatLevelBadge` chips instead of
+pixel-space boxes. Alerts/incidents reuse `useIncidents()` and
+`useTransitionIncident()` from Incident Center unchanged — the same
+Acknowledge action, not a second implementation. System Load (CPU/
+Memory/Network — no backend source, §16) and the Radar Sweep panel
+(fabricated blip positions — no spatial data, same root cause as Tactical
+Map below) are dropped; GPU and Active Threats (real) take their place.
+
+**Tactical Map** (`routes/map.tsx`): the prototype was entirely
+coordinate-driven (x/y percent positions, rotation/FOV cones, patrol
+routes, blind-spot polygons) with zero backend source for any of it —
+`CameraSchema.location` is free text, never a coordinate (flagged since
+Phase 0 §8/§11, tracked in §16). Per the explicit instruction not to
+implement synthetic map intelligence, this is rebuilt as an honest
+operational status board grouped by the real `location` string, with a
+visible banner explaining *why* there's no positioned map rather than
+silently downgrading. If camera geo-coordinates are ever added, a real
+spatial view can replace this without touching any other screen — the
+same `Camera`/`ThreatAssessment` domain models and query hooks feed both.
+
+**Settings** (`routes/settings.tsx`): reorganized into three real
+categories per the review's instruction. *Administrative* (real): Roles &
+Users, the first use of a new `User` domain model
+(`domain/models/User.ts`) and `GET/PATCH /users` — admin-gated per §12's
+already-resolved facts-vs-authorization rule (`User.role` is a plain
+fact; the admin-only gate is `usePermission("admin")`, not a method on
+the entity). *Fixed policy* (real but not editable): Recording Policy,
+restated to exactly what CLAUDE.md's Recording Rules state, with
+specifics the prototype invented (a 180-day snapshot retention, a ±30s
+clip buffer, AES-256/TLS1.3 specifics stated nowhere) removed rather than
+kept. *Unavailable* (explicit disabled state, not removed): AI Model and
+Notifications (`docs/OPEN_QUESTIONS.md` Q-014, tracked since Phase 0
+§10), and Audit Log (no `GET /audit-log`, §16 Tier 1). The prototype's
+"System" tab (language selector with no i18n infrastructure anywhere in
+the app, an animation toggle with no wiring, a fabricated backup schedule
+and version string) is dropped entirely — nothing in it was real, and
+none of it was worth building as an isolated local-only feature with no
+connection to anything else in RM-13's scope.
+
+**Dead prototype code removed** once nothing referenced it: `lib/mock-data.ts`,
+`components/hud/CameraTile.tsx`, `lib/hud-hooks.ts` (`useTick`/
+`useAnimatedNumber`, built only to animate the old index.tsx's fabricated
+numbers), and `Panel.tsx`'s `LevelBadge` (the prototype's fabricated 1/2/3
+threat-level badge, fully superseded by `ThreatLevelBadge`). Verified
+unreferenced via repo-wide grep before deletion, not assumed.
+
+---
+
+## 19. RM-13 exit audit
+
+Run against the final-phase review's explicit checklist, with the actual
+commands used, not asserted from memory:
+
+| Check | Result |
+|---|---|
+| No mock-data imports remain anywhere | `grep -rn "mock-data" src/` → zero matches. The file itself is deleted (§18). |
+| No direct `fetch()` usage | `grep` for `fetch(` outside `.refetch()` calls → zero matches outside `src/server.ts` (TanStack Start's SSR entry, an unrelated `.fetch(request, env, ctx)` handler signature, not a network call, never touched this session). |
+| No DTOs inside UI components | `grep -rln "api/generated/schema" src/routes/` → zero matches. Every route consumes domain/view-model types only. |
+| No business logic inside React components | Spot-checked; one real inconsistency found and fixed (§ — `incidents.tsx`'s inline status-counting extracted to `buildIncidentStatusCounts()` in the view-model layer, matching Analytics' existing pattern). |
+| Query keys centralized | `grep -rn "queryKey: \[" src/` → zero matches; every query key comes from `queryKeys.ts`. |
+| Domain models used consistently | Every REST domain has one: `Camera`, `ThreatAssessment`, `Incident`/`IncidentSummary`, `HumanReviewItem`, `CameraCalibration`, `Evidence`, `User`. Analytics/Health remain the one documented pass-through exception (§11 Finding 3). |
+| View models used consistently | Every list-rendering screen has a `view-models/` module joining domain data with display concerns (camera-name joins, status counts, filters). |
+| Video abstraction preserved | `grep -rn "PlaceholderVideoProvider"` outside `src/video/` → one match, a docstring comment, not an import. `grep` for raw `<video>`/`<img src=` outside `Evidence Viewer` (a legitimately different case — archived-file blob preview, not live video, per `VideoProvider`'s own docstring distinguishing the two) → zero. |
+| Authentication enforced | `RouteGuard` wraps every route except `/login` (`routes/__root.tsx`'s `AppShell`), unchanged since Phase 1. |
+| Permissions enforced | `usePermission()` gates every mutation-capable screen: Cameras (admin), Incidents (operator), Reviews (operator), Calibration (operator), Settings' Roles tab (admin), Live Monitoring's inline Acknowledge (operator). Evidence/Analytics/Health have no mutations to gate. |
+| Generated OpenAPI types remain current | Re-exported `apps/api/app/main.py`'s live schema and regenerated with `openapi-typescript` — `diff` against the committed `src/api/generated/schema.d.ts` is empty. No backend change happened during RM-13 after Phase 1's export. |
+| Documentation synchronized | This document, §§14–19, updated alongside every phase's code, not after the fact. |
+
+**Compile/lint status at exit:** `bunx tsc --noEmit` exits 0. Repo-wide
+`eslint` — **0 errors** (down from Phase 2's 84, all of which were in
+prototype files now either migrated or deleted), 9 warnings, all the same
+pre-existing `react-refresh/only-export-components` advisory pattern
+(co-locating a context provider with its hook), none newly introduced.
+
+**What "prototype" means now:** every screen in the nav consumes real
+backend data through the DTO → mapper → domain → query → view model → UI
+pipeline, with every deviation from the original Lovable prototype
+recorded (§§14, 15, 18) rather than silently made. The two remaining
+categories of incompleteness are not frontend gaps: backend capabilities
+not yet exposed (§16, prioritized for RM-14+) and client-side performance
+headroom with no current trigger (§17). Per the review's stated exit
+criteria — "complete only when the prototype has been fully retired and
+the production architecture is uniformly applied across the entire
+frontend" — both conditions are met as of this phase.

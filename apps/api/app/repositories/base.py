@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Generic, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.models.base import Base
@@ -37,6 +37,18 @@ class Repository(Generic[ModelT]):
     async def get(self, id_: uuid.UUID) -> ModelT | None:
         return await self._session.get(self.model, id_)
 
+    async def delete(self, instance: ModelT) -> None:
+        """Deletes ``instance``. Constraint violations (e.g. a foreign key
+        still referencing it) propagate as-is -- callers that need a
+        friendlier error catch ``IntegrityError`` themselves; this stays a
+        thin persistence adapter, per this module's own docstring."""
+        await self._session.delete(instance)
+        await self._session.flush()
+
     async def list(self) -> Sequence[ModelT]:
         result = await self._session.execute(select(self.model))
         return result.scalars().all()
+
+    async def count(self) -> int:
+        result = await self._session.execute(select(func.count()).select_from(self.model))
+        return result.scalar_one()

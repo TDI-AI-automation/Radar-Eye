@@ -8,12 +8,15 @@ throughput, last-activity age) -- "operationally useful", per the approval.
 
 ``render()`` is a pure function of current state (no I/O) so it can be unit
 tested directly; ``run_forever`` is the only piece that actually writes to
-the terminal, driven by ``scripts/run_siv.py``.
+the terminal, driven by ``scripts/run_siv.py`` or -- Production Validation
+Mode, ``configs/validation.yaml``'s ``production_validation_mode.enabled``
+-- ``apps.deepstream.app.main`` itself.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from apps.deepstream.app.config import WatchdogSettings
 from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry, HeartbeatStatus
@@ -88,12 +91,12 @@ class Dashboard:
             {"Threats/sec": self._fmt(snapshot.threat_throughput_per_sec)},
         )
         lines += self._stage_block(
-            "Incident",
+            "IncidentService",
             "incident",
             {"Incidents/sec": self._fmt(snapshot.incident_throughput_per_sec)},
         )
         lines += self._stage_block(
-            "Alarm", "alarm", {"Alarms/sec": self._fmt(snapshot.alarm_throughput_per_sec)}
+            "AlarmService", "alarm", {"Alarms/sec": self._fmt(snapshot.alarm_throughput_per_sec)}
         )
         lines += self._stage_block(
             "EventBus",
@@ -127,13 +130,23 @@ class Dashboard:
         return "\n".join(lines)
 
     def print_once(self) -> None:
-        print(self.render())  # noqa: T201 -- this class's entire purpose is terminal output
+        # stderr, deliberately: application logging (structured JSON) owns
+        # stdout (apps.api.app.logging_config.configure_logging) -- a
+        # screen-clearing dashboard sharing that stream would periodically
+        # wipe log lines out from under an operator watching them.
+        # Separating the streams lets an operator redirect either one
+        # independently (e.g. `2>dashboard.txt` to keep only logs on
+        # screen, or vice versa) instead of the two fighting over one
+        # terminal.
+        print(
+            self.render(), file=sys.stderr
+        )  # noqa: T201 -- this class's entire purpose is terminal output
 
     async def run_forever(self, *, interval_seconds: float = 2.0) -> None:
         try:
             while True:
                 await asyncio.sleep(interval_seconds)
-                print(_CLEAR_SCREEN, end="")  # noqa: T201
+                print(_CLEAR_SCREEN, end="", file=sys.stderr)  # noqa: T201
                 self.print_once()
         except asyncio.CancelledError:
             pass

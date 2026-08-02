@@ -32,7 +32,9 @@ from apps.deepstream.app.config import (
 )
 from apps.deepstream.app.config import get_settings as get_deepstream_settings
 from apps.deepstream.app.runtime import DeepStreamRuntime
-from apps.deepstream.app.stage_logging import configure_stage_logging
+from apps.deepstream.app.siv.dashboard import Dashboard
+from apps.deepstream.app.siv.watchdog import Watchdog
+from apps.deepstream.app.stage_logging import configure_stage_logging, enable_maximum_observability
 from shared.events.bus import InProcessEventBus
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,25 @@ async def _run() -> None:
     models_settings = get_models_settings()
     validation_settings = get_validation_settings()
     visualization_settings = get_visualization_settings()
+
+    # Production Validation Mode -- a single config switch
+    # (configs/validation.yaml's production_validation_mode.enabled, off
+    # by default). Forces the existing per-frame trace on, elevates every
+    # radar_eye.stage.* logger to DEBUG, and (below, once the runtime
+    # exists) starts the existing RM-11.SIV Dashboard/Watchdog against
+    # this real production runtime -- no new metric collection, no
+    # behavior change to the pipeline itself. When disabled (the
+    # production default), none of this runs.
+    if validation_settings.production_validation_mode.enabled:
+        validation_settings.frame_trace.enabled = True
+        enable_maximum_observability()
+        logger.warning(
+            "Production Validation Mode ENABLED -- maximum observability active "
+            "(per-frame trace, DEBUG stage logging, console dashboard/watchdog). "
+            "Set production_validation_mode.enabled: false in configs/validation.yaml "
+            "and restart for normal production logging."
+        )
+
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(api_settings)
@@ -67,6 +88,32 @@ async def _run() -> None:
     )
     runtime.set_health_collector(health_collector)
 
+    # Constructed only when Production Validation Mode is on -- reuses
+    # runtime.heartbeat_registry/runtime.instrumentation (the exact same
+    # objects RuntimeSupervisor/Telemetry/instrumentation already write
+    # to) and this process's own EventBus, purely as read-only observers.
+    # Dashboard prints to stderr, not stdout (see dashboard.py) so it
+    # doesn't fight application logging for the same stream.
+    watchdog: Watchdog | None = None
+    dashboard_task: asyncio.Task[None] | None = None
+    if validation_settings.production_validation_mode.enabled:
+        watchdog = Watchdog(
+            heartbeat_registry=runtime.heartbeat_registry,
+            settings=validation_settings.watchdog,
+            bus=bus,
+        )
+        dashboard = Dashboard(
+            heartbeat_registry=runtime.heartbeat_registry,
+            instrumentation=runtime.instrumentation,
+            settings=validation_settings.watchdog,
+        )
+        watchdog.start()
+        dashboard_task = loop.create_task(
+            dashboard.run_forever(
+                interval_seconds=validation_settings.production_validation_mode.dashboard_interval_seconds
+            )
+        )
+
     stop_event = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
@@ -77,6 +124,10 @@ async def _run() -> None:
         await stop_event.wait()
     finally:
         logger.info("radar-eye-deepstream shutting down")
+        if dashboard_task is not None:
+            dashboard_task.cancel()
+        if watchdog is not None:
+            watchdog.stop()
         await runtime.stop()
         await engine.dispose()
 

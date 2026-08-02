@@ -1,0 +1,188 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-hud: var(--hud);
+  --color-hud-dim: var(--hud-dim);
+  --color-cyan-glow: var(--cyan-glow);
+  --color-amber-glow: var(--amber-glow);
+  --color-red-glow: var(--red-glow);
+  --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-grid-line: var(--grid-line);
+  --color-success: var(--success);
+
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --radius: 0.25rem;
+
+  /* Graphite base */
+  --background: oklch(0.17 0.008 250);
+  --foreground: oklch(0.92 0.008 240);
+  --panel: oklch(0.21 0.008 250);
+  --panel-elevated: oklch(0.24 0.008 250);
+
+  --card: oklch(0.21 0.008 250);
+  --card-foreground: oklch(0.92 0.008 240);
+  --popover: oklch(0.20 0.008 250);
+  --popover-foreground: oklch(0.92 0.008 240);
+
+  /* Muted slate accent (no cyan neon) */
+  --primary: oklch(0.72 0.055 230);
+  --primary-foreground: oklch(0.15 0.008 250);
+  --cyan-glow: oklch(0.68 0.06 230);
+  --hud: oklch(0.72 0.055 230);
+  --hud-dim: oklch(0.55 0.03 230);
+
+  --secondary: oklch(0.28 0.01 250);
+  --secondary-foreground: oklch(0.92 0.008 240);
+
+  --muted: oklch(0.25 0.008 250);
+  --muted-foreground: oklch(0.62 0.012 235);
+
+  --accent: oklch(0.28 0.015 240);
+  --accent-foreground: oklch(0.92 0.008 240);
+
+  /* Alert levels: L1 blue, L2 amber, L3 red — muted, not neon */
+  --amber-glow: oklch(0.78 0.13 78);
+  --red-glow: oklch(0.62 0.17 25);
+  --success: oklch(0.68 0.11 150);
+
+  --destructive: oklch(0.62 0.17 25);
+  --destructive-foreground: oklch(0.98 0.005 0);
+
+  --border: oklch(0.32 0.008 250);
+  --input: oklch(0.28 0.008 250);
+  --ring: oklch(0.55 0.04 230);
+
+  --grid-line: oklch(0.28 0.008 250 / 0.35);
+}
+
+.dark {
+  --background: oklch(0.17 0.008 250);
+  --foreground: oklch(0.92 0.008 240);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html, body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--primary);
+    color: var(--background);
+  }
+}
+
+/* ============ Panel utilities — flat, no glow ============ */
+
+@utility hud-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 0.02) inset,
+    0 1px 2px oklch(0 0 0 / 0.4);
+  position: relative;
+}
+
+@utility hud-panel-glow {
+  border-color: var(--primary);
+}
+
+/* Kept for compatibility, but reduced to a plain 1px inset frame — no neon corners */
+@utility hud-corner {
+  position: relative;
+}
+
+@utility text-glow-cyan {
+  color: var(--primary);
+}
+
+@utility text-glow-amber {
+  color: var(--amber-glow);
+}
+
+@utility text-glow-red {
+  color: var(--red-glow);
+}
+
+/* Scanline no longer draws a moving band; it just stays as a hook */
+@utility scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+@utility hud-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+@keyframes soft-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@keyframes border-pulse-red {
+  0%, 100% { border-color: var(--red-glow); }
+  50% { border-color: oklch(0.62 0.17 25 / 0.4); }
+}
+
+@keyframes radar-sweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes ticker {
+  0% { transform: translateY(4px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@utility animate-pulse-red { animation: border-pulse-red 2s ease-in-out infinite; }
+@utility animate-pulse-cyan { animation: soft-pulse 3s ease-in-out infinite; }
+@utility animate-radar { animation: radar-sweep 5s linear infinite; }
+@utility animate-blink { animation: blink 1.8s ease-in-out infinite; }
+@utility animate-breathe { animation: soft-pulse 3s ease-in-out infinite; }
+@utility animate-ticker { animation: ticker 0.2s ease-out; }

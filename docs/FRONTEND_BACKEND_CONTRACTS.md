@@ -107,9 +107,17 @@ Operational situational awareness.
 
 GET /cameras
 
+GET /cameras/brands
+
+POST /cameras
+
 GET /cameras/{camera_id}
 
 PATCH /cameras/{camera_id}
+
+DELETE /cameras/{camera_id}
+
+PATCH /cameras/{camera_id}/lifecycle
 
 GET /cameras/{camera_id}/health
 
@@ -117,7 +125,44 @@ GET /cameras/{camera_id}/calibration
 
 Purpose:
 
-Camera administration.
+Camera administration -- full operator workflow (register, edit, delete),
+no curl/direct API calls required.
+
+GET /cameras/brands lists every supported camera brand
+(HIKVISION/DAHUA/UNIVIEW/AXIS/HANWHA) plus each one's default RTSP port
+and stream path -- the Add/Edit Camera form's only source of these
+defaults (apps.api.app.services.rtsp_url_generator).
+
+POST /cameras registers a new camera (Camera Registry, RM-12) -- creates
+both the camera record and its stream profile, initial lifecycle_state
+DRAFT. The operator supplies brand + IP + credentials + port/stream
+(port/stream optional, defaulting per brand), never a raw RTSP URL --
+the backend generates it and stores only the generated, encrypted URL.
+model (hardware model number, e.g. "DS-2CD2143G0-I") is accepted and
+stored alongside brand but is purely descriptive -- it plays no part in
+RTSP URL generation.
+
+PATCH /cameras/{camera_id} additionally accepts brand/model/ip_address/
+port/username/password/transport/stream_path -- any of brand/ip_address/
+port/username/password/transport/stream_path present regenerates and
+re-encrypts the RTSP URL, merged with the camera's existing connection
+info for whichever fields are omitted (e.g. changing only the IP keeps
+the existing password). password is write-only and never appears in any
+response or audit log entry.
+
+DELETE /cameras/{camera_id} removes a camera and its own setup data
+(stream profile, calibration history). Returns 409 if the camera has
+existing incidents, review items, or recordings -- that history is never
+cascade-deleted (Evidence Preservation); transition the camera to
+DISABLED instead to preserve it. Camera Runtime removes the corresponding
+pipeline source automatically (DesiredStateSynchronizer already reconciles
+toward "camera no longer in Desired State" -- no separate signal needed).
+
+PATCH /cameras/{camera_id}/lifecycle transitions a camera's lifecycle_state
+(DRAFT/TESTING/VERIFIED/OPERATIONAL/MAINTENANCE/DISABLED, RM-12 Camera
+Runtime Ownership Refinement) -- independent of connection status, which
+remains Camera Runtime's exclusively and is never accepted from this or
+any operator-facing request.
 
 ---
 
@@ -169,11 +214,23 @@ PATCH /config
 
 GET /users
 
-PATCH /users
+PATCH /users/{user_id}
 
 Purpose:
 
 System administration.
+
+Notes:
+
+`PATCH /users` (no identifier) was a documentation error -- corrected to
+`PATCH /users/{user_id}`, matching every other mutating route in this
+contract (each takes a path identifier; there is no collection-level PATCH
+anywhere else in this document). Scoped to updating one user's `role`
+only -- `username`/`password_hash` are not exposed through this route.
+
+`GET`/`PATCH /config` are not yet implemented (docs/OPEN_QUESTIONS.md
+Q-014) -- no persistence model for system configuration is defined in
+`docs/DATABASE_SCHEMA.md` or `docs/DOMAIN_MODEL.md` yet.
 
 ---
 

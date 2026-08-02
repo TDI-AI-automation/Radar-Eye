@@ -16,6 +16,12 @@ class CameraRepository(Repository[Camera]):
 class CameraStreamProfileRepository(Repository[CameraStreamProfile]):
     model = CameraStreamProfile
 
+    async def get_by_camera_id(self, camera_id: uuid.UUID) -> CameraStreamProfile | None:
+        result = await self._session.execute(
+            select(CameraStreamProfile).where(CameraStreamProfile.camera_id == camera_id)
+        )
+        return result.scalar_one_or_none()
+
 
 class CameraCalibrationRepository(Repository[CameraCalibration]):
     """camera_calibrations is append-only (RM-05 design review): 'current'

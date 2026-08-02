@@ -1,5 +1,12 @@
 """Repository-native domain objects produced by the Runtime Adapter.
 
+RM-12 Camera Runtime Step 6: relocated from the top-level
+``apps/deepstream/app/observations.py`` into the ``ai_runtime`` package
+(see that package's ``__init__.py``) -- a pure move, unchanged otherwise.
+This is the shared, pyds-free data contract crossing the ADR-027 boundary:
+``detection.py`` (``RuntimeAdapter``) produces these values,
+``threat_bridge.py`` (``ThreatEngineRuntimeAdapter``) consumes them.
+
 Source: ADR-027 (DeepStream Runtime Adapter as Anti-Corruption Layer) --
 these are exactly the kind of "repository-native domain objects" ADR-027
 names as what may leave the Runtime Adapter boundary (``FrameObservation``,

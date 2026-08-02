@@ -1,4 +1,4 @@
-"""Tests for apps.deepstream.app.threat_runtime_adapter.ThreatEngineRuntimeAdapter.
+"""Tests for apps.deepstream.app.ai_runtime.threat_bridge.ThreatEngineRuntimeAdapter.
 
 Mapper functions and the untracked-detection skip are pure/mockable and
 tested without a database. Full orchestration (Calibration -> ThreatEngine
@@ -18,14 +18,18 @@ import pytest
 
 from apps.api.app.models.camera import Camera
 from apps.api.app.repositories.camera import CameraRepository
-from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
-from apps.deepstream.app.instrumentation import PerformanceInstrumentation
-from apps.deepstream.app.observations import BoundingBox, DetectionObservation, FrameObservation
-from apps.deepstream.app.threat_runtime_adapter import (
+from apps.deepstream.app.ai_runtime.observations import (
+    BoundingBox,
+    DetectionObservation,
+    FrameObservation,
+)
+from apps.deepstream.app.ai_runtime.threat_bridge import (
     ThreatEngineRuntimeAdapter,
     default_uniform_mapper,
     default_weapon_mapper,
 )
+from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from services.calibration.service import CalibrationService
 from services.calibration.types import ReferencePoint
 from services.incident_service.alarm import AlarmService

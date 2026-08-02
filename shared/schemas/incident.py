@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -64,3 +65,26 @@ class IncidentUpdatedSchema(BaseModel):
     incident_id: uuid.UUID
     old_status: IncidentStatus
     new_status: IncidentStatus
+
+
+class IncidentTransitionRequestSchema(BaseModel):
+    """Body of ``PATCH /incidents/{incident_id}`` -- the only field an
+    external caller may request a change to (docs/RM-12_ARCHITECTURE.md
+    §3.3; services.incident_service.service.EXTERNALLY_REQUESTABLE_TRANSITIONS
+    is the actual validation authority, not this schema)."""
+
+    status: IncidentStatus
+
+
+class IncidentEventSchema(BaseModel):
+    """A single incident-lifecycle history entry.
+
+    Returned by ``GET /incidents/{incident_id}/events`` (Incident Center) --
+    thin wrap of the ``incident_events`` table (docs/DATABASE_SCHEMA.md).
+    """
+
+    event_id: uuid.UUID
+    incident_id: uuid.UUID
+    event_type: str
+    event_payload: dict[str, Any]
+    created_at: datetime

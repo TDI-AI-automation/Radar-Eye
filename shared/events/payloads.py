@@ -194,6 +194,30 @@ class CameraDisconnectedPayload(_FrozenPayload):
 
 
 # ---------------------------------------------------------------------------
+# CameraRegisteredEvent / CameraLifecycleChangedEvent
+# Producer: Camera Registry (RM-12)
+# Consumers: DeepStream (Camera Runtime -- future: reacts to new/changed
+#   cameras instead of only loading the roster once at startup, RM-12
+#   §6 "Dynamic source management"), Frontend (WS)
+# ---------------------------------------------------------------------------
+
+
+class CameraRegisteredPayload(_FrozenPayload):
+    """Payload for CameraRegisteredEvent."""
+
+    camera_id: uuid.UUID
+    name: str
+
+
+class CameraLifecycleChangedPayload(_FrozenPayload):
+    """Payload for CameraLifecycleChangedEvent."""
+
+    camera_id: uuid.UUID
+    previous_state: str
+    new_state: str
+
+
+# ---------------------------------------------------------------------------
 # CalibrationUpdatedEvent
 # Producer: Calibration Service
 # Consumers: DeepStream
