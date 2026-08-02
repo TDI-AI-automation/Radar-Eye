@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Maximize2, Circle, VideoOff } from "lucide-react";
 import type { Camera } from "@/domain/models/Camera";
 import type { ThreatAssessment } from "@/domain/models/ThreatAssessment";
@@ -14,13 +15,15 @@ import { ThreatLevelBadge } from "./ThreatLevelBadge";
  * ThreatAssessmentEvent carries no bounding-box coordinates for the
  * detection-overlay feature"). This preserves the visual language (video
  * area, top/bottom gradient overlays, REC indicator, fullscreen control)
- * but renders only real data: connection status via VideoProvider (always
- * "No Signal" today -- PlaceholderVideoProvider is honest about that, not
- * worked around), real per-camera fps (nullable), and active threats for
- * this camera as labeled chips instead of fabricated pixel-space boxes.
- * PTZ/volume/wifi controls from the original are dropped entirely -- no
- * backend capability backs any of them, and keeping the buttons would
- * imply control that doesn't exist.
+ * but renders only real data: live video via WebRtcVideoProvider (falling
+ * back to a "No Signal" state for "connecting"/"error"/"unavailable"),
+ * real per-camera fps (nullable), and active threats for this camera as
+ * labeled chips instead of fabricated pixel-space boxes. AI overlays (when
+ * enabled) are already burned into the stream server-side -- this
+ * component has no separate overlay-rendering logic. PTZ/volume/wifi
+ * controls from the original are dropped entirely -- no backend capability
+ * backs any of them, and keeping the buttons would imply control that
+ * doesn't exist.
  */
 export function LiveCameraTile({
   camera,
@@ -36,6 +39,15 @@ export function LiveCameraTile({
   onFullscreen?: () => void;
 }) {
   const videoHandle = useVideoHandle(camera.id);
+  const [videoElementErrored, setVideoElementErrored] = useState(false);
+  useEffect(() => setVideoElementErrored(false), [videoHandle]);
+
+  const stream =
+    videoHandle.status === "playing" && videoHandle.source instanceof MediaStream
+      ? videoHandle.source
+      : null;
+  const isPlaying = stream !== null && !videoElementErrored;
+
   const critical = threats.some((t) => t.requiresImmediateAction());
   const border = critical
     ? "border-red-glow animate-pulse-red"
@@ -48,13 +60,17 @@ export function LiveCameraTile({
       className={`hud-panel rounded overflow-hidden group relative border ${border} transition-colors`}
     >
       <div className="relative aspect-video bg-black">
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/60">
-          <VideoOff className="h-8 w-8 mb-2" strokeWidth={1.25} />
-          <div className="font-mono text-[10px] uppercase tracking-[0.25em]">
-            {videoHandle.status === "unavailable" ? "No Signal" : videoHandle.status}
+        {isPlaying ? (
+          <VideoStreamElement stream={stream} onError={() => setVideoElementErrored(true)} />
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/60">
+            <VideoOff className="h-8 w-8 mb-2" strokeWidth={1.25} />
+            <div className="font-mono text-[10px] uppercase tracking-[0.25em]">
+              {videoHandle.status === "unavailable" ? "No Signal" : videoHandle.status}
+            </div>
+            <div className="font-mono text-[9px] tracking-widest mt-1">{camera.name}</div>
           </div>
-          <div className="font-mono text-[9px] tracking-widest mt-1">{camera.name}</div>
-        </div>
+        )}
 
         {threats.length > 0 && (
           <div className="absolute bottom-1 left-1 right-1 z-10 flex flex-wrap gap-1">
@@ -90,5 +106,31 @@ export function LiveCameraTile({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Attaches a MediaStream via `srcObject` -- not settable as a plain JSX
+ * attribute, so this needs a ref + effect rather than the div-based
+ * placeholder's pure render. `onError` lets the caller fall back to the
+ * "No Signal" state if playback itself fails after the WebRTC connection
+ * already reported "playing". */
+function VideoStreamElement({ stream, onError }: { stream: MediaStream; onError: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.srcObject = stream;
+  }, [stream]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      onError={onError}
+      className="absolute inset-0 h-full w-full object-cover"
+    />
   );
 }

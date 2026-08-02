@@ -2,11 +2,10 @@
  * VideoProvider abstraction.
  *
  * `CameraTile` (and any future video-consuming component) depends on this
- * interface only -- never a concrete provider. This is the seam RM-13
- * deliberately defers actual live video through: no RTSP/WebRTC/HLS
- * delivery mechanism is decided yet (see docs/FRONTEND_ARCHITECTURE.md,
- * "Open Backend Dependencies"). `PlaceholderVideoProvider` is the only
- * concrete implementation today.
+ * interface only -- never a concrete provider. `WebRtcVideoProvider` is
+ * the concrete implementation today (Live Monitoring's WebRTC video
+ * delivery, see its own docstring); this is the seam that keeps
+ * components ignorant of the underlying transport.
  *
  * Capability flags let a component ask "can this provider do X" instead of
  * assuming every provider supports every feature -- e.g. a future
@@ -28,10 +27,22 @@ export interface VideoHandle {
 }
 
 export interface VideoProvider {
-  /** Begin streaming for a camera. Returns a handle whose `status` the
-   * caller should treat as reactive (expect it to change over time) --
-   * concrete providers are responsible for their own subscription model. */
+  /** Begin streaming for a camera. Returns the handle's current state
+   * synchronously; concrete providers whose connection is asynchronous
+   * (e.g. WebRTC negotiation) return a "connecting" handle here and
+   * deliver later updates through subscribe(). Idempotent -- calling this
+   * again for a camera that's already connecting/connected must not
+   * restart the connection. */
   connect(cameraId: string): VideoHandle;
+
+  /** Reactive updates for `cameraId`'s handle -- mirrors ws/connection.ts's
+   * `subscribeToChannel` convention. `callback` fires on every status
+   * change after connect() (never for the synchronous value connect()
+   * itself returned). Returns an unsubscribe function; safe to call
+   * multiple times / after disconnect(). Providers with no asynchronous
+   * state (e.g. a placeholder) may implement this as a no-op subscription
+   * that's never called. */
+  subscribe(cameraId: string, callback: (handle: VideoHandle) => void): () => void;
 
   /** Release any resources associated with `cameraId`. Must be safe to call
    * even if connect() was never called for that id. */

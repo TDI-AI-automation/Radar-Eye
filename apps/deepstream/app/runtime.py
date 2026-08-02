@@ -42,6 +42,7 @@ from apps.deepstream.app.ai_runtime.threat_bridge import ThreatEngineRuntimeAdap
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import (
     DeepStreamSettings,
+    LiveStreamSettings,
     ModelsSettings,
     ValidationSettings,
     VisualizationSettings,
@@ -52,6 +53,7 @@ from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
+from apps.deepstream.app.live_stream.manager import LiveStreamManager
 from apps.deepstream.app.media_publisher.media_publisher import MediaPublisher
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
 from apps.deepstream.app.pipeline_trace import PipelineTracer
@@ -86,6 +88,7 @@ class DeepStreamRuntime:
         models: ModelsSettings,
         validation: ValidationSettings,
         visualization: VisualizationSettings,
+        live_stream: LiveStreamSettings,
         session_factory: async_sessionmaker[AsyncSession],
         bus: EventBus,
         encryption: Any,
@@ -149,6 +152,7 @@ class DeepStreamRuntime:
             track_annotations=self.visualization_manager.track_annotations,
         )
 
+        self._live_stream_settings = live_stream
         self._frame_counter = FrameCounter()
         self._bridge = AsyncBridge(loop)
         self._pipeline = DeepStreamPipeline(
@@ -162,12 +166,14 @@ class DeepStreamRuntime:
             visualization_settings=visualization,
             visualization_manager=self.visualization_manager,
             media_publisher_enabled=True,
+            live_stream_enabled=live_stream.enabled,
+            on_source_added=self._on_live_stream_source_added,
+            on_source_removed=self._on_live_stream_source_removed,
         )
 
         # RM-12 Camera Runtime v1 (Steps 1-7): first production wiring of
-        # the completed blueprint. Runtime Supervisor owns AI enable/
-        # disable (Step 3); Desired State Synchronization converges the
-        # pipeline toward Camera Registry's Desired State (Step 4),
+        # the completed blueprint. Desired State Synchronization converges
+        # the pipeline toward Camera Registry's Desired State (Step 4),
         # replacing the previous unconditional "load every registered
         # camera" behavior in start() below; Media Publisher owns Tier 1/
         # Tier 2 publisher lifecycle (Step 7); Telemetry observes all of
@@ -177,14 +183,29 @@ class DeepStreamRuntime:
         # DeepStreamPipeline needs a Tier2Publisher reference before
         # build() runs -- broken via set_tier2_publisher(), the same
         # "setter for a not-yet-available dependency" pattern already used
-        # by set_health_collector() below.
+        # by set_health_collector() below. MediaPublisher is built before
+        # RuntimeSupervisor -- unrelated to Live Monitoring, purely
+        # because Tier2Publisher must exist before DeepStreamPipeline.build().
+        self.media_publisher = MediaPublisher(self._pipeline, self._bridge)
+        self._pipeline.set_tier2_publisher(self.media_publisher.tier2)
+        self.live_stream_manager = LiveStreamManager(
+            self._pipeline,
+            bitstream_publisher=self.media_publisher.bitstream,
+            bridge=self._bridge,
+            loop=loop,
+            settings=live_stream,
+        )
+        """Live Monitoring's permanent video delivery path -- see
+        apps/deepstream/app/live_stream/__init__.py. Stage B: transport
+        only, one input (the camera's original bitstream via
+        MediaPublisher's BitstreamPublisher) -- no AI/overlay wiring, no
+        on_valve_changed hook. A future stage adds a second (annotated)
+        input and the runtime translation that selects between them."""
         self.runtime_supervisor = RuntimeSupervisor(
             self._pipeline,
             self._bridge,
             ConcurrentEnableLimiter(max_concurrent=settings.streammux_batch_size),
         )
-        self.media_publisher = MediaPublisher(self._pipeline, self._bridge)
-        self._pipeline.set_tier2_publisher(self.media_publisher.tier2)
         self._desired_state_reader = DesiredStateReader(session_factory, encryption)
         self.desired_state_synchronizer = DesiredStateSynchronizer(
             self._desired_state_reader,
@@ -220,6 +241,7 @@ class DeepStreamRuntime:
         self._instrumentation.mark_pipeline_build_start()
         self._pipeline.build()
         self._bridge.start()
+        await self.live_stream_manager.start()
 
         # RM-12 Camera Runtime v1: initial Desired State convergence
         # replaces the previous unconditional "add every registered camera"
@@ -270,6 +292,28 @@ class DeepStreamRuntime:
         DeepStreamRuntime doesn't hard-import apps.api.app.main at module
         load time."""
         self._health_collector = health_collector
+
+    def _on_live_stream_source_added(self, camera_id: uuid.UUID, camera_name: str) -> None:
+        """DeepStreamPipeline.add_source()'s on_source_added hook. Fires
+        synchronously on the GLib thread, at the same call site
+        VisualizationManager/Tier2Publisher already hook into --
+        live_stream_manager.add_camera() is itself async (awaits
+        Tier1Publisher.attach()), so it's scheduled onto the asyncio loop
+        the same way every other GLib->asyncio hand-off in this module
+        already is, rather than called directly here. Referencing
+        self.live_stream_manager here (rather than at DeepStreamPipeline
+        construction time, which happens before it exists) is safe --
+        this hook is only ever invoked later, once add_source() actually
+        runs, by which point construction has long finished."""
+        self._bridge.schedule(self.live_stream_manager.add_camera(camera_id, camera_name))
+
+    def _on_live_stream_source_removed(self, camera_id: uuid.UUID) -> None:
+        """DeepStreamPipeline.remove_source()'s on_source_removed hook --
+        the symmetric counterpart above, covering every removal path
+        uniformly (bus-message failure, reconnect, and lifecycle-driven
+        removal via DesiredStateSynchronizer) since all of them funnel
+        through remove_source()."""
+        self._bridge.schedule(self.live_stream_manager.remove_camera(camera_id))
 
     def _on_health_snapshot(self, camera_id: uuid.UUID, status: Any, fps: float | None) -> None:
         """HeartbeatScheduler's on_health_snapshot hook -- fires every
@@ -367,6 +411,7 @@ class DeepStreamRuntime:
             self._desired_state_sync_task.cancel()
             self._desired_state_sync_task = None
         self.telemetry.stop()
+        await self.live_stream_manager.stop()
         await self.media_publisher.shutdown()
         await self.runtime_supervisor.stop()
         if self._heartbeat is not None:

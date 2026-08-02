@@ -55,6 +55,7 @@ IMPLEMENTED_REST_ROUTES: set[tuple[str, str]] = {
     ("patch", "/cameras/{camera_id}"),
     ("get", "/cameras/{camera_id}/health"),
     ("get", "/cameras/{camera_id}/calibration"),
+    ("post", "/cameras/{camera_id}/webrtc/offer"),
     ("get", "/analytics/threats"),
     ("get", "/analytics/incidents"),
     ("get", "/analytics/cameras"),

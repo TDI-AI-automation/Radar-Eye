@@ -82,6 +82,9 @@ class DeepStreamPipeline:
         visualization_manager: VisualizationManager | None = None,
         media_publisher_enabled: bool = False,
         tier2_publisher: Tier2Publisher | None = None,
+        live_stream_enabled: bool = False,
+        on_source_added: Callable[[uuid.UUID, str], None] | None = None,
+        on_source_removed: Callable[[uuid.UUID], None] | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
@@ -118,6 +121,28 @@ class DeepStreamPipeline:
         per-camera branch depends on that camera's streammux pad_index,
         only known once the camera is actually added -- mirrors
         VisualizationManager's exact reasoning for the same split."""
+        self._live_stream_enabled = live_stream_enabled
+        self._sgie_tee: Any = None
+        """Live Monitoring's WebRTC branch (apps/deepstream/app/live_stream/)
+        needs a request pad off the same shared SGIE tee Visualization/
+        Tier 2 already share -- see build()'s ``needs_sgie_tee``. Unlike
+        those two, its own per-camera branch construction lives entirely
+        outside this class (in ``live_stream/manager.py``, via the
+        ``sgie_tee()`` accessor below) since it isn't scoped to a single
+        camera the way Visualization is."""
+        self._on_source_added = on_source_added
+        self._on_source_removed = on_source_removed
+        """Optional, None-safe (same idiom as visualization/tier2 above) --
+        called from add_source()/remove_source() exactly where
+        VisualizationManager/Tier2Publisher already are, for the same
+        reason (camera_id/name/removal timing all only known here). This
+        is the one hook Live Monitoring's WebRTC branch needs to build/
+        tear down in lockstep with a camera's source, covering every
+        removal path uniformly -- bus-message failure (_on_bus_message),
+        reconnect, and lifecycle-driven removal (DesiredStateSynchronizer
+        transitioning a camera to DISABLED or dropping it from Desired
+        State entirely) -- without DesiredStateSynchronizer or this class
+        needing any awareness of Live Monitoring itself."""
         self._nvstreamdemux: Any = None
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
@@ -221,7 +246,9 @@ class DeepStreamPipeline:
             and self._visualization_settings.enabled
             and self._visualization_settings.stream_output_enabled
         )
-        needs_sgie_tee = visualization_active or self._media_publisher_enabled
+        needs_sgie_tee = (
+            visualization_active or self._media_publisher_enabled or self._live_stream_enabled
+        )
 
         if needs_sgie_tee:
             # A branch beyond the tail/metadata sink was requested --
@@ -259,6 +286,7 @@ class DeepStreamPipeline:
             tee.link(metadata_queue)
             metadata_queue.link(fakesink)
 
+            self._sgie_tee = tee
             if visualization_active:
                 self._visualization_tee = tee
 
@@ -460,6 +488,20 @@ class DeepStreamPipeline:
                     source.camera_id,
                 )
 
+        # Live Monitoring's WebRTC branch -- same failure-isolation
+        # guarantee as visualization/Tier 2 above; idempotent on the
+        # reconnect path (LiveStreamManager.add_camera() itself no-ops
+        # for an already-known camera_id).
+        if self._on_source_added is not None:
+            try:
+                self._on_source_added(source.camera_id, source.camera.name)
+            except Exception:  # noqa: BLE001 -- must never take inference down with it
+                logger.exception(
+                    "Live Monitoring failed to notify of new source for camera %s -- "
+                    "continuing without it (inference is unaffected)",
+                    source.camera_id,
+                )
+
     def is_built(self) -> bool:
         """RM-12 Camera Runtime Step 5 (Telemetry): a passive readiness
         check -- true once ``build()`` has constructed the shared
@@ -478,6 +520,30 @@ class DeepStreamPipeline:
         transitioned to an inactive lifecycle state, which ``bin_for()``
         alone already covers per-camera)."""
         return frozenset(self._sources.keys())
+
+    def gst_pipeline(self) -> Any:
+        """The real ``Gst.Pipeline`` -- for callers (Live Monitoring's
+        WebRTC branch) that need to ``add()``/``remove()`` elements
+        directly, which this wrapper class itself doesn't expose."""
+        return self._pipeline
+
+    def sgie_tee(self) -> Any | None:
+        """The shared tee immediately after SGIE, or ``None`` if nothing
+        requested one (``needs_sgie_tee`` was false at ``build()`` time).
+        Visualization/Tier 2/Live Monitoring's WebRTC branch each request
+        their own ``src_%u`` pad off this same element -- an element's
+        output can only feed one thing directly, so a tee is exactly the
+        "more than one subsystem forks off SGIE" primitive; this accessor
+        is the one place any of them reach it."""
+        return self._sgie_tee
+
+    def camera_name_for(self, camera_id: uuid.UUID) -> str | None:
+        """The camera's registered name, or ``None`` if no source is
+        currently active for it -- for callers (Live Monitoring's WebRTC
+        branch) that need it at a point where they only have the
+        camera_id, mirroring ``bin_for()``'s exact shape."""
+        source = self._sources.get(camera_id)
+        return source.camera.name if source is not None else None
 
     def bin_for(self, camera_id: uuid.UUID) -> Any | None:
         """The camera's ``Gst.Bin``, or ``None`` if no source is currently
@@ -570,6 +636,22 @@ class DeepStreamPipeline:
         # below -- failure isolation matches add_source()'s guarantee. Its
         # own request pad on nvstreamdemux is, by the same rationale as
         # streammux's below, never released either (see tier2.py).
+        # Live Monitoring's WebRTC branch -- called before the source bin
+        # itself is torn down below, same as Tier 2 above. The actual
+        # teardown this triggers is scheduled (async), not synchronous
+        # here -- Tier1Publisher's own detach() already tolerates the pad
+        # being gone by the time it runs (see media_publisher/base.py's
+        # _do_detach docstring), so ordering relative to the source bin's
+        # own synchronous teardown below is not required to be exact.
+        if self._on_source_removed is not None:
+            try:
+                self._on_source_removed(camera_id)
+            except Exception:  # noqa: BLE001 -- must never prevent source teardown
+                logger.exception(
+                    "Live Monitoring failed to notify of source removal for camera %s",
+                    camera_id,
+                )
+
         if self._tier2_publisher is not None:
             try:
                 self._tier2_publisher.on_camera_removed(camera_id)

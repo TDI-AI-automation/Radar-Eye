@@ -33,6 +33,7 @@ DEFAULT_MODELS_PATH = REPO_ROOT / "configs" / "models.yaml"
 DEFAULT_LOGGING_PATH = REPO_ROOT / "configs" / "logging.yaml"
 DEFAULT_VALIDATION_PATH = REPO_ROOT / "configs" / "validation.yaml"
 DEFAULT_VISUALIZATION_PATH = REPO_ROOT / "configs" / "visualization.yaml"
+DEFAULT_LIVE_STREAM_PATH = REPO_ROOT / "configs" / "live_stream.yaml"
 
 
 class DeepStreamSettings(BaseModel):
@@ -251,6 +252,7 @@ STAGE_LOGGER_NAMES = (
     "performance",
     "system",
     "visualization",
+    "live_stream",
 )
 """The stage loggers named in the RM-11.SIV approval's Pipeline
 Instrumentation task, plus ``visualization`` (RM-11.SIV visualization
@@ -437,3 +439,43 @@ def load_visualization_settings(visualization_path: Path | None = None) -> Visua
 @lru_cache
 def get_visualization_settings() -> VisualizationSettings:
     return load_visualization_settings()
+
+
+class LiveStreamSettings(BaseModel):
+    """Live Monitoring's permanent video delivery path (WebRTC) -- see
+    apps/deepstream/app/live_stream/. Unlike Visualization (an optional,
+    off-by-default RTSP diagnostic feature), this is core Camera Runtime
+    functionality: a connected camera must always be watchable, so
+    ``enabled`` defaults to ``true``.
+
+    Overlay styling (colors, draw_* toggles, font size) is deliberately
+    NOT duplicated here -- the live-stream OSD branch reuses
+    ``VisualizationSettings``/``DeepStreamOverlayRenderer`` directly
+    (apps.deepstream.app.visualization), regardless of whether
+    Visualization's own RTSP output is enabled, so there is exactly one
+    place overlay appearance is configured."""
+
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    """Signaling server bind host -- 127.0.0.1 only, never network-exposed.
+    apps.api is the sole externally-reachable authenticated door (ADR-011,
+    "centralized access control"); it proxies the SDP offer/answer
+    exchange to this address."""
+    port: int = 8590
+    output_codec: Literal["h264"] = "h264"
+    output_bitrate: int = 4_000_000
+    stun_servers: list[str] = []
+    """Empty by default -- a single-node, air-gapped, LAN deployment only
+    ever needs host ICE candidates; no STUN/TURN server is reachable or
+    required."""
+
+
+def load_live_stream_settings(live_stream_path: Path | None = None) -> LiveStreamSettings:
+    path = live_stream_path or DEFAULT_LIVE_STREAM_PATH
+    raw = _load_yaml(path)
+    return LiveStreamSettings(**raw)
+
+
+@lru_cache
+def get_live_stream_settings() -> LiveStreamSettings:
+    return load_live_stream_settings()

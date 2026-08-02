@@ -30,14 +30,16 @@ sensitive as a name/location edit).
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.audit import AuditLogger
-from apps.api.app.config import Settings
+from apps.api.app.config import LiveStreamProxySettings, Settings, get_live_stream_proxy_settings
 from apps.api.app.models.camera import Camera, CameraCalibration, CameraStreamProfile
 from apps.api.app.models.user import ROLE_ADMIN
 from apps.api.app.repositories.camera import (
@@ -75,6 +77,8 @@ from shared.schemas.camera import (
     CameraLifecycleUpdateRequestSchema,
     CameraSchema,
     CameraUpdateRequestSchema,
+    WebRtcAnswerResponseSchema,
+    WebRtcOfferRequestSchema,
 )
 
 router = APIRouter(tags=["Camera Management"], dependencies=[Depends(get_current_user)])
@@ -347,3 +351,54 @@ async def delete_camera(
     )
     await session.commit()
     return ApiResponse(success=True, data=None)
+
+
+async def get_webrtc_proxy_client() -> AsyncIterator[httpx.AsyncClient]:
+    """Isolated from the test client's own ``httpx.AsyncClient`` usage via
+    FastAPI's dependency-override mechanism (``app.dependency_overrides``)
+    rather than monkeypatching ``httpx.AsyncClient.post`` globally -- the
+    latter would also intercept the test's own calls into this app."""
+    async with httpx.AsyncClient() as client:
+        yield client
+
+
+@router.post(
+    "/cameras/{camera_id}/webrtc/offer",
+    response_model=ApiResponse[WebRtcAnswerResponseSchema],
+)
+async def post_webrtc_offer(
+    camera_id: uuid.UUID,
+    body: WebRtcOfferRequestSchema,
+    live_stream_settings: Annotated[
+        LiveStreamProxySettings, Depends(get_live_stream_proxy_settings)
+    ],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_webrtc_proxy_client)],
+) -> ApiResponse[WebRtcAnswerResponseSchema]:
+    """Live Monitoring's video signaling -- proxies the SDP offer/answer
+    exchange to apps.deepstream's local-only (127.0.0.1) signaling
+    server. This is the one point where the operator's browser reaches
+    Live Monitoring's video path; the actual media (once negotiated)
+    flows directly between the browser and apps.deepstream over WebRTC,
+    not through this route (see apps.deepstream.app.live_stream's module
+    docstring). Gated by the router-level ``get_current_user`` dependency
+    like every other route here -- ADR-011's "centralized access
+    control" applied to signaling, same as everything else in this file.
+    """
+    url = (
+        f"http://{live_stream_settings.host}:{live_stream_settings.port}"
+        f"/cameras/{camera_id}/webrtc/offer"
+    )
+    try:
+        response = await http_client.post(url, json=body.model_dump(), timeout=15.0)
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Live Monitoring's video service is unavailable",
+        ) from exc
+
+    if response.status_code == status.HTTP_404_NOT_FOUND:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera not connected to Live Monitoring")
+    if response.status_code != status.HTTP_200_OK:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to negotiate WebRTC stream")
+
+    return ApiResponse(success=True, data=WebRtcAnswerResponseSchema(**response.json()))

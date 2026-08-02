@@ -139,3 +139,37 @@ def load_settings(settings_path: Path | None = None) -> Settings:
 @lru_cache
 def get_settings() -> Settings:
     return load_settings()
+
+
+DEFAULT_LIVE_STREAM_PATH = REPO_ROOT / "configs" / "live_stream.yaml"
+
+
+class LiveStreamProxySettings(BaseModel):
+    """Where the local-only, 127.0.0.1-bound signaling server inside
+    apps.deepstream is listening -- apps.api proxies
+    ``POST /cameras/{camera_id}/webrtc/offer`` to it (ADR-011,
+    "centralized access control": apps.api is the sole externally-
+    reachable authenticated door; apps.deepstream's signaling server has
+    no auth of its own and is never network-exposed).
+
+    Reads the *same* ``configs/live_stream.yaml`` apps.deepstream's own
+    ``LiveStreamSettings`` reads -- one file, one source of truth for
+    host/port, each process parsing it independently (there is no other
+    cross-process communication between them besides the shared
+    database; see apps/deepstream/app/config.py's LiveStreamSettings)."""
+
+    host: str = "127.0.0.1"
+    port: int = 8590
+
+
+def load_live_stream_proxy_settings(
+    live_stream_path: Path | None = None,
+) -> LiveStreamProxySettings:
+    path = live_stream_path or DEFAULT_LIVE_STREAM_PATH
+    raw = _load_yaml(path)
+    return LiveStreamProxySettings(host=raw.get("host", "127.0.0.1"), port=raw.get("port", 8590))
+
+
+@lru_cache
+def get_live_stream_proxy_settings() -> LiveStreamProxySettings:
+    return load_live_stream_proxy_settings()

@@ -1,0 +1,25 @@
+# Live Monitoring's permanent video delivery path (WebRTC).
+#
+# Unlike configs/visualization.yaml (an optional RTSP diagnostic feature,
+# off by default), this is core Camera Runtime functionality -- a
+# connected camera must always be watchable in Live Monitoring, so
+# enabled defaults to true.
+#
+# Overlay appearance (colors, draw_* toggles) is configured once, in
+# configs/visualization.yaml, and reused here regardless of whether
+# Visualization's own RTSP output is enabled.
+
+enabled: true
+
+# Signaling server bind host/port -- 127.0.0.1 only, never network-exposed.
+# apps.api is the sole externally-reachable authenticated door; it proxies
+# the SDP offer/answer exchange to this address (POST /cameras/{id}/webrtc/offer).
+host: 127.0.0.1
+port: 8590
+
+output_codec: h264
+output_bitrate: 4000000
+
+# Empty -- a single-node, air-gapped, LAN deployment only ever needs host
+# ICE candidates; no STUN/TURN server is reachable or required.
+stun_servers: []
