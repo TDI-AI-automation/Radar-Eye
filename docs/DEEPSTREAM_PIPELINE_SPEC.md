@@ -23,34 +23,42 @@ authoritative reference for the *pipeline graph itself* (what feeds what).
                        │
                   RTSP Source (rtspsrc)
                        │
-             Depay / Parse (rtph264depay → h264parse)
+                    Depay (rtph264depay)
                        │
-                  Tier 0 tee  ⚠ designed, not yet implemented — see Stage 3
+                Depay-tee  ⚠ designed, not yet implemented — see Stage 2/3
         ┌──────────────┴──────────────┐
         │                             │
         ▼                             ▼
-  Live Streaming                 Decode (nvv4l2decoder)
-  (WebRTC, planned)                    │
-                                  Tier 1 tee (Frame Distributor)
-                       ┌────────────────┼────────────────┬─────────┐
-                       │                │                │         │
-                       ▼                ▼                ▼         ▼
-                  Recording          AI valve         Snapshot   Other
-                  (planned)              │            (planned)
-                                    AI branch:
-                                    PGIE → NvDCF → SGIE
-                                         │
-                              ┌──────────┴──────────┐
-                              │                     │
-                              ▼                     ▼
-                     Decision Pipeline         Tier 2 tee
-                     (Distance Estimation      (post-SGIE, AI-gated)
-                      → Threat Engine               │
-                      → Incident/Alarm          ┌────┴────┐
-                      → Event Bus)               ▼         ▼
-                                          Visualization   Tier 2
-                                          (AI Streaming,  consumers
-                                           built, RTSP)   (planned)
+  Parser (dedicated)            Parser (shared)  ⚠ new
+  h264parse                     h264parse
+        │                             │
+   Decode (nvv4l2decoder)        Tier 0 tee  ⚠ new
+        │                    ┌────────┴────────┐
+   Tier 1 tee                ▼                 ▼
+   (Frame Distributor,  Live Streaming     Recording
+   built)               (WebRTC, planned)  (planned)
+        │
+   ┌────┼────────┬─────────┐
+   │    │        │         │
+   ▼    ▼        ▼         ▼
+(→AI  AI valve  Snapshot  Other
+ branch)  │     (planned)
+          ▼
+     AI branch:
+     PGIE → NvDCF → SGIE
+          │
+   ┌──────┴──────┐
+   ▼             ▼
+Decision      Tier 2 tee
+Pipeline      (post-SGIE, AI-gated)
+(Distance          │
+ Estimation    ┌────┴────┐
+ → Threat       ▼         ▼
+ Engine    Visualization  Tier 2
+ → Incident (AI Streaming, consumers
+ /Alarm     built, RTSP)  (planned)
+ → Event
+ Bus)
 ```
 
 This diagram is the architecture. Every branch exists because it represents
@@ -58,15 +66,58 @@ a real system responsibility, whether or not it has a consumer today. Do not
 collapse branches, and do not remove the "Other" expansion point merely
 because nothing is attached to it yet.
 
+**Why the parser is duplicated, not shared across all three of Decode/Live
+Streaming/Recording** (a corrected finding — an earlier draft of this
+document proposed one shared parser before a single tee; investigate before
+building either shape again): the current, hardware-validated decode chain
+(`ingestion/source.py`) links `depay` directly to `parse` directly to
+`decoder`, with no element between `parse` and `decoder`. Real-world evidence
+(NVIDIA Developer Forums, not assumption) shows inserting a `tee` between an
+`h264parse` and its consuming `nvv4l2decoder` has caused complete pipeline
+stalls on some systems — a risk specific to `nvv4l2decoder`'s own
+adjacency requirements, not a general problem with sharing a parsed stream
+(NVIDIA's own Smart Video Record shares one parser across branches safely —
+but its tap never touches `nvv4l2decoder`). The decode branch therefore
+keeps its own dedicated, directly-adjacent parser, unchanged from today.
+Live Streaming and Recording — neither of which touches `nvv4l2decoder` —
+safely share one separate parser instance between themselves, matching
+NVIDIA's own pattern for non-decode encoded-stream consumers.
+
 **Built and hardware-validated today:** RTSP ingestion through Decode, Tier 1
 (Frame Distributor), the AI branch (PGIE/NvDCF/SGIE), the Decision Pipeline,
 Tier 2's topology, and Visualization (AI Streaming).
 
-**Designed, approved, not yet implemented:** Tier 0 (pre-decode tee for
-Live Streaming), the Live Streaming consumer itself, the Recording consumer,
-and the Snapshot consumer. These are documented here as the target shape —
+**Designed, approved, not yet implemented:** the depay-tee, dedicated
+decode-branch parser, Tier 0 (pre-decode tee for Live Streaming and
+Recording), `Tier0Publisher`/`Tier0FrameConsumer` (a third `_TieredPublisher`
+instance, mirroring `Tier1Publisher`/`Tier2Publisher` exactly — not a new
+abstraction), the Live Streaming consumer, the Recording consumer, and the
+Snapshot consumer. These are documented here as the target shape —
 implementation requires its own separate approval per milestone/ticket, not
 this document alone.
+
+---
+
+# Production Design Principle: Consume the Earliest Sufficient Representation
+
+Whenever possible, a consumer attaches at the earliest point in the pipeline
+that already carries the representation it needs — never later than that.
+
+- Never decode something a consumer does not need decoded.
+- Never encode something a consumer already accepts in its current, encoded
+  form.
+
+Examples already governing this document's stage placement:
+
+| Subsystem | Representation consumed | Why |
+|---|---|---|
+| Live Streaming | Encoded H.264 (Tier 0) | Browser/WebRTC accepts encoded video directly — decoding would be pure waste. |
+| Recording | Encoded H.264 (Tier 0) | Storage wants compressed bytes; decoding then re-encoding for storage would add GPU cost and quality loss for no benefit. |
+| AI | Decoded frames (post-Decode) | Inference needs pixel data — this is the one consumer that requires decode. |
+| Snapshot | Decoded frames (Tier 1) | A JPEG encoder needs pixel data, not compressed H.264 — Tier 1's already-decoded frames are the earliest sufficient representation for this consumer specifically. |
+
+This principle drives every future pipeline extension decision, not just the
+four above.
 
 ---
 
@@ -98,7 +149,11 @@ pipeline stages below depend on:
   failure-isolated `ConsumerRegistry` per tier, via the `Tier1FrameConsumer`/
   `Tier2FrameConsumer` protocols (`media_publisher/interfaces.py`). Ships
   with zero default subscribers by design — this is the attachment point for
-  every "planned" consumer in this document.
+  every "planned" consumer in this document. Tier 0 (Stage 3) extends this
+  the same way: a third `Tier0Publisher(_TieredPublisher[Tier0FrameConsumer])`
+  reusing the existing `_TieredPublisher` base's registry/attach/detach/
+  backpressure/failure-isolation machinery unchanged — not a new
+  abstraction, the same one Tier 1/Tier 2 already use, applied a third time.
 - **Runtime Adapter** (`ai_runtime/` — `RuntimeAdapter` +
   `ThreatEngineRuntimeAdapter`) — the ADR-027 anti-corruption layer; the
   sole `pyds`/`NvDsBatchMeta`/`NvDsFrameMeta`/`NvDsObjectMeta` boundary in
@@ -138,27 +193,35 @@ Requirements:
 
 ---
 
-# Stage 2: Depay / Parse
+# Stage 2: Depay ⚠ tee point designed, not implemented
 
-Component:
+Component (built, unchanged):
 
-`rtph264depay` → `h264parse`
+`rtph264depay`
 
-Purpose:
+Component (designed, not implemented):
 
-Strip RTP framing and produce one canonical, correctly-captioned H.264
-elementary stream shared by every downstream tap. `h264parse` sits here,
-once, shared — not duplicated per branch — with `config-interval=1` so
-SPS/PPS (codec configuration) is periodically in-band for any consumer that
-needs to start mid-stream (matches NVIDIA's own documented Smart Video
-Record placement: "add this bin after the audio/video parser element").
+A `tee` (`depay-tee`) immediately after `rtph264depay`, before any parser —
+**not** after a shared parser (see the Pipeline Overview's "Why the parser
+is duplicated" note above; a real, hardware-reported `nvv4l2decoder`-behind-
+tee stall risk rules out the shared-parser-before-tee shape this document
+originally proposed).
 
-Output:
+Branches off `depay-tee`:
 
-- Parsed H.264 elementary stream, explicit `stream-format=avc` caps set
-  once here (a documented root cause of `nvv4l2decoder`-behind-`tee`
-  failures is caps/buffer-state divergence between branches when this is
-  left implicit).
+1. **Decode-bound**: its own dedicated `h264parse` (`config-interval=1`,
+   explicit `stream-format=avc`), linked directly to `nvv4l2decoder` — this
+   is exactly today's existing `depay.link(parse); parse.link(decoder)`
+   adjacency (`ingestion/source.py`), unchanged. Feeds Stage 4 (Decode).
+2. **Tier-0-bound**: a second, separate `h264parse` instance
+   (`config-interval=1`), shared between Live Streaming and Recording only
+   — neither touches `nvv4l2decoder`, so they don't carry the stall risk
+   the decode branch's dedicated parser exists to avoid. Feeds Stage 3
+   (Tier 0).
+
+Per-branch `queue` (bounded, leaky) required on both, per GStreamer's own
+tee documentation — a blocked branch otherwise stalls every other branch
+sharing the tee.
 
 ---
 
@@ -166,16 +229,16 @@ Output:
 
 Purpose:
 
-Fork the parsed-but-still-encoded H.264 elementary stream for consumers
-that must never pay a decode/re-encode cost — Live Streaming, and Recording
-(Stage 7).
+Fork the parsed-but-still-encoded H.264 elementary stream (via Stage 2's
+Tier-0-bound parser) for consumers that must never pay a decode/re-encode
+cost — Live Streaming, and Recording (Stage 7).
 
 Component:
 
-`tee` immediately after Stage 2's `h264parse`, before `nvv4l2decoder`. Every
-branch off it gets its own `queue` (GStreamer's own documented requirement —
-a blocked branch otherwise stalls every other branch sharing the tee,
-including the decode/AI path).
+`tee` fed by Stage 2's Tier-0-bound `h264parse` instance (not the
+decode-bound one — see Stage 2). Every branch off it gets its own `queue`
+(GStreamer's own documented requirement — a blocked branch otherwise stalls
+every other branch sharing the tee).
 
 Why here and not later:
 
@@ -224,8 +287,9 @@ Requirement:
 
 Must never be interrupted by AI enable/disable for that camera, and must
 never be blocked by (or block) the AI/decode path — both guaranteed by
-Tier 0's per-branch `queue` (Stage 3) and by not sharing any element with
-the decode path downstream of the Stage 3 tee.
+per-branch `queue`s at every tee from Stage 2 onward, and by sharing no
+element with the decode path at any point (separate parser instance from
+`depay-tee`, Stage 2, all the way through).
 
 ---
 
@@ -242,8 +306,8 @@ Produce GPU decoded frames for every consumer that needs pixel data (Tier
 
 Input:
 
-- Parsed H.264 elementary stream (Stage 2, via the Stage 3 Tier 0 tee's
-  decode-bound branch)
+- Parsed H.264 elementary stream (Stage 2's dedicated decode-bound
+  `h264parse`, directly adjacent — unchanged from today's code)
 
 Output:
 
@@ -278,9 +342,14 @@ attached (see Camera Runtime v1 section above).
 Consumers:
 
 - AI valve → AI branch (Stage 6, built)
-- Recording ⚠ designed, not implemented — see Stage 7
-- Snapshot ⚠ designed, not implemented — see Stage 8
+- Snapshot ⚠ designed, not implemented — see Stage 8 (decoded frames, not
+  Tier 0 — see the Production Design Principle above)
 - Other — expansion point, no consumer today; do not remove
+
+Recording is **not** a Tier 1 consumer — it consumes Tier 0 (Stage 3,
+encoded), not Tier 1 (decoded), per the Production Design Principle above
+and the explicit architectural rule this establishes: encoded-storage
+consumers attach at the earliest sufficient (encoded) representation.
 
 ---
 
