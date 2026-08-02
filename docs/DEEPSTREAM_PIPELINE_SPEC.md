@@ -2,60 +2,116 @@
 
 ## Purpose
 
-Define the end-to-end real-time video analytics pipeline.
+Define the end-to-end real-time video pipeline: ingestion, live streaming,
+recording, AI analytics, and snapshot generation.
 
-This document is the authoritative specification for all DeepStream processing stages.
+This document is the authoritative specification for pipeline *topology* and
+*stages*. It describes **Camera Runtime v1** as it actually exists in
+`apps/deepstream/app/` today, plus the extension points approved for future
+work. It does not duplicate `docs/CAMERA_RUNTIME_LIFECYCLE.md`'s startup
+sequence, dependency graph, ownership table, or shutdown order — that
+document is the authoritative "read this instead of the source" reference
+for the runtime's internal construction and lifecycle; this document is the
+authoritative reference for the *pipeline graph itself* (what feeds what).
 
 ---
 
 # Pipeline Overview
 
-RTSP Camera
-    ↓
-Source Bin
-    ↓
-StreamMux
-    ↓
-Primary GIE (Detector)
-    ↓
-NvDCF Tracker
-    ↓
-Secondary GIE (Uniform Classifier)
-    ↓
-[fork: tee — visualization.enabled gates whether this fork exists at all]
-    ├── Inference Path (always present)
-    │       ↓
-    │   Distance Estimation
-    │       ↓
-    │   Threat Engine
-    │       ↓
-    │   Incident Service
-    │       ↓
-    │   Recording Service
-    │       ↓
-    │   Event Bus
-    │       ↓
-    │   API Service
-    │       ↓
-    │   Frontend
-    │
-    └── Visualization Path (optional, RM-11.SIV — see Stage 5.5)
-            ↓
-        OSD Overlay (NvDsDisplayMeta)
-            ↓
-        H.264 Encode
-            ↓
-        RTSP Output
-            ↓
-        Operator (VLC / any RTSP client)
+```
+                    Camera
+                       │
+                  RTSP Source (rtspsrc)
+                       │
+             Depay / Parse (rtph264depay → h264parse)
+                       │
+                  Tier 0 tee  ⚠ designed, not yet implemented — see Stage 3
+        ┌──────────────┴──────────────┐
+        │                             │
+        ▼                             ▼
+  Live Streaming                 Decode (nvv4l2decoder)
+  (WebRTC, planned)                    │
+                                  Tier 1 tee (Frame Distributor)
+                       ┌────────────────┼────────────────┬─────────┐
+                       │                │                │         │
+                       ▼                ▼                ▼         ▼
+                  Recording          AI valve         Snapshot   Other
+                  (planned)              │            (planned)
+                                    AI branch:
+                                    PGIE → NvDCF → SGIE
+                                         │
+                              ┌──────────┴──────────┐
+                              │                     │
+                              ▼                     ▼
+                     Decision Pipeline         Tier 2 tee
+                     (Distance Estimation      (post-SGIE, AI-gated)
+                      → Threat Engine               │
+                      → Incident/Alarm          ┌────┴────┐
+                      → Event Bus)               ▼         ▼
+                                          Visualization   Tier 2
+                                          (AI Streaming,  consumers
+                                           built, RTSP)   (planned)
+```
 
-The fork point is downstream of Secondary GIE and downstream of the only
-metadata-extraction pass (`RuntimeAdapter`, which runs off a pad probe
-before the fork) — the Visualization Path never re-runs inference, never
-re-parses `NvDsBatchMeta`, and cannot affect what the Inference Path
-receives. When `visualization.enabled: false` (default), the fork does not
-exist — Secondary GIE links directly to the pipeline terminator, identical
-to pre-RM-11.SIV-visualization behavior.
+This diagram is the architecture. Every branch exists because it represents
+a real system responsibility, whether or not it has a consumer today. Do not
+collapse branches, and do not remove the "Other" expansion point merely
+because nothing is attached to it yet.
+
+**Built and hardware-validated today:** RTSP ingestion through Decode, Tier 1
+(Frame Distributor), the AI branch (PGIE/NvDCF/SGIE), the Decision Pipeline,
+Tier 2's topology, and Visualization (AI Streaming).
+
+**Designed, approved, not yet implemented:** Tier 0 (pre-decode tee for
+Live Streaming), the Live Streaming consumer itself, the Recording consumer,
+and the Snapshot consumer. These are documented here as the target shape —
+implementation requires its own separate approval per milestone/ticket, not
+this document alone.
+
+---
+
+# Camera Runtime v1 (built)
+
+The production runtime (`apps/deepstream/app/main.py` →
+`DeepStreamRuntime` in `runtime.py`). Full construction order, dependency
+graph, resource ownership, shutdown order, and operational invariants:
+`docs/CAMERA_RUNTIME_LIFECYCLE.md`. Summary of the components this document's
+pipeline stages below depend on:
+
+- **Source Manager** (`ingestion/source.py`) — builds one camera's decode
+  bin. The only module that requires real Jetson/DeepStream hardware to
+  exercise.
+- **Frame Distributor / Tier 1** (`pipeline/frame_distributor.py`) — a `tee`
+  positioned between the decoder and the AI valve, so Tier 1 is structurally
+  independent of AI enable/disable state.
+- **AI valve** — the element `RuntimeSupervisor` exclusively mutates to gate
+  a camera's AI branch on/off. `RuntimeSupervisor` is the *only* component
+  permitted to touch it.
+- **Desired State Synchronizer** — reconciles the Camera Registry's
+  (database) `ai_enabled`/`lifecycle_state`/`recording_enabled` intent
+  against runtime reality, dispatching the minimal `add_source`/
+  `remove_source`/`enable_ai`/`disable_ai` actions. Owns no pipeline
+  mutation itself for AI state — it decides *direction*, `RuntimeSupervisor`
+  converges it.
+- **Media Publisher** (`media_publisher/`) — owns Tier 1 and Tier 2 consumer
+  lifecycle (register/unregister/attach/detach) behind one shared,
+  failure-isolated `ConsumerRegistry` per tier, via the `Tier1FrameConsumer`/
+  `Tier2FrameConsumer` protocols (`media_publisher/interfaces.py`). Ships
+  with zero default subscribers by design — this is the attachment point for
+  every "planned" consumer in this document.
+- **Runtime Adapter** (`ai_runtime/` — `RuntimeAdapter` +
+  `ThreatEngineRuntimeAdapter`) — the ADR-027 anti-corruption layer; the
+  sole `pyds`/`NvDsBatchMeta`/`NvDsFrameMeta`/`NvDsObjectMeta` boundary in
+  the repository.
+- **Visualization** (`visualization/`) — the AI Streaming subsystem (Stage
+  6 below).
+- **SIV infrastructure** (`siv/`, `heartbeat_registry.py`,
+  `stage_logging.py`, `pipeline_trace.py`) — validation/observability, not
+  part of the pipeline graph itself.
+
+All of the above are **stable production architecture, hardware-validated,
+and not to be redesigned.** Changes to them require an explicit, separate
+architectural decision, not something this document's extension points imply.
 
 ---
 
@@ -73,59 +129,179 @@ Deployment Target:
 
 - 1 × Jetson AGX Orin 32GB
 
-Output:
-
-- GPU Decoded Frames
-
 Requirements:
 
-- Reconnect automatically
+- Reconnect automatically (per-camera `ReconnectPolicy`, exponential
+  backoff, one camera's failure never affects another's)
 - Detect camera failures
-- Emit CameraDisconnectedEvent
+- Emit `CameraDisconnectedEvent`
 
 ---
 
-# Stage 2: StreamMux
+# Stage 2: Depay / Parse
 
 Component:
 
-nvstreammux
-
-Responsibilities:
-
-- Stream synchronization
-- Batch generation
-- Frame aggregation
-
-Input:
-
-- Multiple camera streams
-
-Output:
-
-- Batched GPU frames
-
----
-
-# Stage 3: Primary GIE
+`rtph264depay` → `h264parse`
 
 Purpose:
 
-Weapon and person detection.
+Strip RTP framing and produce one canonical, correctly-captioned H.264
+elementary stream shared by every downstream tap. `h264parse` sits here,
+once, shared — not duplicated per branch — with `config-interval=1` so
+SPS/PPS (codec configuration) is periodically in-band for any consumer that
+needs to start mid-stream (matches NVIDIA's own documented Smart Video
+Record placement: "add this bin after the audio/video parser element").
 
-Model:
+Output:
 
-models/yolo26m_weapon.pt
+- Parsed H.264 elementary stream, explicit `stream-format=avc` caps set
+  once here (a documented root cause of `nvv4l2decoder`-behind-`tee`
+  failures is caps/buffer-state divergence between branches when this is
+  left implicit).
 
-Runtime:
+---
 
-TensorRT
+# Stage 3: Tier 0 — Original Stream Fork ⚠ designed, not implemented
 
-Outputs:
+Purpose:
 
-- Bounding Boxes
-- Confidence
-- Class IDs
+Fork the parsed-but-still-encoded H.264 elementary stream for consumers
+that must never pay a decode/re-encode cost — Live Streaming, and Recording
+(Stage 7).
+
+Component:
+
+`tee` immediately after Stage 2's `h264parse`, before `nvv4l2decoder`. Every
+branch off it gets its own `queue` (GStreamer's own documented requirement —
+a blocked branch otherwise stalls every other branch sharing the tee,
+including the decode/AI path).
+
+Why here and not later:
+
+- Depay→pay (not decode→encode) is the only way to hand the same compressed
+  bytes to a second, independent RTP session (WebRTC's) — RTSP and WebRTC
+  RTP sessions are structurally separate (different SSRC/sequence spaces,
+  WebRTC additionally requires SRTP/DTLS); raw RTP packets cannot be forwarded
+  directly between them.
+- Tapping before decode, not after (i.e. not reusing Tier 1), is what makes
+  this branch add zero GPU work and the minimum possible copy size —
+  compressed kilobytes-per-frame versus decoded megabytes-per-frame.
+
+Consumers (see Stages 6 area below for the built ones; these are planned):
+
+- Live Streaming (Stage 3a)
+- Recording (Stage 7)
+
+---
+
+# Stage 3a: Live Streaming ⚠ designed, not implemented
+
+Purpose:
+
+Lowest-latency operator video view — the camera's original stream, exactly
+as encoded, exists regardless of AI state or Recording state.
+
+Input:
+
+- Tier 0 (Stage 3)
+
+Processing:
+
+`queue(leaky, bounded)` → `rtph264pay(config-interval=1)` → `webrtcbin` (or
+an intermediate WebRTC media server, if one is introduced later — the
+architectural subsystem is "Live Streaming," the transport is not fixed to
+WebRTC specifically; see Architecture Constraints).
+
+Prohibited on this path:
+
+- Decode
+- Re-encode
+- CUDA processing
+- Colorspace conversion
+
+Requirement:
+
+Must never be interrupted by AI enable/disable for that camera, and must
+never be blocked by (or block) the AI/decode path — both guaranteed by
+Tier 0's per-branch `queue` (Stage 3) and by not sharing any element with
+the decode path downstream of the Stage 3 tee.
+
+---
+
+# Stage 4: Decode
+
+Component:
+
+NVDEC (`nvv4l2decoder`)
+
+Purpose:
+
+Produce GPU decoded frames for every consumer that needs pixel data (Tier
+1's Recording/Snapshot/Other consumers, and the AI branch).
+
+Input:
+
+- Parsed H.264 elementary stream (Stage 2, via the Stage 3 Tier 0 tee's
+  decode-bound branch)
+
+Output:
+
+- GPU decoded frames
+
+---
+
+# Stage 5: Tier 1 — Frame Distributor (built)
+
+Component:
+
+`pipeline/frame_distributor.py` — a `tee` positioned between the decoder and
+the AI valve, per camera.
+
+Purpose:
+
+Fan decoded frames out to independent consumers without coupling them to AI
+state or to each other.
+
+Input:
+
+- GPU decoded frames (Stage 4)
+
+Requirement:
+
+Each consumer operates independently via `Tier1FrameConsumer.on_raw_frame`,
+registered through Media Publisher. A stopped, absent, or failed consumer
+must not affect the others or the AI path — enforced by the tee's bounded,
+leaky terminator branch existing regardless of whether any consumer is
+attached (see Camera Runtime v1 section above).
+
+Consumers:
+
+- AI valve → AI branch (Stage 6, built)
+- Recording ⚠ designed, not implemented — see Stage 7
+- Snapshot ⚠ designed, not implemented — see Stage 8
+- Other — expansion point, no consumer today; do not remove
+
+---
+
+# Stage 6: AI Branch (built)
+
+Frame Source:
+
+Tier 1, gated by the AI valve — `RuntimeSupervisor` is the only component
+permitted to mutate it, driven by Desired State Synchronization from the
+Camera Registry's `ai_enabled` column (the Operator Experience section
+below).
+
+## Stage 6a: DeepStream (Detection + Classification)
+
+Purpose:
+
+Weapon/person detection and uniform classification.
+
+Primary Detector:
+
+Model: `models/yolo26m_weapon.pt` · Runtime: TensorRT (ADR-002, ADR-014)
 
 Supported Classes:
 
@@ -135,62 +311,10 @@ Supported Classes:
 - melee_lethal
 - non_lethal
 
-Output Metadata:
+Secondary Classifier (Uniform):
 
-{
-  "camera_id": "...",
-  "class_id": "...",
-  "confidence": 0.95,
-  "bbox": {}
-}
-
----
-
-# Stage 4: Tracking
-
-Component:
-
-NvDCF
-
-Purpose:
-
-Persistent object tracking.
-
-Outputs:
-
-- Track IDs
-
-Requirements:
-
-- Support 20+ simultaneous persons
-- Stable track persistence
-- Re-identification support where available
-
-Output Metadata:
-
-{
-  "track_id": 123
-}
-
----
-
-# Stage 5: Secondary GIE
-
-Purpose:
-
-Uniform Classification.
-
-Model:
-
-models/vit_48k_binary.pth
-
-Runtime:
-
-TensorRT
-
-Input:
-
-Person crop from tracker output.
+Model: `models/vit_48k_binary.pth` · Runtime: TensorRT · Input: person crop
+from tracker output.
 
 Output Classes:
 
@@ -198,220 +322,229 @@ Output Classes:
 - civilian
 - unknown
 
-Output Metadata:
-
-{
-  "track_id": 123,
-  "uniform": "civilian"
-}
-
----
-
-# Stage 5.5: Visualization Path (RM-11.SIV, optional)
-
-Purpose:
-
-Operator-visible video output. Renders directly from this pipeline's own
-PGIE/NvDCF/SGIE results — no second inference pass, no OpenCV, no duplicate
-metadata extraction.
+## Stage 6b: Tracking
 
 Component:
 
-`apps/deepstream/app/visualization/` — `VisualizationManager`,
-`VisualizationPipelineBuilder`, `DeepStreamOverlayRenderer`,
+NvDCF (ADR-013)
+
+Requirements:
+
+- Support 20+ simultaneous persons
+- Stable track persistence
+- Re-identification support where available
+
+## Stage 6c: Decision Pipeline (built, unchanged)
+
+Extracted from the raw inference buffer by `RuntimeAdapter` (the sole
+`pyds`-touching module, ADR-027) into `FrameObservation`s, then routed by
+`ThreatEngineRuntimeAdapter`:
+
+### Distance Estimation
+
+Method: Ground Plane Projection (ADR-016). Inputs: Track Position, Camera
+Calibration. Outputs: Distance, Zone (`zone_1` 0–20m, `zone_2` 20–50m,
+`zone_3` 50m+). Owning Service: `services/calibration` (RM-05).
+
+### Threat Engine
+
+Inputs: Weapon Type, Uniform Class, Distance Zone. Outputs: Threat Level
+(ALLY/OBSERVE/LOW/MEDIUM/HIGH/HUMAN_REVIEW), Human Review Decision, Incident
+Decision, Alarm Decision. Generated Events: `ThreatAssessmentEvent`,
+`HumanReviewItemCreatedEvent`. Owning Service: `services/threat_engine`
+(RM-06).
+
+### Incident Service / Alarm Service
+
+Incident creation, updates, deduplication (1 track = 1 active incident).
+Generated Events: `IncidentCreatedEvent`, `IncidentUpdatedEvent`. Owning
+Service: `services/incident_service` (RM-07, also owns Alarm Service, RM-10)
+— `AlarmService` is a long-lived singleton owned by `DeepStreamRuntime`
+(its in-memory alarm-record state must persist across calls).
+
+## Stage 6d: Tier 2 (built topology, zero consumers today)
+
+Component:
+
+`nvstreamdemux`, built once camera-independently; `Tier2Publisher` builds/
+tears down each camera's own branch off it inline from `add_source()`/
+`remove_source()`.
+
+Availability:
+
+Automatic, not a decision this layer makes — a camera whose AI valve is
+closed never feeds PGIE/Tracker/SGIE at all, so its `nvstreamdemux` output
+simply receives nothing while AI-disabled.
+
+Consumers:
+
+- Visualization (Stage 6e, built — its own dedicated branch, not routed
+  through the generic Tier 2 registry, since it predates it)
+- Future annotated-frame consumers via `Tier2FrameConsumer.on_annotated_frame`
+  — no consumer registered today
+
+## Stage 6e: Visualization — AI Streaming (built)
+
+**This is the AI Streaming subsystem, not Live Streaming — do not merge
+them.** Live Streaming (Stage 3a) is the always-available raw feed; AI
+Streaming is the annotated feed, available only while a camera is
+AI-enabled, since it depends on PGIE/Tracker/SGIE having run.
+
+Purpose:
+
+Operator-visible annotated video output. Renders directly from this
+pipeline's own inference results — no second inference pass, no OpenCV, no
+duplicate metadata extraction.
+
+Component:
+
+`apps/deepstream/app/visualization/` — `VisualizationManager` (sole external
+boundary), `VisualizationPipelineBuilder`, `DeepStreamOverlayRenderer`,
 `RtspStreamServer`.
 
 Fork point:
 
-`tee` immediately after Secondary GIE. Exists only when
-`configs/visualization.yaml`'s `enabled: true`. Absent otherwise — Secondary
-GIE links directly to the pipeline terminator, byte-for-byte identical to
-the pre-visualization pipeline.
+Its own `tee` immediately after Secondary GIE — a sibling of Tier 2's
+`nvstreamdemux` fork off the same point, not routed through it. Exists only
+when `configs/visualization.yaml`'s `enabled: true`; absent otherwise
+(byte-for-byte identical to the pre-visualization pipeline).
 
-Chain (visualization branch only):
+Chain:
 
-`tee → queue("viz-queue") → nvvideoconvert → capsfilter(RGBA) → [annotate
-probe] → nvdsosd → nvvideoconvert → capsfilter(NV12) → nvv4l2h264enc →
-h264parse → rtph264pay → udpsink → RtspStreamServer (RTSP proxy)`.
+`tee → queue("viz-queue", leaky, bounded) → nvvideoconvert →
+capsfilter(RGBA) → [annotate probe] → nvdsosd → nvvideoconvert →
+capsfilter(NV12) → nvv4l2h264enc(iframeinterval=output_fps) → h264parse →
+rtph264pay(config-interval=1) → udpsink → RtspStreamServer (RTSP proxy)`.
 
-Backpressure policy:
+Metadata immutability:
 
-`viz-queue` is `leaky=2` (drops the *oldest* buffered frame, never the
-newest) with `max-size-buffers=4`, `max-size-bytes=0`, `max-size-time=0` —
-bounded purely by buffer count. This guarantees the visualization branch can
-never block the `tee`'s `push()`, and therefore can never apply backpressure
-onto the Inference Path sharing the same `tee`. If the encoder/RTSP client
-falls behind, visualization frames are dropped; inference throughput is
-unaffected. Measured impact: see `docs/SIV_BASELINE.md`'s Visualization OFF
-vs. ON table.
-
-Metadata immutability (hard rule):
-
-The annotate probe (`DeepStreamOverlayRenderer.probe_callback`) may write
-only `obj_meta.rect_params`/`text_params` and add new `NvDsDisplayMeta`
-objects — the fields DeepStream defines specifically for on-screen display.
-It must never write `class_id`, `obj_label`, `confidence`, `object_id`
-(track ID), or any other detection/classification/tracking field. The
-Visualization Path is strictly read-only with respect to inference
-metadata — it consumes what PGIE/NvDCF/SGIE/`RuntimeAdapter` produced, never
-mutates it, and nothing downstream of the fork on the Inference Path can
-observe any effect from the Visualization Path existing at all.
+The annotate probe may write only `rect_params`/`text_params`/new
+`NvDsDisplayMeta` — never a detection/classification/tracking field. Strictly
+read-only with respect to inference metadata.
 
 Failure isolation:
 
-Any failure constructing or starting the Visualization Path (missing
-element, RTSP port already bound, etc.) is caught at the call site in
-`apps/deepstream/app/pipeline/builder.py`, logged, and converted into
-`VisualizationManager.health()` reporting `enabled=True, running=False,
-reason=<...>`. The Inference Path is never affected — verified on real
-hardware, see `docs/SIV_BASELINE.md`.
+Any construction/start failure is caught, logged, and converted into
+`VisualizationManager.health()` reporting `running=False, reason=<...>` —
+inference is never affected.
 
 Output:
 
-RTSP, `rtsp://<host>:<rtsp_port>/<stream_name>` (defaults `8554`/`radar-eye`,
-`configs/visualization.yaml`). Future WebRTC/HLS output is an internal
-addition to this same package (`VisualizationManager` is the sole external
-boundary) — not implemented in RM-11.SIV.
+RTSP, `rtsp://<host>:<rtsp_port>/<stream_name>`.
 
 ---
 
-# Stage 6: Distance Estimation
+# Stage 7: Recording ⚠ designed, not implemented
 
 Purpose:
 
-Estimate distance from camera.
+Continuous evidence recording, independent of AI and of Live Streaming.
 
-Method:
+Frame Source:
 
-Ground Plane Projection
+Tier 0 (Stage 3) — encoded, not Tier 1 — matching NVIDIA's own Smart Video
+Record pattern ("expects encoded frames") and avoiding a redundant
+decode+re-encode cycle that consuming Tier 1's raw frames would require.
 
-Inputs:
+Consumer:
 
-- Track Position
-- Camera Calibration
+A new adapter implementing a new `Tier0FrameConsumer.on_encoded_frame`
+protocol, mirroring `Tier1FrameConsumer`/`Tier2FrameConsumer`'s existing
+shape.
 
-Outputs:
+Data type:
 
-- Distance
-- Zone
+Raw compressed H.264 byte segments (not yet muxed into a container).
 
-Zones:
+The one genuinely new design problem — not just "register a consumer":
 
-zone_1
-0m - 20m
+`services/recording`'s `create_event_clip()` (RM-08, already implemented)
+documents a 10s-pre/20s-post buffer policy but has never implemented the
+*pre*-incident half — it takes one already-assembled `video_data: bytes`
+blob. Something must continuously retain a rolling ~10s window of encoded
+frames per camera (a bounded ring buffer) so that when `IncidentCreatedEvent`
+fires, the preceding window is actually available.
 
-zone_2
-20m - 50m
+Open discrepancy, not decided here:
 
-zone_3
-50m+
+This document's codec (below) says H.265; cameras ingest H.264 (Stage 1) and
+`services/recording`'s actual code has no transcode logic — it writes
+whatever bytes it receives as-is. Tier 0 passthrough (recommended — cheapest,
+matches what's built, matches NVIDIA's pattern) means recordings stay
+H.264-in-container. Transcoding to H.265 is a separate, real architectural
+decision (adds a decode+encode pass) requiring its own approval.
 
-Output Metadata:
-
-{
-  "track_id": 123,
-  "distance": 12.5,
-  "zone": "zone_1"
-}
+Recording Mode: Continuous Recording · Codec: H.265 (see discrepancy above)
+· Retention: 30 Days (ADR-017, configurable) · Clip Policy: Pre-event buffer
++ Post-event buffer · Generated Events: `ClipCreatedEvent`.
 
 ---
 
-# Stage 7: Threat Engine
+# Stage 8: Snapshot ⚠ designed, not implemented
 
 Purpose:
 
-Threat Classification.
+Generate evidence snapshot images, independently of Recording.
 
-Inputs:
+Frame Source:
 
-- Weapon Type
-- Uniform Class
-- Distance Zone
+Tier 1 (Stage 5) — raw decoded frames, not Tier 0 — because a snapshot must
+become a viewable still image; Tier 1's already-decoded pixels feed a JPEG
+encoder directly with no extra decode step, unlike Recording which wants to
+avoid decode entirely.
 
-Outputs:
+Consumer:
 
-- Threat Level
-- Human Review Decision
-- Incident Decision
-- Alarm Decision
+A new adapter implementing the existing `Tier1FrameConsumer.on_raw_frame`.
 
-Threat Levels:
+Data type:
 
-- ALLY
-- OBSERVE
-- LOW
-- MEDIUM
-- HIGH
-- HUMAN_REVIEW
+One JPEG byte blob per snapshot (e.g. via `nvjpegenc`, staying GPU-side —
+avoids introducing OpenCV/PIL as a new production dependency, consistent
+with the existing "Prohibited: OpenCV Production Pipelines" constraint).
 
-Generated Events:
+Lifetime:
 
-- ThreatAssessmentEvent
-- HumanReviewItemCreatedEvent
-- AlarmRequestedEvent
+Ephemeral, request-scoped — captured once at/near incident creation, no
+rolling buffer.
+
+Generated Events: `SnapshotCreatedEvent`.
 
 ---
 
-# Stage 8: Incident Service
+# Stage 9: Other
 
 Purpose:
 
-Incident lifecycle management.
+Architectural expansion point for future analytics, exporters, integrations,
+metadata consumers, forensic modules, etc. — any future
+`Tier1FrameConsumer`/`Tier2FrameConsumer`/`Tier0FrameConsumer` registration.
 
-Responsibilities:
+Status:
 
-- Incident creation
-- Incident updates
-- Deduplication
-
-Rule:
-
-1 Track = 1 Active Incident
-
-Outputs:
-
-- IncidentCreatedEvent
-- IncidentUpdatedEvent
+No consumer today. Do not remove this branch merely because it is unused.
 
 ---
 
-# Stage 9: Recording Service
+# Operator Experience: AI Enable / Disable (built)
 
-Purpose:
+Camera Management provides an inline AI Enable/Disable control for every
+camera, backed by Camera Runtime v1's existing production components:
 
-Evidence generation.
+- `ai_enabled` is persisted on the Camera Registry (database) in response to
+  an explicit operator action.
+- Desired State Synchronizer detects the change and dispatches
+  `enable_ai`/`disable_ai` to `RuntimeSupervisor`.
+- `RuntimeSupervisor` mutates the AI valve — the only component permitted
+  to.
+- Tier 1 (and once built, Live Streaming) are never affected in either
+  direction, by construction (Stage 5's tee sits upstream of the valve).
 
-Recording Mode:
-
-Continuous Recording
-
-Codec:
-
-H.265
-
-Retention:
-
-30 Days
-
-Evidence Types:
-
-- Snapshots
-- Event Clips
-
-Clip Policy:
-
-Pre-event buffer
-+
-Post-event buffer
-
-Generated Events:
-
-- SnapshotCreatedEvent
-- ClipCreatedEvent
+No process restart, no page refresh, no browser reconnect required.
 
 ---
 
-# Stage 10: Event Bus
+# Event Bus
 
 Purpose:
 
@@ -435,7 +568,7 @@ Requirements:
 
 ---
 
-# Stage 11: API Service
+# API Service
 
 Purpose:
 
@@ -455,16 +588,17 @@ Responsibilities:
 
 ---
 
-# Stage 12: Frontend
+# Frontend
 
 Repository:
 
-https://github.com/CodeHub1443/radar-eye-command
+`frontend/` (in-repo since RM-13's `git subtree` consolidation)
 
 Consumes:
 
 - REST APIs
 - WebSocket Events
+- Live Streaming / AI Streaming (per camera, per Operator Experience above)
 
 Provides:
 
@@ -481,66 +615,33 @@ Provides:
 
 ## Camera Failure
 
-Generate:
-
-CameraDisconnectedEvent
-
----
+Generate: `CameraDisconnectedEvent`
 
 ## Model Failure
 
-Generate:
-
-SystemEvent
-
-Severity:
-
-ERROR
-
----
+Generate: SystemEvent · Severity: ERROR
 
 ## Calibration Failure
 
-Generate:
-
-SystemEvent
-
-Severity:
-
-ERROR
-
----
+Generate: SystemEvent · Severity: ERROR
 
 ## Event Bus Failure
 
-Generate:
+Generate: SystemEvent · Severity: CRITICAL
 
-SystemEvent
+## Publisher / Visualization Failure (built)
 
-Severity:
-
-CRITICAL
+A Tier 1/Tier 2 consumer's own failure is isolated per-consumer by
+`ConsumerRegistry.dispatch` and must never propagate into the pipeline.
+Visualization failures are isolated the same way via
+`VisualizationManager.health()`. Neither can take inference down with it.
 
 ---
 
 # Performance Targets
 
-Camera Count:
-
-20
-
-Processing:
-
-Real-Time
-
-Deployment:
-
-Jetson AGX Orin 32GB
-
-Architecture:
-
-Air-Gapped
-Offline-First
+Camera Count: 20 · Processing: Real-Time · Deployment: Jetson AGX Orin 32GB
+· Architecture: Air-Gapped, Offline-First
 
 ---
 
@@ -560,3 +661,14 @@ Prohibited:
 - SQLite
 - MongoDB
 - Direct YOLO Execution Outside DeepStream
+- Decode, re-encode, or CUDA processing on the Live Streaming path (Stage 3a)
+
+Note on Live Streaming's depay→pay step (Stage 3a): re-framing the same
+compressed bytes into a new RTP session (required because RTSP's and
+WebRTC's RTP sessions are structurally independent) is not decode/re-encode
+and does not violate the constraint above.
+
+Note on transport: WebRTC is Live Streaming's and AI Streaming's current
+transport. The architectural subsystems are "Live Streaming" / "AI
+Streaming"; the transport underneath may change (e.g. WHIP) without this
+document changing.
