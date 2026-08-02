@@ -10,9 +10,14 @@ see test_source.py). This module is the one piece of RM-11 that can only
 be exercised on real Jetson/DeepStream hardware.
 
 Element chain per camera (Jetson hardware decode):
-    rtspsrc -> rtph264depay -> h264parse -> nvv4l2decoder -> tee ->
-        { tier1-raw-queue -> tier1-raw-sink (Tier 1 stub terminator)
-        , valve -> [ghost src pad] (Tier 2 / AI path)
+    rtspsrc -> rtph264depay -> h264parse -> bitstream-tee ->
+        { bitstream-queue -> bitstream-sink (bitstream stub terminator --
+          Live Streaming's BitstreamPublisher attaches here; encoded
+          H.264, no decode -- see media_publisher/bitstream.py)
+        , nvv4l2decoder -> tier1-tee ->
+              { tier1-raw-queue -> tier1-raw-sink (Tier 1 stub terminator)
+              , valve -> [ghost src pad] (Tier 2 / AI path)
+              }
         }
 
 RM-12 Camera Runtime, Decision 2 (valve-gating amendment): every source bin
@@ -40,6 +45,23 @@ RM-12 Camera Runtime Step 7). The AI path's element count and behavior are
 otherwise unchanged: decoder now feeds the tee instead of the valve
 directly, and the tee's other branch feeds the valve exactly as the
 decoder used to.
+
+Live Streaming architecture reset: the bin also owns one bitstream
+``tee`` (see ``pipeline/frame_distributor.py``'s ``attach_bitstream_branch``),
+positioned between ``h264parse`` and ``nvv4l2decoder`` -- one earlier
+than the Tier 1 tee -- so Live Streaming's raw passthrough is
+structurally independent of decode/AI state entirely, per
+``docs/DEEPSTREAM_PIPELINE_SPEC.md``'s "every media representation
+exists exactly once" principle: the camera's original H.264 has exactly
+one producer (this bin's own ``h264parse``), and the bitstream tee is
+where every consumer of that one producer attaches. Confirmed on real
+hardware (see the Live Monitoring plan's tee-placement investigation)
+that sharing this one parser instance across the tee's branches is
+correct: AU-aligned, caps/SPS-PPS and timestamp continuity identical on
+both branches, decoder unaffected downstream of it. The decode/AI path's
+element count and behavior are otherwise unchanged: the parser now feeds
+the bitstream tee instead of the decoder directly, and the tee's other
+branch feeds the decoder exactly as the parser used to.
 """
 
 from __future__ import annotations
@@ -50,7 +72,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from apps.deepstream.app.ingestion.camera_registry import CameraSource
-from apps.deepstream.app.pipeline.frame_distributor import attach_tier1_branch
+from apps.deepstream.app.pipeline.frame_distributor import (
+    attach_bitstream_branch,
+    attach_tier1_branch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +123,10 @@ def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
     the valve, plus that tee's stub raw-branch terminator. The AI path
     (tee -> valve -> ghost pad) is otherwise byte-for-byte identical to
     before the tee existed.
+
+    Live Streaming architecture reset: the bin also owns one bitstream
+    ``tee``, positioned between ``h264parse`` and the decoder, plus that
+    tee's stub terminator -- see module docstring.
     """
     Gst = _import_gst()
 
@@ -131,7 +160,16 @@ def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
     valve.set_property("drop", False)
 
     depay.link(parse)
-    parse.link(decoder)
+
+    bitstream_tee = attach_bitstream_branch(Gst, bin_, parse, source.camera_id)
+    decode_branch_pad = bitstream_tee.get_request_pad("src_%u")
+    if decode_branch_pad is None:
+        raise RuntimeError(
+            f"Failed to request bitstream tee src pad (decode branch) for {bin_name}"
+        )
+    decoder_sink_pad = decoder.get_static_pad("sink")
+    if decode_branch_pad.link(decoder_sink_pad) != Gst.PadLinkReturn.OK:
+        raise RuntimeError(f"Failed to link bitstream tee to decoder for {bin_name}")
 
     tee = attach_tier1_branch(Gst, bin_, decoder, source.camera_id)
     ai_branch_pad = tee.get_request_pad("src_%u")

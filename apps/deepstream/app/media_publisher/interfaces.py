@@ -38,3 +38,18 @@ class Tier2FrameConsumer(Protocol):
     def on_annotated_frame(self, camera_id: uuid.UUID, gst_buffer: Any) -> None:
         """Called with each post-SGIE frame's ``Gst.Buffer``."""
         ...
+
+
+class BitstreamFrameConsumer(Protocol):
+    """Receives the camera's original, still-encoded H.264 access units --
+    pre-decode, structurally independent of decode/AI state entirely (see
+    ``media_publisher/bitstream.py``). Deliberately not named
+    ``Tier0FrameConsumer``: Tier 1/Tier 2 above are decoded/annotated
+    *frame* consumers; this is bitstream distribution, a different kind
+    of thing, per ``docs/DEEPSTREAM_PIPELINE_SPEC.md``'s "every media
+    representation exists exactly once" principle."""
+
+    def on_encoded_frame(self, camera_id: uuid.UUID, gst_buffer: Any) -> None:
+        """Called with each access unit's ``Gst.Buffer`` (already-encoded
+        H.264, AU-aligned)."""
+        ...

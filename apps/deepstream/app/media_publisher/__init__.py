@@ -25,11 +25,23 @@ without implementing any transport.
 - ``media_publisher``: ``MediaPublisher`` -- thin facade owning one
   ``Tier1Publisher`` and one ``Tier2Publisher``, with one unified
   ``shutdown()``.
+- ``bitstream``: ``BitstreamPublisher`` -- attaches to the per-camera
+  bitstream tee's already-existing stub branch (pre-decode, the camera's
+  original encoded H.264 -- see ``pipeline/frame_distributor.py``).
+  Deliberately its own module, not a "Tier 0": it distributes a
+  compressed bitstream, not a decoded frame, which is a different kind
+  of thing from Tier 1/Tier 2.
 
 Publishers are consumers only: nothing here ever calls into Runtime
 Supervisor, Desired State synchronization, or Telemetry, and a failing
 consumer is isolated (logged, never re-raised into the pipeline) rather
 than allowed to affect Camera Runtime.
+
+TODO: as Recording/Snapshot/Other attach here alongside Live Streaming,
+this package is becoming a generic media-distribution framework rather
+than something scoped to "tiers." Consider renaming it (e.g.
+``distribution/``) once those consumers exist -- not this milestone,
+comment only.
 
 No submodule is re-exported here -- callers import
 ``apps.deepstream.app.media_publisher.tier1``/``.tier2``/etc. directly,
