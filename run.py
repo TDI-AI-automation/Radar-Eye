@@ -45,6 +45,11 @@ API_PORT = 8000
 API_HEALTH_URL = f"http://{API_HOST}:{API_PORT}/health/system"
 API_DOCS_URL = f"http://{API_HOST}:{API_PORT}/docs"
 FRONTEND_DEFAULT_PORT = 8080
+# Must match configs/live_stream.yaml's `port:` -- DeepStream Runtime's Live
+# Monitoring signaling server binds this fixed TCP port on every start
+# (added by Stage C; run.py has no app-code import to read it from the
+# config file directly, matching every other constant on this page).
+LIVE_STREAM_PORT = 8590
 
 _RESET = "\033[0m"
 _GREEN = "\033[32m"
@@ -290,18 +295,74 @@ def _check_models() -> Check:
     )
 
 
+def _own_service_sigs(port: int) -> tuple[str, ...]:
+    """Return the command-line substrings that identify *our* process on *port*."""
+    if port == API_PORT:
+        return ("uvicorn", "apps.api")
+    if port == LIVE_STREAM_PORT:
+        return ("apps.deepstream",)
+    return ("bun", "vite", "node")
+
+
+def _is_own_service_on_port(port: int) -> bool:
+    """Return True if *port* is bound by one of our own expected service processes."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        if s.connect_ex(("127.0.0.1", port)) != 0:
+            return False  # port is free
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        pids = result.stdout.strip().split()
+    except Exception:
+        return False
+    own_sigs = _own_service_sigs(port)
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                cmd = fh.read().replace(b"\x00", b" ").decode(errors="replace")
+            if any(sig in cmd for sig in own_sigs):
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def _check_port(port: int, label: str) -> Check:
+    """Check whether *port* is free.
+
+    If the port is already bound, try to identify the owner:
+    - If it looks like our own service (uvicorn for the API port, bun/node/vite
+      for the frontend port), emit a [WARN] so the operator knows the app is
+      already running, but do not block re-launch.
+    - If it is held by an unrecognised process, hard-fail so the operator knows
+      something unexpected is occupying the port before we try to bind.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1.0)
         in_use = s.connect_ex(("127.0.0.1", port)) == 0
-    if in_use:
+    if not in_use:
+        return Check(f"Port {port} ({label})", True, "free")
+
+    if _is_own_service_on_port(port):
         return Check(
             f"Port {port} ({label})",
             False,
-            "already in use -- another process is bound here. Find it with: "
-            f"lsof -i :{port}  (or) pgrep -af 'uvicorn|vite dev'",
+            "already in use by our own service (app is running) -- "
+            "stop it first if you want to restart",
+            required=False,  # downgrade: warn, not fail
         )
-    return Check(f"Port {port} ({label})", True, "free")
+
+    return Check(
+        f"Port {port} ({label})",
+        False,
+        "already in use -- another process is bound here. Find it with: "
+        f"lsof -i :{port}  (or) pgrep -af 'uvicorn|vite dev'",
+    )
 
 
 def run_prerequisite_checks() -> list[Check]:
@@ -318,6 +379,7 @@ def run_prerequisite_checks() -> list[Check]:
         _check_models(),
         _check_port(API_PORT, "Backend API"),
         _check_port(FRONTEND_DEFAULT_PORT, "Frontend"),
+        _check_port(LIVE_STREAM_PORT, "Live Monitoring signaling"),
     ]
 
 
@@ -418,6 +480,15 @@ class ValidationModeToggle:
     def enable(self) -> None:
         text = VALIDATION_CONFIG_PATH.read_text()
         self._original_text = text
+        if re.search(r"production_validation_mode:\n  enabled: true", text):
+            # Already enabled -- a legitimate resting state, not just a
+            # hypothetical: a prior --validation run that didn't shut down
+            # cleanly (crash, kill -9) leaves the file exactly here, since
+            # restore() never got to run. Nothing to flip; _original_text
+            # is still captured above so restore() correctly puts back
+            # `true` (this run's real original), not a fabricated `false`.
+            print(_pass("Validation Mode already enabled (configs/validation.yaml)"))
+            return
         new_text = re.sub(
             r"(production_validation_mode:\n  enabled: )false",
             r"\1true",
@@ -533,30 +604,68 @@ class Orchestrator:
     def start_all(self) -> bool:
         env = self._base_env()
 
-        api = ManagedService(
-            name="api",
-            command=[
-                str(VENV_PYTHON),
-                "-m",
-                "uvicorn",
-                "apps.api.app.main:create_app",
-                "--factory",
-                "--reload",
-            ],
-            cwd=REPO_ROOT,
-            health_url=API_HEALTH_URL,
-        )
-        self.services.append(api)
-        print(_c("\nStarting Backend API...", _BOLD))
-        api.start(env)
-        if not api.wait_until_healthy(timeout=30.0):
-            self._report_startup_failure(api)
-            return False
-        print(_pass("Backend API healthy"))
+        # ------------------------------------------------------------------
+        # Backend API
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(API_PORT):
+            # Already running (e.g. operator re-ran with --validation while
+            # the stack is up).  Verify it is healthy before continuing.
+            print(_c("\nBackend API already running -- verifying health...", _BOLD))
+            try:
+                with urllib.request.urlopen(API_HEALTH_URL, timeout=5.0) as resp:  # noqa: S310
+                    api_healthy = resp.status == 200
+            except (urllib.error.URLError, OSError):
+                api_healthy = False
+            if not api_healthy:
+                print(_fail("Backend API already on port but not responding to health check"))
+                return False
+            print(_pass("Backend API healthy (adopted running process)"))
+        else:
+            api = ManagedService(
+                name="api",
+                command=[
+                    str(VENV_PYTHON),
+                    "-m",
+                    "uvicorn",
+                    "apps.api.app.main:create_app",
+                    "--factory",
+                    "--reload",
+                ],
+                cwd=REPO_ROOT,
+                health_url=API_HEALTH_URL,
+            )
+            self.services.append(api)
+            print(_c("\nStarting Backend API...", _BOLD))
+            api.start(env)
+            if not api.wait_until_healthy(timeout=30.0):
+                self._report_startup_failure(api)
+                return False
+            print(_pass("Backend API healthy"))
 
         if self.validation_mode:
             print(_c("Validation Mode: enabling (configs/validation.yaml)...", _BOLD))
             self._validation_toggle.enable()
+
+        # ------------------------------------------------------------------
+        # DeepStream Runtime -- always started fresh, never adopted (unlike
+        # the API/Frontend above): a running instance owns live GStreamer
+        # pipeline/GPU state that can't be safely "verified healthy" from
+        # the outside the way a REST health check can. It does, however,
+        # own a fixed TCP port (LIVE_STREAM_PORT, Live Monitoring's
+        # signaling server) since Stage C -- spawning a second instance
+        # while one already holds that port fails confusingly deep inside
+        # its own startup ("address already in use"). Check for that
+        # collision up front and fail clearly instead.
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(LIVE_STREAM_PORT):
+            print(
+                _fail(
+                    f"DeepStream Runtime already running (port {LIVE_STREAM_PORT} -- "
+                    "Live Monitoring signaling -- is already bound by an apps.deepstream "
+                    "process) -- stop it first if you want to restart"
+                )
+            )
+            return False
 
         deepstream = ManagedService(
             name="deepstream",
@@ -574,21 +683,28 @@ class Orchestrator:
             return False
         print(_pass("DeepStream Runtime healthy"))
 
+        # ------------------------------------------------------------------
+        # Frontend
+        # ------------------------------------------------------------------
         frontend_ready = re.compile(r"Local:\s+http://localhost:(\d+)/")
-        frontend = ManagedService(
-            name="frontend",
-            command=["bun", "run", "dev"],
-            cwd=REPO_ROOT / "frontend",
-            ready_pattern=frontend_ready,
-        )
-        self.services.append(frontend)
-        print(_c("\nStarting Frontend...", _BOLD))
-        frontend.start(env)
-        if not frontend.wait_until_healthy(timeout=30.0):
-            self._report_startup_failure(frontend)
-            return False
-        print(_pass("Frontend healthy"))
-        self._frontend_port = self._detect_frontend_port(frontend, frontend_ready)
+        if _is_own_service_on_port(FRONTEND_DEFAULT_PORT):
+            print(_c("\nFrontend already running -- skipping launch", _BOLD))
+            print(_pass("Frontend healthy (adopted running process)"))
+        else:
+            frontend = ManagedService(
+                name="frontend",
+                command=["bun", "run", "dev"],
+                cwd=REPO_ROOT / "frontend",
+                ready_pattern=frontend_ready,
+            )
+            self.services.append(frontend)
+            print(_c("\nStarting Frontend...", _BOLD))
+            frontend.start(env)
+            if not frontend.wait_until_healthy(timeout=30.0):
+                self._report_startup_failure(frontend)
+                return False
+            print(_pass("Frontend healthy"))
+            self._frontend_port = self._detect_frontend_port(frontend, frontend_ready)
 
         return True
 
