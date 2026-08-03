@@ -34,6 +34,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -142,10 +143,22 @@ class RuntimeSupervisor:
         pipeline: PipelineHandle,
         bridge: AsyncBridge,
         admission: GpuAdmissionHook,
+        *,
+        on_valve_changed: Callable[[uuid.UUID, bool], None] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._bridge = bridge
         self._admission = admission
+        self._on_valve_changed = on_valve_changed
+        """Optional, None-safe (same idiom as every other collaborator in
+        this codebase) -- fires after a real valve mutation succeeds,
+        with the new ``drop`` state. Not a new AI policy: this changes
+        nothing about whether/when AI is enabled -- it is an additional
+        side effect at the one existing point every valve mutation
+        already funnels through, letting Live Monitoring's WebRTC branch
+        (apps/deepstream/app/live_stream/) switch which input feeds its
+        encoder without owning or re-deciding any part of AI eligibility
+        itself."""
         self._workers: dict[uuid.UUID, _CameraWorker] = {}
         self._valve_transition_count = 0
         self._runtime_error_count = 0
@@ -240,6 +253,8 @@ class RuntimeSupervisor:
             if valve is None:
                 raise RuntimeSupervisorError(f"Valve element not found for camera {camera_id}")
             valve.set_property("drop", drop)
+            if self._on_valve_changed is not None:
+                self._on_valve_changed(camera_id, not drop)
 
         future = self._bridge.schedule_on_mainloop(_mutate)
         await asyncio.wrap_future(future)
@@ -292,6 +307,37 @@ class RuntimeSupervisor:
         an idempotent no-op) -- ``None`` until at least one command has
         completed."""
         return self._last_command_latency_ms
+
+    async def remove_camera(self, camera_id: uuid.UUID) -> None:
+        """Completely destroys this one camera's worker (task, queue, and
+        GPU-admission slot if held) -- the per-camera counterpart to
+        ``stop()``. Root-cause fix (Operator Acceptance Testing ownership
+        audit, 2026-08-03): before this method existed, nothing ever
+        called it -- a deleted camera's worker task sat forever, blocked
+        on its own empty queue, with its ``_workers`` entry never
+        removed. Harmless in isolation (a different camera_id after
+        re-registration never routes to the stale worker), but a genuine
+        unbounded leak: every operator delete/re-register cycle over a
+        long-running production process's life added one permanent,
+        never-reclaimed entry. Idempotent (a camera with no worker at all
+        is a no-op) and safe to call for a camera whose AI was never
+        enabled/disabled even once (worker may not exist yet)."""
+        worker = self._workers.pop(camera_id, None)
+        if worker is None:
+            return
+        if worker.ai_enabled is True:
+            self._admission.release(camera_id)
+        if worker.task is not None:
+            worker.task.cancel()
+            try:
+                await worker.task
+            except asyncio.CancelledError:
+                pass
+        while not worker.queue.empty():
+            pending = worker.queue.get_nowait()
+            if not pending.future.done():
+                pending.future.cancel()
+            worker.queue.task_done()
 
     async def stop(self) -> None:
         """Cancels every camera's worker task and rejects any command still

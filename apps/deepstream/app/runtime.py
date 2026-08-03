@@ -169,7 +169,7 @@ class DeepStreamRuntime:
             media_publisher_enabled=True,
             live_stream_enabled=live_stream.enabled,
             on_source_added=self._on_live_stream_source_added,
-            on_source_removed=self._on_live_stream_source_removed,
+            on_source_removed=self._on_source_removed,
         )
 
         # RM-12 Camera Runtime v1 (Steps 1-7): first production wiring of
@@ -324,13 +324,49 @@ class DeepStreamRuntime:
         runs, by which point construction has long finished."""
         self._bridge.schedule(self.live_stream_manager.add_camera(camera_id, camera_name))
 
-    def _on_live_stream_source_removed(self, camera_id: uuid.UUID) -> None:
+    def _on_source_removed(self, camera_id: uuid.UUID) -> None:
         """DeepStreamPipeline.remove_source()'s on_source_removed hook --
-        the symmetric counterpart above, covering every removal path
-        uniformly (bus-message failure, reconnect, and deletion-driven
-        removal via DesiredStateSynchronizer) since all of them funnel
-        through remove_source()."""
-        self._bridge.schedule(self.live_stream_manager.remove_camera(camera_id))
+        the single, symmetric counterpart to every per-camera subsystem's
+        own creation path (LiveStreamManager.add_camera,
+        RuntimeSupervisor's lazy worker creation, RuntimeAdapter.
+        on_camera_connected, this module's own ReconnectPolicy/health-
+        flush bookkeeping). Covers every removal path uniformly (bus-
+        message failure, reconnect, and deletion-driven removal via
+        DesiredStateSynchronizer) since all of them funnel through
+        remove_source().
+
+        Root-cause fix (Operator Acceptance Testing ownership audit,
+        2026-08-03, prompted by a suspected "deeper lifecycle/ownership
+        problem" behind repeated delete/re-register regressions): a full
+        audit of every dict[camera_id, ...] in this package found that
+        only LiveStreamManager/MediaPublisher were ever wired into this
+        hook -- RuntimeSupervisor's per-camera worker, RuntimeAdapter's
+        status cache, and this module's own _policies/_last_health_flush
+        entries were write-only, growing by one permanent entry per
+        operator delete/re-register cycle for the life of the process.
+        Confirmed via reproduction that this leak was NOT the cause of
+        the originally reported 502/permanently-disconnected symptom
+        (already fixed by the sink-to-source teardown-order correction --
+        see CameraWebRtcBranch.teardown()) -- it is a separate, real,
+        independently-confirmed ownership gap, fixed here once,
+        permanently, at the one place every future per-camera subsystem
+        should also hook into rather than inventing its own ad hoc
+        cleanup (or forgetting one, as these three did)."""
+        self._policies.pop(camera_id, None)
+        self._last_health_flush.pop(camera_id, None)
+        self._runtime_adapter.forget_camera(camera_id)
+
+        async def _run() -> None:
+            try:
+                await self.live_stream_manager.remove_camera(camera_id)
+            except Exception:
+                logger.exception("Live Monitoring failed to fully remove camera %s", camera_id)
+            try:
+                await self.runtime_supervisor.remove_camera(camera_id)
+            except Exception:
+                logger.exception("RuntimeSupervisor failed to fully remove camera %s", camera_id)
+
+        self._bridge.schedule(_run())
 
     def _select_stream_source(self, camera_id: uuid.UUID, ai_active: bool) -> None:
         """RuntimeSupervisor's on_valve_changed hook -- the one place

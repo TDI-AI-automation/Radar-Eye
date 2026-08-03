@@ -63,6 +63,30 @@ class TestConnectionStatus:
         await adapter.on_camera_disconnected(_CAMERA, "RTSP timeout")
         assert adapter.status_for(_CAMERA) == "DISCONNECTED"
 
+    async def test_forget_camera_removes_the_status_entry(self, bus: InProcessEventBus) -> None:
+        """Root-cause coverage for the Operator Acceptance Testing
+        ownership audit (2026-08-03): _status was write-only -- nothing
+        ever removed a deleted camera's entry. status_for() already
+        defaults to DISCONNECTED for an unknown camera_id either way, so
+        this asserts the dict entry is actually gone (not just that the
+        externally-visible read happens to look the same), matching
+        RuntimeSupervisor.remove_camera's own leak-proof coverage."""
+        camera_id = uuid.uuid4()
+        adapter = RuntimeAdapter(bus)
+        await adapter.on_camera_connected(camera_id)
+        assert camera_id in adapter._status
+
+        adapter.forget_camera(camera_id)
+
+        assert camera_id not in adapter._status
+        assert adapter.status_for(camera_id) == "DISCONNECTED"
+
+    async def test_forget_camera_is_a_no_op_for_an_unknown_camera(
+        self, bus: InProcessEventBus
+    ) -> None:
+        adapter = RuntimeAdapter(bus)
+        adapter.forget_camera(uuid.uuid4())  # must not raise
+
 
 @pytest.mark.asyncio
 class TestEventPublication:

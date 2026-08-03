@@ -115,6 +115,18 @@ class RuntimeAdapter:
         else here; no cross-thread access)."""
         return self._status.get(camera_id, _DEFAULT_STATUS)
 
+    def forget_camera(self, camera_id: uuid.UUID) -> None:
+        """Removes this camera's in-memory connection-status entry. Root-
+        cause fix (Operator Acceptance Testing ownership audit,
+        2026-08-03): ``_status`` was write-only -- every one of
+        on_camera_connected/reconnecting/disconnected sets an entry, but
+        nothing ever removed one, so a deleted camera's status sat here
+        forever. Harmless in isolation (a re-registered camera gets a
+        fresh camera_id, so status_for() never returns stale data for
+        it), but an unbounded per-delete leak, same class of bug as
+        RuntimeSupervisor's now-fixed worker leak. Idempotent."""
+        self._status.pop(camera_id, None)
+
     async def on_camera_connected(self, camera_id: uuid.UUID) -> None:
         self._status[camera_id] = "CONNECTED"
         self._beat("camera")

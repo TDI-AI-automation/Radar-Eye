@@ -172,6 +172,59 @@ class TestValveStateTransitions:
 
 
 @pytest.mark.asyncio
+class TestValveChangedHook:
+    """Live Monitoring's WebRTC branch (apps/deepstream/app/live_stream/)
+    switches its input-selector via this optional hook -- not a new AI
+    policy, an additional side effect at the one place every valve
+    mutation already funnels through."""
+
+    async def test_hook_is_optional(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), AlwaysAdmit())
+
+        await supervisor.enable_ai(camera_id)  # no on_valve_changed=... -- must not raise
+
+    async def test_hook_fires_true_on_enable_and_false_on_disable(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        calls: list[tuple[uuid.UUID, bool]] = []
+        supervisor = RuntimeSupervisor(
+            pipeline,
+            _make_bridge(loop),
+            AlwaysAdmit(),
+            on_valve_changed=lambda cid, active: calls.append((cid, active)),
+        )
+
+        await supervisor.enable_ai(camera_id)
+        await supervisor.disable_ai(camera_id)
+
+        assert calls == [(camera_id, True), (camera_id, False)]
+
+    async def test_hook_does_not_fire_on_idempotent_no_op(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        calls: list[tuple[uuid.UUID, bool]] = []
+        supervisor = RuntimeSupervisor(
+            pipeline,
+            _make_bridge(loop),
+            AlwaysAdmit(),
+            on_valve_changed=lambda cid, active: calls.append((cid, active)),
+        )
+
+        await supervisor.enable_ai(camera_id)
+        await supervisor.enable_ai(camera_id)  # already enabled -- no real mutation
+
+        assert calls == [(camera_id, True)]
+
+
+@pytest.mark.asyncio
 class TestIdempotency:
     async def test_repeated_enable_is_a_deterministic_no_op(self) -> None:
         loop = asyncio.get_running_loop()
@@ -417,3 +470,117 @@ class TestTeardown:
         supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), AlwaysAdmit())
 
         await supervisor.stop()  # must not raise
+
+
+@pytest.mark.asyncio
+class TestRemoveCamera:
+    """Root-cause coverage for the Operator Acceptance Testing ownership
+    audit (2026-08-03): before remove_camera() existed, nothing ever
+    removed a deleted camera's worker from _workers -- it sat forever,
+    blocked on its own empty queue, one permanent leaked entry per
+    operator delete/re-register cycle."""
+
+    async def test_removes_the_worker_entirely(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), AlwaysAdmit())
+        await supervisor.enable_ai(camera_id)
+        assert camera_id in supervisor.worker_camera_ids()
+
+        await supervisor.remove_camera(camera_id)
+
+        assert camera_id not in supervisor.worker_camera_ids()
+
+    async def test_releases_gpu_admission_if_ai_was_enabled(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        admission = AlwaysAdmit()
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), admission)
+        await supervisor.enable_ai(camera_id)
+        assert admission.released == []
+
+        await supervisor.remove_camera(camera_id)
+
+        assert admission.released == [camera_id]
+
+    async def test_does_not_double_release_admission_when_already_disabled(self) -> None:
+        """disable_ai() itself already calls release() unconditionally on
+        every real convergence to closed (harmless no-op for a set-based
+        admission tracker even when nothing was ever admitted) --
+        remove_camera() must not add a second, redundant release on top
+        of that for a worker that is already known to be AI-disabled."""
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+        admission = AlwaysAdmit()
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), admission)
+        await supervisor.disable_ai(camera_id)
+        assert admission.released == [camera_id]  # disable_ai's own release
+
+        await supervisor.remove_camera(camera_id)
+
+        assert admission.released == [camera_id]  # unchanged -- no double release
+
+    async def test_is_a_no_op_for_a_camera_with_no_worker(self) -> None:
+        loop = asyncio.get_running_loop()
+        pipeline = FakePipeline()
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), AlwaysAdmit())
+
+        await supervisor.remove_camera(uuid.uuid4())  # must not raise
+
+    async def test_does_not_disturb_another_camera_s_worker(self) -> None:
+        loop = asyncio.get_running_loop()
+        removed_id, kept_id = uuid.uuid4(), uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(removed_id)
+        pipeline.add_camera(kept_id)
+        supervisor = RuntimeSupervisor(pipeline, _make_bridge(loop), AlwaysAdmit())
+        await supervisor.enable_ai(removed_id)
+        await supervisor.enable_ai(kept_id)
+
+        await supervisor.remove_camera(removed_id)
+
+        assert supervisor.worker_camera_ids() == frozenset({kept_id})
+        assert supervisor.ai_enabled_camera_ids() == frozenset({kept_id})
+
+    async def test_cancels_a_queued_command_for_the_removed_camera(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        pipeline = FakePipeline()
+        pipeline.add_camera(camera_id)
+
+        in_flight_reached = asyncio.Event()
+        never_released = asyncio.Event()  # deliberately never set
+
+        def idle_add(callback: Callable[[], bool]) -> int:
+            in_flight_reached.set()
+
+            async def _blocks_forever() -> None:
+                await never_released.wait()
+                callback()
+
+            loop.create_task(_blocks_forever())
+            return 0
+
+        supervisor = RuntimeSupervisor(
+            pipeline, _make_bridge(loop, idle_add=idle_add), AlwaysAdmit()
+        )
+
+        in_flight_task = asyncio.create_task(supervisor.enable_ai(camera_id))
+        await asyncio.wait_for(in_flight_reached.wait(), timeout=1)
+        queued_task = asyncio.create_task(supervisor.disable_ai(camera_id))
+        for _ in range(3):
+            await asyncio.sleep(0)  # let the disable command actually enqueue
+
+        await asyncio.wait_for(supervisor.remove_camera(camera_id), timeout=2)
+
+        with pytest.raises(asyncio.CancelledError):
+            await in_flight_task
+        with pytest.raises(asyncio.CancelledError):
+            await queued_task
+        assert camera_id not in supervisor.worker_camera_ids()
