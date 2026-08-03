@@ -121,13 +121,19 @@ def _make_synchronizer(
     states: list[DesiredCameraState],
     *,
     lifecycle_policy: object | None = None,
+    on_source_connected: Callable[[uuid.UUID], object] | None = None,
 ) -> tuple[DesiredStateSynchronizer, FakePipeline, FakeDesiredStateReader]:
     pipeline = FakePipeline()
     bridge = _make_bridge(loop)
     supervisor = RuntimeSupervisor(pipeline, bridge, ConcurrentEnableLimiter(max_concurrent=10))
     reader = FakeDesiredStateReader(states)
     synchronizer = DesiredStateSynchronizer(
-        reader, pipeline, bridge, supervisor, lifecycle_policy=lifecycle_policy  # type: ignore[arg-type]
+        reader,
+        pipeline,
+        bridge,
+        supervisor,
+        lifecycle_policy=lifecycle_policy,  # type: ignore[arg-type]
+        on_source_connected=on_source_connected,  # type: ignore[arg-type]
     )
     return synchronizer, pipeline, reader
 
@@ -479,4 +485,84 @@ class TestLifecyclePolicyIsInjectable:
         result = await synchronizer.synchronize()
 
         assert pipeline.bin_for(camera_id) is not None
+        assert f"add_source:{camera_id}" in result.actions_taken
+
+
+@pytest.mark.asyncio
+class TestOnSourceConnectedHook:
+    """Real hardware bug (delete+re-register acceptance testing): a camera
+    added on an *ongoing* convergence pass (not the initial one at process
+    startup, and not the bus-error/EOS reconnect path) connected fine at
+    the GStreamer level but never had RuntimeAdapter.on_camera_connected
+    called for it -- so Observed State (what the operator's browser reads)
+    stayed stuck at whatever it was before, and the UI never recovered.
+    ``on_source_connected`` is the fix: fired exactly once per real
+    add_source, regardless of which synchronize() call performed it."""
+
+    async def test_fires_when_a_new_source_is_added(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        connected: list[uuid.UUID] = []
+
+        async def _on_connected(cid: uuid.UUID) -> None:
+            connected.append(cid)
+
+        synchronizer, pipeline, _ = _make_synchronizer(
+            loop, [_desired(camera_id)], on_source_connected=_on_connected
+        )
+
+        await synchronizer.synchronize()
+
+        assert pipeline.add_source_calls == [camera_id]
+        assert connected == [camera_id]
+
+    async def test_fires_on_a_later_pass_for_a_camera_added_after_startup(self) -> None:
+        """The exact reported scenario: the first synchronize() pass has
+        nothing to do for this camera (not desired yet -- e.g. it hasn't
+        been (re-)registered), a later pass discovers it and adds it."""
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        connected: list[uuid.UUID] = []
+
+        async def _on_connected(cid: uuid.UUID) -> None:
+            connected.append(cid)
+
+        synchronizer, pipeline, reader = _make_synchronizer(
+            loop, [], on_source_connected=_on_connected
+        )
+
+        await synchronizer.synchronize()
+        assert connected == []
+
+        reader.states = [_desired(camera_id)]
+        await synchronizer.synchronize()
+
+        assert pipeline.add_source_calls == [camera_id]
+        assert connected == [camera_id]
+
+    async def test_does_not_fire_again_for_an_already_active_source(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        connected: list[uuid.UUID] = []
+
+        async def _on_connected(cid: uuid.UUID) -> None:
+            connected.append(cid)
+
+        synchronizer, _pipeline, _ = _make_synchronizer(
+            loop, [_desired(camera_id)], on_source_connected=_on_connected
+        )
+
+        await synchronizer.synchronize()
+        await synchronizer.synchronize()
+
+        assert connected == [camera_id]
+
+    async def test_hook_is_optional(self) -> None:
+        loop = asyncio.get_running_loop()
+        camera_id = uuid.uuid4()
+        synchronizer, pipeline, _ = _make_synchronizer(loop, [_desired(camera_id)])
+
+        result = await synchronizer.synchronize()  # must not raise
+
+        assert pipeline.add_source_calls == [camera_id]
         assert f"add_source:{camera_id}" in result.actions_taken

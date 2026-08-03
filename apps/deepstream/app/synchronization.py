@@ -32,6 +32,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -132,12 +133,30 @@ class DesiredStateSynchronizer:
         bridge: AsyncBridge,
         runtime_supervisor: RuntimeSupervisor,
         lifecycle_policy: LifecycleSourcePolicy | None = None,
+        *,
+        on_source_connected: Callable[[uuid.UUID], Awaitable[None]] | None = None,
     ) -> None:
         self._reader = reader
         self._pipeline = pipeline
         self._bridge = bridge
         self._runtime_supervisor = runtime_supervisor
         self._lifecycle_policy = lifecycle_policy or DefaultLifecycleSourcePolicy()
+        self._on_source_connected = on_source_connected
+        """Optional, None-safe (same idiom as every other collaborator in
+        this codebase) -- fires once a source this synchronizer itself
+        just added actually finishes converging (real hardware bug,
+        found via delete+re-register acceptance testing: the *only*
+        other callers of RuntimeAdapter.on_camera_connected are
+        runtime.py's own start() -- for cameras already active at
+        process startup -- and the bus-error/EOS reconnect path for a
+        camera that was already tracked. Neither covers a brand new
+        camera_id this synchronizer discovers and adds on an *ongoing*
+        convergence pass (e.g. a camera deleted and re-registered while
+        the process keeps running) -- that source connects at the
+        GStreamer level perfectly well, but Observed State (what the
+        operator's browser actually reads) never gets persisted as
+        CONNECTED, so the UI shows it stuck Reconnecting/Disconnected
+        forever even though the pipeline is fine."""
         self._recording_pending: dict[uuid.UUID, bool] = {}
         self._synchronization_count = 0
         self._last_synchronization_duration_seconds: float | None = None
@@ -205,6 +224,8 @@ class DesiredStateSynchronizer:
                 await self._ensure_source(desired)
                 actions.append(f"add_source:{desired.camera_id}")
                 is_active = True
+                if self._on_source_connected is not None:
+                    await self._on_source_connected(desired.camera_id)
         elif not should_be_active and is_active:
             await self._remove_source(desired.camera_id)
             actions.append(f"remove_source:{desired.camera_id}")

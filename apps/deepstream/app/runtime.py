@@ -225,6 +225,7 @@ class DeepStreamRuntime:
             self._pipeline,
             self._bridge,
             self.runtime_supervisor,
+            on_source_connected=self._runtime_adapter.on_camera_connected,
         )
         self.telemetry = TelemetryCollector(
             pipeline=self._pipeline,
@@ -262,6 +263,11 @@ class DeepStreamRuntime:
         # Connectivity is independent of lifecycle_state/ai_enabled), and AI
         # is converged only for cameras that are both ai_enabled and
         # OPERATIONAL (see synchronization.py's DefaultLifecycleSourcePolicy).
+        # desired_state_synchronizer's own on_source_connected hook (wired
+        # above) already notifies RuntimeAdapter.on_camera_connected for
+        # every source added by this call -- including these, the very
+        # first ones -- so this loop only needs to pre-seed each one's
+        # ReconnectPolicy, not connect them a second time.
         result = await self.desired_state_synchronizer.synchronize()
         logger.info("Initial Desired State synchronization: %s", result.actions_taken)
 
@@ -272,7 +278,6 @@ class DeepStreamRuntime:
                 max_backoff_seconds=self._settings.reconnect_max_backoff_seconds,
                 multiplier=self._settings.reconnect_backoff_multiplier,
             )
-            await self._runtime_adapter.on_camera_connected(camera_id)
 
         self._pipeline.start()
 
