@@ -150,6 +150,30 @@ export interface paths {
     /** List Cameras */
     get: operations["list_cameras_cameras_get"];
     put?: never;
+    /** Register Camera */
+    post: operations["register_camera_cameras_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/cameras/brands": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Camera Brands
+     * @description The Add/Edit Camera form's only source of brand choices and
+     *     defaults -- see CameraBrandInfoSchema's own docstring for why this
+     *     exists (so the frontend never hardcodes a second copy of what
+     *     apps.api.app.services.rtsp_url_generator already knows).
+     */
+    get: operations["list_camera_brands_cameras_brands_get"];
+    put?: never;
     post?: never;
     delete?: never;
     options?: never;
@@ -168,7 +192,8 @@ export interface paths {
     get: operations["get_camera_cameras__camera_id__get"];
     put?: never;
     post?: never;
-    delete?: never;
+    /** Delete Camera */
+    delete: operations["delete_camera_cameras__camera_id__delete"];
     options?: never;
     head?: never;
     /** Update Camera */
@@ -847,6 +872,14 @@ export interface components {
       data?: components["schemas"]["IncidentSchema"] | null;
       error?: components["schemas"]["ApiError"] | null;
     };
+    /** ApiResponse[NoneType] */
+    ApiResponse_NoneType_: {
+      /** Success */
+      success: boolean;
+      /** Data */
+      data?: null;
+      error?: components["schemas"]["ApiError"] | null;
+    };
     /** ApiResponse[RecordingSchema] */
     ApiResponse_RecordingSchema_: {
       /** Success */
@@ -916,6 +949,14 @@ export interface components {
       success: boolean;
       /** Data */
       data?: components["schemas"]["ActiveThreatSchema"][] | null;
+      error?: components["schemas"]["ApiError"] | null;
+    };
+    /** ApiResponse[list[CameraBrandInfoSchema]] */
+    ApiResponse_list_CameraBrandInfoSchema__: {
+      /** Success */
+      success: boolean;
+      /** Data */
+      data?: components["schemas"]["CameraBrandInfoSchema"][] | null;
       error?: components["schemas"]["ApiError"] | null;
     };
     /** ApiResponse[list[CameraCalibrationSchema]] */
@@ -1045,6 +1086,26 @@ export interface components {
       };
     };
     /**
+     * CameraBrandInfoSchema
+     * @description One entry of ``GET /cameras/brands`` -- the Add/Edit Camera form's
+     *     only source of brand choices and their defaults, so the frontend never
+     *     hardcodes a second copy of what apps.api.app.services.
+     *     rtsp_url_generator already knows.
+     */
+    CameraBrandInfoSchema: {
+      /**
+       * Brand
+       * @enum {string}
+       */
+      brand: "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
+      /** Label */
+      label: string;
+      /** Default Port */
+      default_port: number;
+      /** Default Stream Path */
+      default_stream_path: string;
+    };
+    /**
      * CameraCalibrationSchema
      * @description Ground-plane calibration for a camera (ADR-016).
      *
@@ -1082,178 +1143,35 @@ export interface components {
       created_at: string;
     };
     /**
-     * CameraHealthSchema
-     * @description Per-camera health metrics surfaced by the System Health Agent.
-     *
-     *     Returned by ``GET /cameras/{camera_id}/health``. **Not** the
-     *     ``/ws/camera-health`` WebSocket message body -- that channel forwards
-     *     ``CameraDisconnectedEvent``/``SystemEvent`` (disconnect notifications
-     *     and operational log events), not ongoing health metrics like this
-     *     schema. Corrected during the RM-12 Architecture Readiness Review, which
-     *     had initially listed this schema against that channel in error -- see
-     *     ``CameraDisconnectedSchema``/``SystemEventSchema`` below for the actual
-     *     ``/ws/camera-health`` shapes.
-     */
-    CameraHealthSchema: {
-      /**
-       * Camera Id
-       * Format: uuid
-       */
-      camera_id: string;
-      /**
-       * Status
-       * @enum {string}
-       */
-      status: "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
-      /** Fps */
-      fps?: number | null;
-      /** Last Frame Age Seconds */
-      last_frame_age_seconds?: number | null;
-    };
-    /**
-     * CameraHealthSummarySchema
-     * @description Aggregated camera connection status count.
-     */
-    CameraHealthSummarySchema: {
-      /** Total Cameras */
-      total_cameras: number;
-      /** Connected Count */
-      connected_count: number;
-      /** Disconnected Count */
-      disconnected_count: number;
-      /** Reconnecting Count */
-      reconnecting_count: number;
-      /**
-       * Stalled Count
-       * @default 0
-       */
-      stalled_count: number;
-    };
-    /**
-     * CameraBrand
-     * @description Supported camera brands for RTSP URL generation.
-     * @enum {string}
-     */
-    CameraBrand: "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
-    /**
-     * CameraBrandInfoSchema
-     * @description One entry of ``GET /cameras/brands``.
-     */
-    CameraBrandInfoSchema: {
-      brand: components["schemas"]["CameraBrand"];
-      /** Label */
-      label: string;
-      /** Default Port */
-      default_port: number;
-      /** Default Stream Path */
-      default_stream_path: string;
-    };
-    /**
-     * CameraSchema
-     * @description Full camera representation.
-     *
-     *     Returned by ``GET /cameras`` (list) and ``GET /cameras/{camera_id}``.
-     *     ``password`` is never returned (write-only, stored encrypted).
-     */
-    CameraSchema: {
-      /**
-       * Camera Id
-       * Format: uuid
-       */
-      camera_id: string;
-      /** Name */
-      name: string;
-      /** Location */
-      location?: string | null;
-      /**
-       * Status
-       * @enum {string}
-       */
-      status: "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
-      /**
-       * Lifecycle State
-       * @enum {string}
-       */
-      lifecycle_state:
-        | "DRAFT"
-        | "TESTING"
-        | "VERIFIED"
-        | "OPERATIONAL"
-        | "MAINTENANCE"
-        | "DISABLED";
-      /** Ai Enabled */
-      ai_enabled: boolean;
-      /** Recording Enabled */
-      recording_enabled: boolean;
-      brand?: components["schemas"]["CameraBrand"] | null;
-      /** Model */
-      model?: string | null;
-      /** Ip Address */
-      ip_address?: string | null;
-      /** Port */
-      port?: number | null;
-      /** Stream Path */
-      stream_path?: string | null;
-      /** Username */
-      username?: string | null;
-      /** Transport */
-      transport?: string | null;
-      /**
-       * Created At
-       * Format: date-time
-       */
-      created_at: string;
-      /**
-       * Updated At
-       * Format: date-time
-       */
-      updated_at: string;
-    };
-    /**
-     * CameraUpdateRequestSchema
-     * @description Body of ``PATCH /cameras/{camera_id}`` -- partial update, every field
-     *     optional. Any connection field present (brand/ip_address/port/
-     *     username/password/transport/stream_path) regenerates the RTSP URL,
-     *     merged with the camera's existing connection info for whichever of
-     *     these fields are omitted. ``password`` is write-only.
-     */
-    CameraUpdateRequestSchema: {
-      /** Name */
-      name?: string | null;
-      /** Location */
-      location?: string | null;
-      /** Ai Enabled */
-      ai_enabled?: boolean | null;
-      /** Recording Enabled */
-      recording_enabled?: boolean | null;
-      brand?: components["schemas"]["CameraBrand"] | null;
-      /** Model */
-      model?: string | null;
-      /** Ip Address */
-      ip_address?: string | null;
-      /** Port */
-      port?: number | null;
-      /** Username */
-      username?: string | null;
-      /** Password */
-      password?: string | null;
-      /** Transport */
-      transport?: string | null;
-      /** Stream Path */
-      stream_path?: string | null;
-    };
-    /**
      * CameraCreateRequestSchema
-     * @description Body of ``POST /cameras`` -- register a new camera. The operator
-     *     never supplies an RTSP URL -- brand + ip_address + credentials go to
-     *     the RTSP URL generator; only the generated, encrypted URL is stored.
+     * @description Body of ``POST /cameras`` -- register a new camera. Combines the
+     *     ``cameras`` and ``camera_stream_profiles`` rows in one request, matching
+     *     the operator workflow's "Add Camera" step (RM-12 §2): a camera can't
+     *     usefully exist without knowing how to connect to it.
+     *
+     *     The operator never types an RTSP URL -- ``brand`` + ``ip_address`` +
+     *     ``username``/``password``/``port``/``stream_path`` go to
+     *     ``apps.api.app.services.rtsp_url_generator``, which builds and this
+     *     route stores only the generated, encrypted URL. ``port``/
+     *     ``stream_path`` are optional -- omitted, the brand's own documented
+     *     default is used (``GET /cameras/brands`` exposes each brand's
+     *     defaults so the UI never hardcodes a second copy of them).
+     *
+     *     ``ai_enabled``/``recording_enabled`` default to ``False`` -- RM-12
+     *     Design Principle 3 is explicit that adding a camera must never
+     *     automatically start AI; the same "nothing happens until the operator
+     *     explicitly asks" default applies symmetrically to recording.
      */
     CameraCreateRequestSchema: {
       /** Name */
       name: string;
       /** Location */
       location?: string | null;
-      brand: components["schemas"]["CameraBrand"];
+      /**
+       * Brand
+       * @enum {string}
+       */
+      brand: "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
       /** Model */
       model?: string | null;
       /** Ip Address */
@@ -1283,12 +1201,170 @@ export interface components {
       recording_enabled: boolean;
     };
     /**
-     * CameraLifecycleUpdateRequestSchema
-     * @description Body of ``PATCH /cameras/{camera_id}/lifecycle``.
+     * CameraHealthSchema
+     * @description Per-camera health metrics surfaced by the System Health Agent.
+     *
+     *     Returned by ``GET /cameras/{camera_id}/health``. **Not** the
+     *     ``/ws/camera-health`` WebSocket message body -- that channel forwards
+     *     ``CameraDisconnectedEvent``/``SystemEvent`` (disconnect notifications
+     *     and operational log events), not ongoing health metrics like this
+     *     schema. Corrected during the RM-12 Architecture Readiness Review, which
+     *     had initially listed this schema against that channel in error -- see
+     *     ``CameraDisconnectedSchema``/``SystemEventSchema`` below for the actual
+     *     ``/ws/camera-health`` shapes.
      */
-    CameraLifecycleUpdateRequestSchema: {
-      /** @enum {string} */
-      target_state: "DRAFT" | "TESTING" | "VERIFIED" | "OPERATIONAL" | "MAINTENANCE" | "DISABLED";
+    CameraHealthSchema: {
+      /**
+       * Camera Id
+       * Format: uuid
+       */
+      camera_id: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
+      /** Fps */
+      fps?: number | null;
+      /** Last Frame Age Seconds */
+      last_frame_age_seconds?: number | null;
+      /** Latency Ms */
+      latency_ms?: number | null;
+      /**
+       * Reconnect Count
+       * @default 0
+       */
+      reconnect_count: number;
+      /** Last Stream Error */
+      last_stream_error?: string | null;
+    };
+    /**
+     * CameraHealthSummarySchema
+     * @description Aggregated camera connection status count.
+     */
+    CameraHealthSummarySchema: {
+      /** Total Cameras */
+      total_cameras: number;
+      /** Connected Count */
+      connected_count: number;
+      /** Disconnected Count */
+      disconnected_count: number;
+      /** Reconnecting Count */
+      reconnecting_count: number;
+      /**
+       * Stalled Count
+       * @default 0
+       */
+      stalled_count: number;
+    };
+    /**
+     * CameraSchema
+     * @description Full camera representation.
+     *
+     *     Returned by ``GET /cameras`` (list) and ``GET /cameras/{camera_id}``.
+     *     ``username``/``brand``/``model``/``ip_address``/``port``/
+     *     ``stream_path`` are connection metadata, not secrets -- returned so
+     *     the Edit Camera form can pre-fill without asking the operator to
+     *     re-enter everything.
+     *     ``password`` is never returned (write-only, stored encrypted) -- the
+     *     UI never displays it, per the Camera Management workflow's own
+     *     requirement.
+     */
+    CameraSchema: {
+      /**
+       * Camera Id
+       * Format: uuid
+       */
+      camera_id: string;
+      /** Name */
+      name: string;
+      /** Location */
+      location?: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
+      /** Ai Enabled */
+      ai_enabled: boolean;
+      /** Recording Enabled */
+      recording_enabled: boolean;
+      /** Brand */
+      brand?: ("HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA") | null;
+      /** Model */
+      model?: string | null;
+      /** Ip Address */
+      ip_address?: string | null;
+      /** Port */
+      port?: number | null;
+      /** Stream Path */
+      stream_path?: string | null;
+      /** Username */
+      username?: string | null;
+      /** Transport */
+      transport?: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * CameraUpdateRequestSchema
+     * @description Body of ``PATCH /cameras/{camera_id}`` -- partial update, every field
+     *     optional.
+     *
+     *     ``status`` (Observed state) is deliberately absent -- connection
+     *     status is never operator-settable; it previously appeared here in
+     *     error. A camera's connectivity is implicit (registered = connects,
+     *     deleted = disconnects) -- there is no separate state to PATCH for it.
+     *
+     *     ``ai_enabled``/``recording_enabled`` are Desired state -- Camera
+     *     Registry persists the operator's intent only; this route performs no
+     *     AI/recording behavior and never calls Camera Runtime, which is the one
+     *     thing that actually observes and converges toward these flags.
+     *
+     *     ``brand``/``ip_address``/``port``/``username``/``password``/
+     *     ``transport``/``stream_path`` are connection fields -- any of them
+     *     present triggers a regenerated, re-encrypted RTSP URL (apps.api.app.
+     *     services.rtsp_url_generator), merged with the camera's existing
+     *     connection info for whichever of these fields are omitted (e.g.
+     *     changing only the IP keeps the existing password). ``password`` is
+     *     write-only: omitting it keeps the existing one; there is no way to
+     *     read it back. ``model`` lives alongside these on the same stream
+     *     profile row (free-text hardware model number, e.g. "DS-2CD2143G0-I")
+     *     but is purely descriptive -- it plays no part in RTSP URL generation.
+     */
+    CameraUpdateRequestSchema: {
+      /** Name */
+      name?: string | null;
+      /** Location */
+      location?: string | null;
+      /** Ai Enabled */
+      ai_enabled?: boolean | null;
+      /** Recording Enabled */
+      recording_enabled?: boolean | null;
+      /** Brand */
+      brand?: ("HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA") | null;
+      /** Model */
+      model?: string | null;
+      /** Ip Address */
+      ip_address?: string | null;
+      /** Port */
+      port?: number | null;
+      /** Username */
+      username?: string | null;
+      /** Password */
+      password?: string | null;
+      /** Transport */
+      transport?: string | null;
+      /** Stream Path */
+      stream_path?: string | null;
     };
     /**
      * DistanceZone
@@ -2000,6 +2076,59 @@ export interface operations {
       };
     };
   };
+  register_camera_cameras_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CameraCreateRequestSchema"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiResponse_CameraSchema_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_camera_brands_cameras_brands_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiResponse_list_CameraBrandInfoSchema__"];
+        };
+      };
+    };
+  };
   get_camera_cameras__camera_id__get: {
     parameters: {
       query?: never;
@@ -2018,6 +2147,37 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ApiResponse_CameraSchema_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  delete_camera_cameras__camera_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        camera_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiResponse_NoneType_"];
         };
       };
       /** @description Validation Error */

@@ -16,31 +16,34 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.app.models.base import Base, created_at_column, updated_at_column, uuid_pk
-from shared.schemas.camera import CameraConnectionStatus, CameraLifecycleState
+from shared.schemas.camera import CameraConnectionStatus
 
 _CAMERA_STATUS_VALUES = get_args(CameraConnectionStatus)
-_CAMERA_LIFECYCLE_VALUES = get_args(CameraLifecycleState)
 
 
 class Camera(Base):
     """Registered camera source.
 
-    Two independent state columns, per RM-12 (Camera Runtime Ownership
-    Refinement / Runtime State Model) -- connection status and lifecycle
-    state are orthogonal state machines, never one enum:
+    Two independent state columns -- connection status and operator
+    intent are orthogonal, never one enum:
 
     - ``status`` is Observed state: written exclusively by Camera Runtime,
       reflects live RTSP connectivity. Never operator-settable via the API
       -- see routers/cameras.py's PATCH route, which deliberately excludes
       it.
-    - ``lifecycle_state``, ``ai_enabled``, ``recording_enabled`` are all
-      Desired/Persistent state: written exclusively by Camera Registry in
-      response to an explicit operator action, independent of whether the
-      camera happens to be connected right now. ``ai_enabled``/
-      ``recording_enabled`` record only the operator's *intent* -- Camera
-      Runtime observes them and converges toward them (attaching/detaching
-      the AI branch, starting/stopping recording); this component performs
-      no AI or recording behavior itself and never calls Camera Runtime.
+    - ``ai_enabled``/``recording_enabled`` are Desired/Persistent state:
+      written exclusively by Camera Registry in response to an explicit
+      operator action, independent of whether the camera happens to be
+      connected right now. They record only the operator's *intent* --
+      Camera Runtime observes them and converges toward them (attaching/
+      detaching the AI branch, starting/stopping recording); this
+      component performs no AI or recording behavior itself and never
+      calls Camera Runtime.
+
+    Lifecycle (a DRAFT/TESTING/VERIFIED/OPERATIONAL/MAINTENANCE/DISABLED
+    state machine gating both connectivity and AI eligibility) has been
+    removed entirely: a registered camera always connects; AI eligibility
+    is ``ai_enabled`` alone.
     """
 
     __tablename__ = "cameras"
@@ -48,10 +51,6 @@ class Camera(Base):
         CheckConstraint(
             f"status IN ({', '.join(repr(v) for v in _CAMERA_STATUS_VALUES)})",
             name="ck_cameras_status",
-        ),
-        CheckConstraint(
-            f"lifecycle_state IN ({', '.join(repr(v) for v in _CAMERA_LIFECYCLE_VALUES)})",
-            name="ck_cameras_lifecycle_state",
         ),
     )
 
@@ -75,7 +74,6 @@ class Camera(Base):
     (not just in-memory) so GET /cameras and GET /health/cameras reflect
     real values across the apps.api/apps.deepstream process boundary,
     which don't share memory."""
-    lifecycle_state: Mapped[str] = mapped_column(String, nullable=False, server_default="DRAFT")
     ai_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     recording_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = created_at_column()

@@ -1,11 +1,11 @@
 """Desired State reading -- RM-12 Camera Runtime Step 4.
 
 ``DesiredStateReader`` is responsible only for reading Camera Registry's
-Desired/Persistent state (``lifecycle_state``, ``ai_enabled``,
-``recording_enabled``) plus enough connection info to build a source bin --
-it decides nothing about what Camera Runtime should then do with what it
-read (see ``synchronization.py``'s ``DesiredStateSynchronizer``). Read-only,
-same convention as ``ingestion/camera_registry.py``'s ``CameraRegistry`` --
+Desired/Persistent state (``ai_enabled``, ``recording_enabled``) plus
+enough connection info to build a source bin -- it decides nothing about
+what Camera Runtime should then do with what it read (see
+``synchronization.py``'s ``DesiredStateSynchronizer``). Read-only, same
+convention as ``ingestion/camera_registry.py``'s ``CameraRegistry`` --
 Camera Runtime never writes to Camera Registry's tables.
 
 Deliberately not a long-lived session holder: each ``read_all()`` call opens
@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
 from apps.api.app.security.encryption import CredentialEncryptionProvider
-from shared.schemas.camera import CameraLifecycleState
 
 
 @dataclass(frozen=True)
@@ -33,11 +32,12 @@ class DesiredCameraState:
     records it. ``rtsp_url``/``transport`` are ``None`` when the camera has
     no ``camera_stream_profiles`` row yet -- mirrors
     ``CameraRegistry.load_camera_sources()``'s existing "skip, don't crash"
-    handling of the same condition."""
+    handling of the same condition. A registered camera always wants an
+    active source (Lifecycle, which used to gate this, has been removed
+    entirely) -- ``DesiredStateSynchronizer`` no longer asks."""
 
     camera_id: uuid.UUID
     name: str
-    lifecycle_state: CameraLifecycleState
     ai_enabled: bool
     recording_enabled: bool
     rtsp_url: str | None
@@ -68,7 +68,6 @@ class DesiredStateReader:
                     DesiredCameraState(
                         camera_id=camera.id,
                         name=camera.name,
-                        lifecycle_state=camera.lifecycle_state,  # type: ignore[arg-type]
                         ai_enabled=camera.ai_enabled,
                         recording_enabled=camera.recording_enabled,
                         rtsp_url=(

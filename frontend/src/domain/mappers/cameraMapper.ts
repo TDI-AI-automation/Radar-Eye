@@ -9,7 +9,6 @@ export function toCameraDomain(dto: CameraDto): Camera {
     dto.name,
     dto.location ?? null,
     dto.status,
-    dto.lifecycle_state,
     dto.ai_enabled,
     dto.recording_enabled,
     dto.brand ?? null,

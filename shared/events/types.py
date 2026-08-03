@@ -30,7 +30,6 @@ from shared.events.payloads import (
     AlarmRequestedPayload,
     CalibrationUpdatedPayload,
     CameraDisconnectedPayload,
-    CameraLifecycleChangedPayload,
     CameraRegisteredPayload,
     ClipCreatedPayload,
     HumanReviewItemCreatedPayload,
@@ -54,7 +53,6 @@ SnapshotCreatedEvent = EventEnvelope[SnapshotCreatedPayload]
 ClipCreatedEvent = EventEnvelope[ClipCreatedPayload]
 CameraDisconnectedEvent = EventEnvelope[CameraDisconnectedPayload]
 CameraRegisteredEvent = EventEnvelope[CameraRegisteredPayload]
-CameraLifecycleChangedEvent = EventEnvelope[CameraLifecycleChangedPayload]
 CalibrationUpdatedEvent = EventEnvelope[CalibrationUpdatedPayload]
 SystemEvent = EventEnvelope[SystemEventPayload]
 
@@ -62,7 +60,6 @@ __all__ = [
     "AlarmRequestedEvent",
     "CalibrationUpdatedEvent",
     "CameraDisconnectedEvent",
-    "CameraLifecycleChangedEvent",
     "CameraRegisteredEvent",
     "ClipCreatedEvent",
     "HumanReviewItemCreatedEvent",

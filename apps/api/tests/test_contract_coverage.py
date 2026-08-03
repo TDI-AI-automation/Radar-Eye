@@ -43,7 +43,6 @@ IMPLEMENTED_REST_ROUTES: set[tuple[str, str]] = {
     ("post", "/cameras"),
     ("delete", "/cameras/{camera_id}"),
     ("get", "/cameras/brands"),
-    ("patch", "/cameras/{camera_id}/lifecycle"),
     ("get", "/threats/active"),
     ("get", "/incidents/open"),
     ("get", "/incidents"),

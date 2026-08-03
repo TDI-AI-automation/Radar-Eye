@@ -19,14 +19,6 @@ CameraConnectionStatus = Literal["CONNECTED", "DISCONNECTED", "RECONNECTING"]
 """Observed state (RM-12) -- written exclusively by Camera Runtime. Never
 accepted from an operator-facing request body."""
 
-CameraLifecycleState = Literal[
-    "DRAFT", "TESTING", "VERIFIED", "OPERATIONAL", "MAINTENANCE", "DISABLED"
-]
-"""Desired/Persistent state (RM-12) -- written exclusively by Camera
-Registry in response to an explicit operator action. Independent of
-CameraConnectionStatus -- see apps.api.app.models.camera.Camera's
-docstring for why these are two columns, not one enum."""
-
 CameraBrand = Literal["HIKVISION", "DAHUA", "UNIVIEW", "AXIS", "HANWHA"]
 """Supported camera brands for RTSP URL generation (see
 apps.api.app.services.rtsp_url_generator) -- an operator picks one of
@@ -95,7 +87,6 @@ class CameraSchema(BaseModel):
     name: str
     location: str | None = None
     status: CameraConnectionStatus
-    lifecycle_state: CameraLifecycleState
     ai_enabled: bool
     recording_enabled: bool
     brand: CameraBrand | None = None
@@ -113,11 +104,10 @@ class CameraUpdateRequestSchema(BaseModel):
     """Body of ``PATCH /cameras/{camera_id}`` -- partial update, every field
     optional.
 
-    ``status`` (Observed state) is deliberately absent -- RM-12's Camera
-    Runtime Ownership Refinement is explicit that connection status is
-    never operator-settable; it previously appeared here in error. Use
-    ``PATCH /cameras/{camera_id}/lifecycle`` for the one state an operator
-    is actually allowed to change.
+    ``status`` (Observed state) is deliberately absent -- connection
+    status is never operator-settable; it previously appeared here in
+    error. A camera's connectivity is implicit (registered = connects,
+    deleted = disconnects) -- there is no separate state to PATCH for it.
 
     ``ai_enabled``/``recording_enabled`` are Desired state -- Camera
     Registry persists the operator's intent only; this route performs no
@@ -184,12 +174,6 @@ class CameraCreateRequestSchema(BaseModel):
     recording_enabled: bool = False
 
 
-class CameraLifecycleUpdateRequestSchema(BaseModel):
-    """Body of ``PATCH /cameras/{camera_id}/lifecycle``."""
-
-    target_state: CameraLifecycleState
-
-
 class CameraBrandInfoSchema(BaseModel):
     """One entry of ``GET /cameras/brands`` -- the Add/Edit Camera form's
     only source of brand choices and their defaults, so the frontend never
@@ -200,6 +184,25 @@ class CameraBrandInfoSchema(BaseModel):
     label: str
     default_port: int
     default_stream_path: str
+
+
+class WebRtcOfferRequestSchema(BaseModel):
+    """Body of ``POST /cameras/{camera_id}/webrtc/offer`` -- Live
+    Monitoring's video signaling. Non-trickle: the browser has already
+    finished gathering its own ICE candidates before sending this (see
+    apps.deepstream.app.live_stream's module docstring), so this single
+    request/response is the entire SDP exchange."""
+
+    sdp: str
+    type: str = "offer"
+
+
+class WebRtcAnswerResponseSchema(BaseModel):
+    """Response body -- this server's answer, ICE already fully gathered
+    (also non-trickle)."""
+
+    sdp: str
+    type: str = "answer"
 
 
 class CameraCalibrationSchema(BaseModel):

@@ -420,7 +420,6 @@ def _desired(camera_id: uuid.UUID, *, ai_enabled: bool = False) -> DesiredCamera
     return DesiredCameraState(
         camera_id=camera_id,
         name="test-camera",
-        lifecycle_state="OPERATIONAL",
         ai_enabled=ai_enabled,
         recording_enabled=False,
         rtsp_url="rtsp://192.0.2.1:554/stream",

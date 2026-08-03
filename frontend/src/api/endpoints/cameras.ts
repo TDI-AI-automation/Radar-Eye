@@ -5,7 +5,6 @@ type CameraDto = components["schemas"]["CameraSchema"];
 type CameraHealthDto = components["schemas"]["CameraHealthSchema"];
 type CameraUpdateRequest = components["schemas"]["CameraUpdateRequestSchema"];
 type CameraCreateRequest = components["schemas"]["CameraCreateRequestSchema"];
-type CameraLifecycleUpdateRequest = components["schemas"]["CameraLifecycleUpdateRequestSchema"];
 export type CameraBrandInfoDto = components["schemas"]["CameraBrandInfoSchema"];
 type WebRtcOfferRequest = components["schemas"]["WebRtcOfferRequestSchema"];
 type WebRtcAnswerResponse = components["schemas"]["WebRtcAnswerResponseSchema"];
@@ -52,24 +51,10 @@ export function updateCamera(
   });
 }
 
-/** PATCH /cameras/{id}/lifecycle -- admin-only. target_state must be a
- * legal transition from the camera's current lifecycle_state (RM-12 §10's
- * state machine) -- an illegal one is rejected with 422, surfaced to the
- * caller as a thrown AppError, not silently ignored. */
-export function updateCameraLifecycle(
-  cameraId: string,
-  body: CameraLifecycleUpdateRequest,
-): Promise<CameraDto | null> {
-  return apiClient.request<CameraDto>(`/cameras/${cameraId}/lifecycle`, {
-    method: "PATCH",
-    body,
-  });
-}
-
 /** DELETE /cameras/{id} -- admin-only. 409s (AppError) if the camera has
  * existing incidents/review items/recordings -- that history is never
- * cascade-deleted; the caller should surface that as "transition to
- * DISABLED instead" rather than retrying. */
+ * cascade-deleted; the caller should surface that as "resolve or export
+ * that history first" rather than retrying. */
 export function deleteCamera(cameraId: string): Promise<null> {
   return apiClient.request<null>(`/cameras/${cameraId}`, {
     method: "DELETE",

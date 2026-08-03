@@ -11,12 +11,14 @@ Define persistent data storage for Radar Eye.
 ## Description
 
 Registered camera sources. Two independent state groups (RM-12 Camera
-Runtime Ownership Refinement): Desired state (`lifecycle_state`,
-`ai_enabled`, `recording_enabled`) is written exclusively by Camera
-Registry (the API service); Observed state (`status` and the
-fps/latency/last_seen/reconnect/error fields below) is written
-exclusively by Camera Runtime (`apps.deepstream`), persisted directly
-since the two run as separate processes and don't share memory.
+Runtime Ownership Refinement): Desired state (`ai_enabled`,
+`recording_enabled`) is written exclusively by Camera Registry (the API
+service); Observed state (`status` and the fps/latency/last_seen/
+reconnect/error fields below) is written exclusively by Camera Runtime
+(`apps.deepstream`), persisted directly since the two run as separate
+processes and don't share memory. There is no intermediate lifecycle
+state machine — a registered camera always wants an active source, and
+deletion is the only way a camera stops being desired.
 
 ### Fields
 
@@ -24,7 +26,6 @@ id (UUID)
 name
 location
 status
-lifecycle_state (DRAFT / TESTING / VERIFIED / OPERATIONAL / MAINTENANCE / DISABLED)
 ai_enabled
 recording_enabled
 fps

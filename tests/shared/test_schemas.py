@@ -218,7 +218,6 @@ class TestCameraSchemas:
             camera_id=_CAMERA_ID,
             name="North Gate",
             status="CONNECTED",
-            lifecycle_state="OPERATIONAL",
             ai_enabled=True,
             recording_enabled=False,
             created_at=_NOW,
@@ -253,7 +252,6 @@ class TestCameraSchemas:
                 camera_id=_CAMERA_ID,
                 name="X",
                 status="BROKEN",  # type: ignore[arg-type]
-                lifecycle_state="DRAFT",
                 ai_enabled=False,
                 recording_enabled=False,
                 created_at=_NOW,

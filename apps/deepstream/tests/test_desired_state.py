@@ -23,7 +23,6 @@ async def _make_camera(
     session,
     *,
     name: str = "cam-1",
-    lifecycle_state: str = "DRAFT",
     ai_enabled: bool = False,
     recording_enabled: bool = False,
 ) -> Camera:
@@ -31,7 +30,6 @@ async def _make_camera(
         Camera(
             name=name,
             status="DISCONNECTED",
-            lifecycle_state=lifecycle_state,
             ai_enabled=ai_enabled,
             recording_enabled=recording_enabled,
         )
@@ -43,23 +41,20 @@ class TestReadAll:
     async def test_camera_without_stream_profile_has_no_connection_info(
         self, db_session, session_factory
     ) -> None:
-        await _make_camera(db_session, lifecycle_state="OPERATIONAL")
+        await _make_camera(db_session)
         await db_session.commit()
         encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
 
         states = await DesiredStateReader(session_factory, encryption).read_all()
 
         assert len(states) == 1
-        assert states[0].lifecycle_state == "OPERATIONAL"
         assert states[0].rtsp_url is None
         assert states[0].transport is None
 
     async def test_camera_with_stream_profile_has_decrypted_connection_info(
         self, db_session, session_factory
     ) -> None:
-        camera = await _make_camera(
-            db_session, name="gate-camera", lifecycle_state="OPERATIONAL", ai_enabled=True
-        )
+        camera = await _make_camera(db_session, name="gate-camera", ai_enabled=True)
         encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
         rtsp_url = "rtsp://192.0.2.10:554/stream1"
         await CameraStreamProfileRepository(db_session).add(
@@ -77,7 +72,6 @@ class TestReadAll:
         state = states[0]
         assert state.camera_id == camera.id
         assert state.name == "gate-camera"
-        assert state.lifecycle_state == "OPERATIONAL"
         assert state.ai_enabled is True
         assert state.rtsp_url == rtsp_url
         assert state.transport == "tcp"
@@ -85,7 +79,6 @@ class TestReadAll:
     async def test_reads_current_desired_state_fields(self, db_session, session_factory) -> None:
         await _make_camera(
             db_session,
-            lifecycle_state="MAINTENANCE",
             ai_enabled=False,
             recording_enabled=True,
         )
@@ -95,26 +88,25 @@ class TestReadAll:
         states = await DesiredStateReader(session_factory, encryption).read_all()
 
         assert len(states) == 1
-        assert states[0].lifecycle_state == "MAINTENANCE"
         assert states[0].ai_enabled is False
         assert states[0].recording_enabled is True
 
     async def test_each_call_sees_current_data_not_a_stale_snapshot(
         self, db_session, session_factory
     ) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
+        camera = await _make_camera(db_session, ai_enabled=False)
         await db_session.commit()
         encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
         reader = DesiredStateReader(session_factory, encryption)
 
         first = await reader.read_all()
-        assert first[0].lifecycle_state == "DRAFT"
+        assert first[0].ai_enabled is False
 
-        camera.lifecycle_state = "TESTING"
+        camera.ai_enabled = True
         await db_session.commit()
 
         second = await reader.read_all()
-        assert second[0].lifecycle_state == "TESTING"
+        assert second[0].ai_enabled is True
 
     async def test_no_cameras_returns_empty_list(self, session_factory) -> None:
         encryption = FernetCredentialEncryptionProvider(_TEST_KEY)

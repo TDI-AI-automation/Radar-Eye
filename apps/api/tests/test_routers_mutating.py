@@ -157,8 +157,8 @@ class TestCamerasPatch:
         """RM-12 Runtime State Model -- ai_enabled/recording_enabled are
         Desired state, operator-configurable via the same general PATCH
         route as name/location; no dedicated endpoint, no Camera Runtime
-        call, no event published by this route (only lifecycle changes
-        publish an event -- these are plain persisted fields)."""
+        call, no event published by this route -- these are plain
+        persisted fields."""
         camera = await _make_camera(db_session)
         admin = await _make_user(db_session, ROLE_ADMIN)
         app = create_app()
@@ -315,7 +315,6 @@ class TestCamerasPost:
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["name"] == "gate-cam-1"
-        assert data["lifecycle_state"] == "DRAFT"
         # RM-12 Design Principle 3: adding a camera must never auto-start AI;
         # the same default applies symmetrically to recording.
         assert data["ai_enabled"] is False
@@ -369,96 +368,6 @@ class TestCamerasPost:
         data = response.json()["data"]
         assert data["ai_enabled"] is True
         assert data["recording_enabled"] is True
-
-
-@pytest.mark.asyncio
-class TestCamerasLifecyclePatch:
-    """Camera Registry lifecycle transitions -- RM-12 §10's state machine,
-    independent of CameraConnectionStatus (Observed state, never touched
-    here)."""
-
-    async def test_requires_authentication(self, db_engine, db_session) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
-        app = create_app()
-        async with await _client(app) as client:
-            response = await client.patch(
-                f"/cameras/{camera.id}/lifecycle", json={"target_state": "TESTING"}
-            )
-        assert response.status_code == 401
-
-    async def test_rejects_non_admin(self, db_engine, db_session) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
-        operator = await _make_user(db_session, ROLE_OPERATOR)
-        app = create_app()
-        async with await _client(app) as client:
-            response = await client.patch(
-                f"/cameras/{camera.id}/lifecycle",
-                json={"target_state": "TESTING"},
-                headers=_auth_header(operator, ROLE_OPERATOR),
-            )
-        assert response.status_code == 403
-
-    async def test_valid_transition_updates_state_and_writes_audit_row(
-        self, db_engine, db_session
-    ) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
-        admin = await _make_user(db_session, ROLE_ADMIN)
-        app = create_app()
-        async with await _client(app) as client:
-            response = await client.patch(
-                f"/cameras/{camera.id}/lifecycle",
-                json={"target_state": "TESTING"},
-                headers=_auth_header(admin, ROLE_ADMIN),
-            )
-
-        assert response.status_code == 200
-        assert response.json()["data"]["lifecycle_state"] == "TESTING"
-
-        entries = await AuditLogRepository(db_session).list()
-        matching = [e for e in entries if e.action == "CHANGE_CAMERA_LIFECYCLE"]
-        assert len(matching) == 1
-        assert matching[0].details == {"previous_state": "DRAFT", "new_state": "TESTING"}
-
-    async def test_invalid_transition_rejected(self, db_engine, db_session) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="DRAFT")
-        admin = await _make_user(db_session, ROLE_ADMIN)
-        app = create_app()
-        async with await _client(app) as client:
-            # DRAFT -> OPERATIONAL skips TESTING/VERIFIED -- not a legal edge
-            # in RM-12 §10's state machine.
-            response = await client.patch(
-                f"/cameras/{camera.id}/lifecycle",
-                json={"target_state": "OPERATIONAL"},
-                headers=_auth_header(admin, ROLE_ADMIN),
-            )
-        assert response.status_code == 422
-
-    async def test_idempotent_same_state_is_a_no_op(self, db_engine, db_session) -> None:
-        camera = await _make_camera(db_session, lifecycle_state="TESTING")
-        admin = await _make_user(db_session, ROLE_ADMIN)
-        app = create_app()
-        async with await _client(app) as client:
-            response = await client.patch(
-                f"/cameras/{camera.id}/lifecycle",
-                json={"target_state": "TESTING"},
-                headers=_auth_header(admin, ROLE_ADMIN),
-            )
-
-        assert response.status_code == 200
-        assert response.json()["data"]["lifecycle_state"] == "TESTING"
-        entries = await AuditLogRepository(db_session).list()
-        assert [e for e in entries if e.action == "CHANGE_CAMERA_LIFECYCLE"] == []
-
-    async def test_returns_404_for_missing_camera(self, db_engine, db_session) -> None:
-        admin = await _make_user(db_session, ROLE_ADMIN)
-        app = create_app()
-        async with await _client(app) as client:
-            response = await client.patch(
-                "/cameras/00000000-0000-0000-0000-000000000000/lifecycle",
-                json={"target_state": "TESTING"},
-                headers=_auth_header(admin, ROLE_ADMIN),
-            )
-        assert response.status_code == 404
 
 
 @pytest.mark.asyncio

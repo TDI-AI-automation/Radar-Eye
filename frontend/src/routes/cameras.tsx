@@ -12,7 +12,6 @@ import {
   useCreateCamera,
   useUpdateCamera,
   useDeleteCamera,
-  useUpdateCameraLifecycle,
 } from "@/features/cameras/hooks/useCameraMutations";
 import {
   buildCameraRowViewModel,
@@ -20,7 +19,7 @@ import {
 } from "@/features/cameras/view-models/cameraRow";
 import { usePermission } from "@/auth/usePermission";
 import { AppError } from "@/api/AppError";
-import type { Camera, CameraBrand, CameraLifecycleState } from "@/domain/models/Camera";
+import type { Camera, CameraBrand } from "@/domain/models/Camera";
 
 export const Route = createFileRoute("/cameras")({
   head: () => ({
@@ -40,30 +39,6 @@ export const Route = createFileRoute("/cameras")({
   component: Cameras,
 });
 
-/** Mirrors apps.api.app.services.camera_registry.LIFECYCLE_TRANSITIONS
- * exactly -- UI-only convenience so the "Transition to" picker only
- * offers legal next states; the backend remains the sole enforcer (a
- * stale/duplicated copy here can only ever produce an extra option that
- * gets rejected with 422, never a wrongly-permitted one silently
- * accepted). */
-const LIFECYCLE_TRANSITIONS: Record<CameraLifecycleState, CameraLifecycleState[]> = {
-  DRAFT: ["TESTING", "DISABLED"],
-  TESTING: ["VERIFIED", "DRAFT", "DISABLED"],
-  VERIFIED: ["OPERATIONAL", "DISABLED"],
-  OPERATIONAL: ["MAINTENANCE", "DISABLED"],
-  MAINTENANCE: ["OPERATIONAL", "DISABLED"],
-  DISABLED: [],
-};
-
-const LIFECYCLE_LABELS: Record<CameraLifecycleState, string> = {
-  DRAFT: "Draft",
-  TESTING: "Testing",
-  VERIFIED: "Verified",
-  OPERATIONAL: "Operational",
-  MAINTENANCE: "Maintenance",
-  DISABLED: "Disabled",
-};
-
 function Cameras() {
   const [q, setQ] = useState("");
   const [editingCameraId, setEditingCameraId] = useState<string | null>(null);
@@ -73,6 +48,21 @@ function Cameras() {
 
   const camerasQuery = useCameras();
   const healthQuery = useCamerasHealth();
+  const toggleAi = useUpdateCamera();
+  const [togglingAiId, setTogglingAiId] = useState<string | null>(null);
+
+  async function handleToggleAi(cameraId: string, currentlyEnabled: boolean) {
+    setTogglingAiId(cameraId);
+    try {
+      await toggleAi.mutateAsync({ cameraId, body: { ai_enabled: !currentlyEnabled } });
+    } catch {
+      // Surfaced via toggleAi.isError below is per-mutation, not per-row --
+      // a failed toggle just leaves the pill showing the last known state,
+      // which is still correct (nothing changed server-side).
+    } finally {
+      setTogglingAiId(null);
+    }
+  }
 
   const rows = useMemo<CameraRowViewModel[]>(() => {
     const cameras = camerasQuery.data ?? [];
@@ -144,7 +134,6 @@ function Cameras() {
                     "Brand",
                     "IP Address",
                     "Location",
-                    "Lifecycle State",
                     "AI Enabled",
                     "Recording Enabled",
                     "Connection Status",
@@ -172,10 +161,12 @@ function Cameras() {
                       {r.location}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
-                      <LifecyclePill state={r.lifecycleState} label={r.lifecycleLabel} />
-                    </td>
-                    <td className="px-2 py-2 whitespace-nowrap">
-                      <FlagPill enabled={r.aiEnabled} />
+                      <AiTogglePill
+                        enabled={r.aiEnabled}
+                        disabled={!canEdit || togglingAiId === r.id}
+                        title={canEdit ? "Toggle AI" : "Administrator role required"}
+                        onToggle={() => void handleToggleAi(r.id, r.aiEnabled)}
+                      />
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
                       <FlagPill enabled={r.recordingEnabled} />
@@ -303,10 +294,7 @@ function CameraFormModal({
   const brandsQuery = useCameraBrands();
   const createCamera = useCreateCamera();
   const updateCamera = useUpdateCamera();
-  const updateLifecycle = useUpdateCameraLifecycle();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
-  const [targetLifecycle, setTargetLifecycle] = useState<CameraLifecycleState | "">("");
 
   const {
     register,
@@ -367,23 +355,6 @@ function CameraFormModal({
     }
   }
 
-  async function applyLifecycleTransition() {
-    if (!camera || !targetLifecycle) return;
-    setLifecycleError(null);
-    try {
-      await updateLifecycle.mutateAsync({
-        cameraId: camera.id,
-        body: { target_state: targetLifecycle },
-      });
-      setTargetLifecycle("");
-    } catch (err) {
-      setLifecycleError(
-        err instanceof AppError ? err.message : "Failed to change lifecycle state.",
-      );
-    }
-  }
-
-  const availableTransitions = camera ? LIFECYCLE_TRANSITIONS[camera.lifecycleState] : [];
   const isPending = createCamera.isPending || updateCamera.isPending || isSubmitting;
 
   return (
@@ -403,52 +374,6 @@ function CameraFormModal({
             <X className="h-4 w-4 text-muted-foreground" />
           </button>
         </div>
-
-        {mode === "edit" && camera && (
-          <div className="border-b border-border/60 px-4 py-3 font-mono text-[11px] space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                Lifecycle State
-              </span>
-              <LifecyclePill
-                state={camera.lifecycleState}
-                label={LIFECYCLE_LABELS[camera.lifecycleState]}
-              />
-            </div>
-            {availableTransitions.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <select
-                  value={targetLifecycle}
-                  onChange={(e) => setTargetLifecycle(e.target.value as CameraLifecycleState | "")}
-                  className="flex-1 bg-black/40 border border-border rounded px-2 py-1"
-                >
-                  <option value="">Transition to…</option>
-                  {availableTransitions.map((state) => (
-                    <option key={state} value={state}>
-                      {LIFECYCLE_LABELS[state]}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => void applyLifecycleTransition()}
-                  disabled={!targetLifecycle || updateLifecycle.isPending}
-                  className="rounded border border-primary/50 bg-primary/15 px-3 py-1 uppercase tracking-widest text-primary text-[10px] disabled:opacity-50"
-                >
-                  Apply
-                </button>
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-[10px]">
-                DISABLED is terminal -- no further transitions available.
-              </p>
-            )}
-            {lifecycleError && (
-              <p className="text-glow-red" role="alert">
-                {lifecycleError}
-              </p>
-            )}
-          </div>
-        )}
 
         <form
           onSubmit={(e) => void handleSubmit(onSubmit)(e)}
@@ -537,11 +462,6 @@ function CameraFormModal({
           <Field label="AI Enabled">
             <input type="checkbox" {...register("aiEnabled")} className="h-4 w-4" />
           </Field>
-          {mode === "add" && (
-            <p className="text-muted-foreground text-[10px]">
-              Lifecycle State starts at Draft -- promote it after registration via Edit.
-            </p>
-          )}
           <p className="text-muted-foreground text-[10px]">
             The RTSP URL is generated automatically from Brand + IP + Port + Stream + credentials.
             It is never entered manually and never displayed.
@@ -654,24 +574,6 @@ function DeleteCameraModal({ camera, onClose }: { camera: Camera; onClose: () =>
   );
 }
 
-function LifecyclePill({ state, label }: { state: CameraLifecycleState; label: string }) {
-  const map: Record<CameraLifecycleState, string> = {
-    DRAFT: "text-muted-foreground border-border bg-black/20",
-    TESTING: "text-amber-glow border-amber-glow/50 bg-amber-glow/10",
-    VERIFIED: "text-primary border-primary/50 bg-primary/10",
-    OPERATIONAL: "text-success border-success/40 bg-success/10",
-    MAINTENANCE: "text-amber-glow border-amber-glow/50 bg-amber-glow/10",
-    DISABLED: "text-red-glow border-red-glow/50 bg-red-glow/10",
-  };
-  return (
-    <span
-      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-widest ${map[state]}`}
-    >
-      {label}
-    </span>
-  );
-}
-
 function FlagPill({ enabled }: { enabled: boolean }) {
   return (
     <span
@@ -683,6 +585,39 @@ function FlagPill({ enabled }: { enabled: boolean }) {
     >
       {enabled ? "On" : "Off"}
     </span>
+  );
+}
+
+/** Same visual language as FlagPill, but clickable -- AI is the one flag
+ * operators need to flip from the list itself (RM-12 Design Principle 3:
+ * AI never auto-starts, so this is the day-to-day on/off control, not
+ * buried in the Edit modal). Video visibility is unaffected either way --
+ * Live Monitoring's WebRTC stream keeps flowing regardless of this
+ * setting, only the overlays it carries change. */
+function AiTogglePill({
+  enabled,
+  disabled,
+  title,
+  onToggle,
+}: {
+  enabled: boolean;
+  disabled: boolean;
+  title: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      title={title}
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-widest disabled:cursor-not-allowed disabled:opacity-50 ${
+        enabled
+          ? "text-success border-success/40 bg-success/10 hover:bg-success/20"
+          : "text-muted-foreground border-border bg-black/20 hover:bg-black/30"
+      }`}
+    >
+      {enabled ? "On" : "Off"}
+    </button>
   );
 }
 

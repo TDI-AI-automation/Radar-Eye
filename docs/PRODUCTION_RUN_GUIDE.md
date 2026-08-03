@@ -175,22 +175,26 @@ table. Exact sequence to execute from the frontend:
 
 1. Log in.
 2. **Camera management**: register the physical camera (name, RTSP URL,
-   credentials, transport) via the UI's camera registration flow.
-3. Set the camera's lifecycle state to `OPERATIONAL` — within one
-   Desired State poll tick (~1s), confirm the DeepStream dashboard shows
-   `Camera`/`RTSP ✓ Alive` and the pipeline picks it up
-   (`Desired State synchronization: ('add_source:...', 'enable_ai:...')`
-   in the DeepStream terminal).
+   credentials, transport) via the UI's camera registration flow — it
+   connects automatically, with no intermediate lifecycle state to
+   promote through.
+3. Confirm the camera connects — within one Desired State poll tick
+   (~1s), confirm the DeepStream dashboard shows `Camera`/`RTSP ✓ Alive`
+   and the pipeline picks it up
+   (`Desired State synchronization: ('add_source:...',)` in the
+   DeepStream terminal).
 4. **Live camera view**: open it, confirm the UI reflects a connected
    camera (full video streaming is out of scope — Media Publisher ships
    with no default transport yet, see §7).
 5. **Disable AI**, confirm the dashboard/log show `disable_ai` converge
    within one poll tick; **Enable AI** again, confirm `enable_ai`
    converges the same way.
-6. **Camera lifecycle operations**: transition to `MAINTENANCE`, confirm
+6. **Delete/re-register cycle**: delete the camera, confirm
    `remove_source` converges cleanly (no crash — this exact operation is
-   what the `remove_source()` pad-lifecycle fix targets); transition back
-   to `OPERATIONAL`, confirm `add_source` reconverges.
+   what the `remove_source()` pad-lifecycle fix targets, and the runtime
+   fully releases its state — see `docs/CAMERA_RUNTIME_LIFECYCLE.md` §6);
+   re-register the same physical camera and confirm `add_source`
+   reconverges and it connects again without restarting any process.
 7. Trigger a real detection in front of the camera (per the test
    scenario you're validating against `docs/THREAT_ENGINE_SPEC.md`'s
    rule table) and follow it end to end using

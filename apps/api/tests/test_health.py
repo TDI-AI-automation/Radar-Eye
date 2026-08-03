@@ -143,7 +143,6 @@ async def test_health_rest_endpoints(db_session) -> None:
         Camera(
             name="cam-1",
             status="CONNECTED",
-            lifecycle_state="OPERATIONAL",
             fps=30.0,
             latency_ms=5.2,
         )

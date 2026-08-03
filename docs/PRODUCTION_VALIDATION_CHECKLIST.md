@@ -27,7 +27,7 @@ Date: __________  Operator: __________  Commit: __________
 | # | Check | Signal to look at | PASS/FAIL | Notes |
 |---|---|---|---|---|
 | 5 | Pipeline PLAYING | `DeepStream performance snapshot` logs appear; dashboard `Pipeline ✓ Alive` | ☐ | |
-| 6 | Dynamic source add/remove | Change a camera's `lifecycle_state` via the UI; within one Desired State poll tick (~1s) dashboard reflects the change, `Desired State synchronization: (...)` logged | ☐ | |
+| 6 | Dynamic source add/remove | Delete, then re-register, a camera via the UI; within one Desired State poll tick (~1s) dashboard reflects the change, `Desired State synchronization: (...)` logged | ☐ | |
 | 7 | No decoder errors | No `gst_nvinfer_logger` ERROR lines, no segfault in `journalctl -k` | ☐ | |
 
 ## PGIE

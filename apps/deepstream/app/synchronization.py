@@ -15,6 +15,12 @@ diffs, and dispatches the minimal set of actions -- reconciliation, not
 imperative one-shot execution: calling ``synchronize()`` repeatedly with an
 unchanged Desired State performs no additional work.
 
+A registered camera always wants an active source -- there is no Lifecycle
+state machine gating connectivity or AI eligibility (removed entirely;
+Camera Connectivity is always maintained once a camera is registered, and
+AI eligibility is ``ai_enabled`` alone). The only way a camera stops being
+desired is deletion, handled by the "orphaned sources" sweep below.
+
 Explicitly out of scope for Step 4 itself: broker-specific transport, Media
 Publisher, Recording, Streaming, distributed coordination.
 ``synchronize()`` takes no transport-specific arguments and is safe to call
@@ -43,53 +49,6 @@ from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.runtime_supervisor import RuntimeSupervisor
 
 logger = logging.getLogger(__name__)
-
-
-class LifecycleSourcePolicy(Protocol):
-    """Two independent lifecycle-driven decisions Camera Runtime needs,
-    centralized behind this seam -- per review feedback on the initial
-    Step 4 implementation -- so future lifecycle semantics can change
-    without touching ``DesiredStateSynchronizer``'s reconciliation engine
-    itself. The synchronizer depends on this policy; it does not embed
-    lifecycle-state judgment inline.
-
-    ``should_have_active_source`` (Camera Connectivity) and
-    ``should_allow_ai`` (AI Runtime) are deliberately separate methods,
-    not one combined check -- connectivity and AI eligibility are
-    independent concerns that happen to both be driven by lifecycle_state
-    today; a camera can be connected without being AI-eligible (the
-    common case), but never the reverse."""
-
-    def should_have_active_source(self, lifecycle_state: str) -> bool: ...
-
-    def should_allow_ai(self, lifecycle_state: str) -> bool: ...
-
-
-class DefaultLifecycleSourcePolicy:
-    """Every lifecycle state except DISABLED gets an active runtime
-    source -- Camera Connectivity is a Video-Management-layer concern,
-    always maintained once a camera is registered, independent of
-    whether AI is enabled or which lifecycle state the camera is
-    otherwise in (Operator Acceptance Testing finding: coupling source
-    existence to OPERATIONAL meant a camera never connected until fully
-    promoted, even though nothing about RTSP connectivity itself
-    requires that). DISABLED remains the one state where Camera Registry
-    explicitly wants the connection torn down.
-
-    AI eligibility stays exactly as before this change: only an
-    OPERATIONAL camera may run AI, regardless of ``ai_enabled`` --
-    RM-12 Design Principle 3 ("adding a camera must never auto-start
-    AI") applies here, to AI specifically, not to the source itself as
-    the prior revision of this policy conflated it with."""
-
-    _CONNECTABLE_STATES = frozenset({"DRAFT", "TESTING", "VERIFIED", "OPERATIONAL", "MAINTENANCE"})
-    _AI_ELIGIBLE_STATES = frozenset({"OPERATIONAL"})
-
-    def should_have_active_source(self, lifecycle_state: str) -> bool:
-        return lifecycle_state in self._CONNECTABLE_STATES
-
-    def should_allow_ai(self, lifecycle_state: str) -> bool:
-        return lifecycle_state in self._AI_ELIGIBLE_STATES
 
 
 class DesiredStateSource(Protocol):
@@ -132,7 +91,6 @@ class DesiredStateSynchronizer:
         pipeline: SynchronizablePipeline,
         bridge: AsyncBridge,
         runtime_supervisor: RuntimeSupervisor,
-        lifecycle_policy: LifecycleSourcePolicy | None = None,
         *,
         on_source_connected: Callable[[uuid.UUID], Awaitable[None]] | None = None,
     ) -> None:
@@ -140,7 +98,6 @@ class DesiredStateSynchronizer:
         self._pipeline = pipeline
         self._bridge = bridge
         self._runtime_supervisor = runtime_supervisor
-        self._lifecycle_policy = lifecycle_policy or DefaultLifecycleSourcePolicy()
         self._on_source_connected = on_source_connected
         """Optional, None-safe (same idiom as every other collaborator in
         this codebase) -- fires once a source this synchronizer itself
@@ -193,10 +150,9 @@ class DesiredStateSynchronizer:
                 actions.extend(await self._converge_one(desired))
 
             # Orphaned sources: active in the pipeline but the camera no
-            # longer appears in Camera Registry's Desired State at all (as
-            # opposed to merely transitioning to an inactive lifecycle
-            # state, handled above per-camera). Converges to the same
-            # conservative default.
+            # longer appears in Camera Registry's Desired State at all
+            # (deleted). This is now the *only* way a source is removed --
+            # a registered camera always wants an active source.
             for camera_id in self._pipeline.active_camera_ids():
                 if camera_id not in desired_by_id:
                     await self._remove_source(camera_id)
@@ -209,14 +165,12 @@ class DesiredStateSynchronizer:
 
     async def _converge_one(self, desired: DesiredCameraState) -> list[str]:
         actions: list[str] = []
-        should_be_active = self._lifecycle_policy.should_have_active_source(desired.lifecycle_state)
         is_active = self._pipeline.bin_for(desired.camera_id) is not None
 
-        if should_be_active and not is_active:
+        if not is_active:
             if desired.rtsp_url is None or desired.transport is None:
                 logger.warning(
-                    "Camera %s (%s) is not DISABLED but has no camera_stream_profiles "
-                    "row -- cannot add a source",
+                    "Camera %s (%s) has no camera_stream_profiles row -- " "cannot add a source",
                     desired.camera_id,
                     desired.name,
                 )
@@ -226,26 +180,14 @@ class DesiredStateSynchronizer:
                 is_active = True
                 if self._on_source_connected is not None:
                     await self._on_source_connected(desired.camera_id)
-        elif not should_be_active and is_active:
-            await self._remove_source(desired.camera_id)
-            actions.append(f"remove_source:{desired.camera_id}")
-            is_active = False
 
         if is_active:
-            # Connectivity (above) and AI eligibility (here) are
-            # independent decisions -- a camera can be connected without
-            # being AI-eligible; ai_should_run requires both the
-            # operator's explicit intent (ai_enabled) and lifecycle
-            # eligibility (should_allow_ai), never one alone.
-            ai_should_run = desired.ai_enabled and self._lifecycle_policy.should_allow_ai(
-                desired.lifecycle_state
-            )
-            if ai_should_run:
+            if desired.ai_enabled:
                 outcome = await self._runtime_supervisor.enable_ai(desired.camera_id)
             else:
                 outcome = await self._runtime_supervisor.disable_ai(desired.camera_id)
             if outcome.reason is None:  # None -- a real mutation just converged it
-                verb = "enable_ai" if ai_should_run else "disable_ai"
+                verb = "enable_ai" if desired.ai_enabled else "disable_ai"
                 actions.append(f"{verb}:{desired.camera_id}")
 
         self._recording_pending[desired.camera_id] = desired.recording_enabled

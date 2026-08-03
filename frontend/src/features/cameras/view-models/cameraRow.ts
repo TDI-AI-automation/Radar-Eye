@@ -1,4 +1,4 @@
-import type { Camera, CameraBrand, CameraLifecycleState } from "@/domain/models/Camera";
+import type { Camera, CameraBrand } from "@/domain/models/Camera";
 import type { CameraHealthDto } from "@/queries/useCameras";
 
 export type CameraRowStatus = "healthy" | "degraded" | "offline";
@@ -10,8 +10,6 @@ export interface CameraRowViewModel {
   brandLabel: string;
   ipAddress: string | null;
   location: string;
-  lifecycleState: CameraLifecycleState;
-  lifecycleLabel: string;
   aiEnabled: boolean;
   recordingEnabled: boolean;
   connectionStatus: Camera["status"];
@@ -49,8 +47,6 @@ export function buildCameraRowViewModel(
     brandLabel: brandLabel(camera.brand),
     ipAddress: camera.ipAddress,
     location: camera.location ?? "Unassigned",
-    lifecycleState: camera.lifecycleState,
-    lifecycleLabel: lifecycleLabel(camera.lifecycleState),
     aiEnabled: camera.aiEnabled,
     recordingEnabled: camera.recordingEnabled,
     connectionStatus: camera.status,
@@ -99,17 +95,4 @@ const BRAND_LABELS: Record<CameraBrand, string> = {
 
 function brandLabel(brand: CameraBrand | null): string {
   return brand ? BRAND_LABELS[brand] : "—";
-}
-
-const LIFECYCLE_LABELS: Record<CameraLifecycleState, string> = {
-  DRAFT: "Draft",
-  TESTING: "Testing",
-  VERIFIED: "Verified",
-  OPERATIONAL: "Operational",
-  MAINTENANCE: "Maintenance",
-  DISABLED: "Disabled",
-};
-
-function lifecycleLabel(state: CameraLifecycleState): string {
-  return LIFECYCLE_LABELS[state];
 }

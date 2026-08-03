@@ -1,11 +1,10 @@
 """Camera Registry service -- RM-12 (Bounded Contexts §4 / Camera Runtime
 Ownership Refinement).
 
-Owns camera registration and lifecycle-state transitions. Mirrors
-``services.incident_service.service.IncidentService.request_transition()``'s
-established shape exactly: a module-level transition table, a dedicated
-exception, one entry point -- not a second, divergent pattern invented for
-this domain.
+Owns camera registration. A registered camera has exactly two operator
+controls: AI Enable/Disable (``Camera.ai_enabled``) and Connect/
+Disconnect, which is implicit in registration/deletion -- there is no
+Lifecycle state machine here to transition through.
 
 Does not own: connection status (``Camera.status``, Observed state -- see
 ``apps.api.app.models.camera.Camera``'s docstring) -- that column is never
@@ -31,26 +30,9 @@ from apps.api.app.services.rtsp_url_generator import (
     generate_rtsp_url,
 )
 from shared.events.bus import EventBus
-from shared.events.payloads import CameraLifecycleChangedPayload, CameraRegisteredPayload
-from shared.events.types import CameraLifecycleChangedEvent, CameraRegisteredEvent
-from shared.schemas.camera import CameraBrand, CameraLifecycleState
-
-LIFECYCLE_TRANSITIONS: dict[str, frozenset[str]] = {
-    "DRAFT": frozenset({"TESTING", "DISABLED"}),
-    "TESTING": frozenset({"VERIFIED", "DRAFT", "DISABLED"}),
-    "VERIFIED": frozenset({"OPERATIONAL", "DISABLED"}),
-    "OPERATIONAL": frozenset({"MAINTENANCE", "DISABLED"}),
-    "MAINTENANCE": frozenset({"OPERATIONAL", "DISABLED"}),
-    "DISABLED": frozenset(),
-}
-"""RM-12 §10's Camera Lifecycle state machine, as data. ``DISABLED`` is
-terminal for this transition path -- "removed/archived" is a separate,
-not-yet-implemented concern (soft-delete), never a lifecycle transition
-back out of DISABLED."""
-
-
-class CameraLifecycleTransitionError(Exception):
-    """Raised for any transition not present in LIFECYCLE_TRANSITIONS."""
+from shared.events.payloads import CameraRegisteredPayload
+from shared.events.types import CameraRegisteredEvent
+from shared.schemas.camera import CameraBrand
 
 
 class CameraNameConflictError(Exception):
@@ -88,8 +70,8 @@ class CameraRegistryService:
         ai_enabled: bool = False,
         recording_enabled: bool = False,
     ) -> Camera:
-        """Create a new camera (lifecycle_state=DRAFT) plus its stream
-        profile, in one transaction. Raises CameraNameConflictError if
+        """Create a new camera plus its stream profile, in one
+        transaction. Raises CameraNameConflictError if
         ``name`` is already registered -- checked explicitly here (not left
         to the DB's unique constraint alone) so the router can return a
         precise 409 rather than a generic 500 on constraint violation.
@@ -123,7 +105,6 @@ class CameraRegistryService:
                 name=name,
                 location=location,
                 status="DISCONNECTED",
-                lifecycle_state="DRAFT",
                 ai_enabled=ai_enabled,
                 recording_enabled=recording_enabled,
             )
@@ -232,47 +213,7 @@ class CameraRegistryService:
             await self._calibrations.delete(calibration)
         await self._cameras.delete(camera)
 
-    async def transition_lifecycle(
-        self, camera: Camera, target_state: CameraLifecycleState
-    ) -> Camera:
-        """Single entry point for any lifecycle-state change. Idempotent:
-        a request whose target already holds is a no-op that still returns
-        200 with the current state (Implementation Precision Review,
-        Finding 1) -- but does NOT re-publish CameraLifecycleChangedEvent
-        in that case, since no state change actually occurred; the HTTP
-        response itself is the redelivery's confirmation."""
-        if camera.lifecycle_state == target_state:
-            return camera
-
-        allowed = LIFECYCLE_TRANSITIONS.get(camera.lifecycle_state, frozenset())
-        if target_state not in allowed:
-            raise CameraLifecycleTransitionError(
-                f"Cannot transition camera {camera.id} from "
-                f"{camera.lifecycle_state} to {target_state}"
-            )
-
-        previous_state = camera.lifecycle_state
-        camera.lifecycle_state = target_state
-        await self._session.flush()
-        # updated_at is server-computed (onupdate=func.now()) -- an UPDATE's
-        # onupdate value, unlike an INSERT's server_default, is not
-        # auto-refreshed into the Python object; explicit refresh() is
-        # required before _to_camera_schema() reads it back (same footgun
-        # already documented/fixed once in routers/cameras.py's PATCH route).
-        await self._session.refresh(camera)
-
-        await self._publish(
-            CameraLifecycleChangedEvent(
-                event_type="CameraLifecycleChangedEvent",
-                source="camera_registry",
-                payload=CameraLifecycleChangedPayload(
-                    camera_id=camera.id, previous_state=previous_state, new_state=target_state
-                ),
-            )
-        )
-        return camera
-
-    async def _publish(self, event: CameraRegisteredEvent | CameraLifecycleChangedEvent) -> None:
+    async def _publish(self, event: CameraRegisteredEvent) -> None:
         if self._bus is None:
             return
         await self._bus.publish(event)

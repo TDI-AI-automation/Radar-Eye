@@ -139,10 +139,10 @@ class DeepStreamPipeline:
         is the one hook Live Monitoring's WebRTC branch needs to build/
         tear down in lockstep with a camera's source, covering every
         removal path uniformly -- bus-message failure (_on_bus_message),
-        reconnect, and lifecycle-driven removal (DesiredStateSynchronizer
-        transitioning a camera to DISABLED or dropping it from Desired
-        State entirely) -- without DesiredStateSynchronizer or this class
-        needing any awareness of Live Monitoring itself."""
+        reconnect, and deletion-driven removal (DesiredStateSynchronizer
+        dropping a camera from Desired State entirely once it's deleted)
+        -- without DesiredStateSynchronizer or this class needing any
+        awareness of Live Monitoring itself."""
         self._nvstreamdemux: Any = None
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
@@ -516,9 +516,7 @@ class DeepStreamPipeline:
         """Every camera_id with a currently active source. RM-12 Camera
         Runtime Step 4: ``DesiredStateSynchronizer`` uses this to find
         sources that must be removed because their camera no longer
-        appears in Camera Registry's Desired State at all (not merely
-        transitioned to an inactive lifecycle state, which ``bin_for()``
-        alone already covers per-camera)."""
+        appears in Camera Registry's Desired State at all (deleted)."""
         return frozenset(self._sources.keys())
 
     def gst_pipeline(self) -> Any:

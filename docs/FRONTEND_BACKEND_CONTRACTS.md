@@ -117,8 +117,6 @@ PATCH /cameras/{camera_id}
 
 DELETE /cameras/{camera_id}
 
-PATCH /cameras/{camera_id}/lifecycle
-
 GET /cameras/{camera_id}/health
 
 GET /cameras/{camera_id}/calibration
@@ -134,10 +132,12 @@ and stream path -- the Add/Edit Camera form's only source of these
 defaults (apps.api.app.services.rtsp_url_generator).
 
 POST /cameras registers a new camera (Camera Registry, RM-12) -- creates
-both the camera record and its stream profile, initial lifecycle_state
-DRAFT. The operator supplies brand + IP + credentials + port/stream
-(port/stream optional, defaulting per brand), never a raw RTSP URL --
-the backend generates it and stores only the generated, encrypted URL.
+both the camera record and its stream profile; Camera Runtime picks it
+up and connects automatically, with no intermediate lifecycle state to
+promote through. The operator supplies brand + IP + credentials +
+port/stream (port/stream optional, defaulting per brand), never a raw
+RTSP URL -- the backend generates it and stores only the generated,
+encrypted URL.
 model (hardware model number, e.g. "DS-2CD2143G0-I") is accepted and
 stored alongside brand but is purely descriptive -- it plays no part in
 RTSP URL generation.
@@ -153,16 +153,15 @@ response or audit log entry.
 DELETE /cameras/{camera_id} removes a camera and its own setup data
 (stream profile, calibration history). Returns 409 if the camera has
 existing incidents, review items, or recordings -- that history is never
-cascade-deleted (Evidence Preservation); transition the camera to
-DISABLED instead to preserve it. Camera Runtime removes the corresponding
-pipeline source automatically (DesiredStateSynchronizer already reconciles
-toward "camera no longer in Desired State" -- no separate signal needed).
-
-PATCH /cameras/{camera_id}/lifecycle transitions a camera's lifecycle_state
-(DRAFT/TESTING/VERIFIED/OPERATIONAL/MAINTENANCE/DISABLED, RM-12 Camera
-Runtime Ownership Refinement) -- independent of connection status, which
-remains Camera Runtime's exclusively and is never accepted from this or
-any operator-facing request.
+cascade-deleted (Evidence Preservation); that history must be resolved
+or exported first. Camera Runtime removes the corresponding pipeline
+source and its entire runtime state automatically
+(DesiredStateSynchronizer already reconciles toward "camera no longer in
+Desired State" -- no separate signal needed). There are exactly two
+operator controls for a camera: Connect/Disconnect, implicit through
+registration/deletion, and AI Enable/Disable via PATCH
+/cameras/{camera_id}'s `ai_enabled` field -- no intermediate lifecycle
+state exists.
 
 ---
 

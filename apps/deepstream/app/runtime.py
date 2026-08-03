@@ -259,10 +259,9 @@ class DeepStreamRuntime:
 
         # RM-12 Camera Runtime v1: initial Desired State convergence
         # replaces the previous unconditional "add every registered camera"
-        # loop -- every camera except DISABLED gets an active source (Camera
-        # Connectivity is independent of lifecycle_state/ai_enabled), and AI
-        # is converged only for cameras that are both ai_enabled and
-        # OPERATIONAL (see synchronization.py's DefaultLifecycleSourcePolicy).
+        # loop -- every registered camera gets an active source (Lifecycle,
+        # which used to gate this, has been removed entirely), and AI is
+        # converged from ai_enabled alone.
         # desired_state_synchronizer's own on_source_connected hook (wired
         # above) already notifies RuntimeAdapter.on_camera_connected for
         # every source added by this call -- including these, the very
@@ -328,7 +327,7 @@ class DeepStreamRuntime:
     def _on_live_stream_source_removed(self, camera_id: uuid.UUID) -> None:
         """DeepStreamPipeline.remove_source()'s on_source_removed hook --
         the symmetric counterpart above, covering every removal path
-        uniformly (bus-message failure, reconnect, and lifecycle-driven
+        uniformly (bus-message failure, reconnect, and deletion-driven
         removal via DesiredStateSynchronizer) since all of them funnel
         through remove_source()."""
         self._bridge.schedule(self.live_stream_manager.remove_camera(camera_id))
@@ -506,10 +505,9 @@ class DeepStreamRuntime:
         GLib, _Gst = _import_glib()
         # self._policies is only pre-populated in start() for cameras
         # already active at startup -- a camera added later (the normal
-        # case now that Camera Connectivity is independent of lifecycle_state,
-        # not just for a camera newly promoted to OPERATIONAL as before)
-        # has no entry yet. Lazily create one here rather than requiring
-        # every add_source path to remember to do it.
+        # case: any registered camera) has no entry yet. Lazily create one
+        # here rather than requiring every add_source path to remember to
+        # do it.
         policy = self._policies.setdefault(
             source.camera_id,
             ReconnectPolicy(

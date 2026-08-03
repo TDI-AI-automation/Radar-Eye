@@ -251,9 +251,7 @@ class TestObservedStatePersistence:
     async def test_on_camera_connected_persists_status_and_last_seen(
         self, db_session, session_factory
     ) -> None:
-        camera = await CameraRepository(db_session).add(
-            Camera(name="cam-1", status="DISCONNECTED", lifecycle_state="DRAFT")
-        )
+        camera = await CameraRepository(db_session).add(Camera(name="cam-1", status="DISCONNECTED"))
         await db_session.commit()
         adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
 
@@ -272,9 +270,7 @@ class TestObservedStatePersistence:
     async def test_on_camera_reconnecting_increments_reconnect_count(
         self, db_session, session_factory
     ) -> None:
-        camera = await CameraRepository(db_session).add(
-            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
-        )
+        camera = await CameraRepository(db_session).add(Camera(name="cam-1", status="CONNECTED"))
         await db_session.commit()
         adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
 
@@ -290,9 +286,7 @@ class TestObservedStatePersistence:
     async def test_on_camera_disconnected_persists_status_and_reason(
         self, db_session, session_factory
     ) -> None:
-        camera = await CameraRepository(db_session).add(
-            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
-        )
+        camera = await CameraRepository(db_session).add(Camera(name="cam-1", status="CONNECTED"))
         await db_session.commit()
         adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
 
@@ -307,9 +301,7 @@ class TestObservedStatePersistence:
     async def test_persist_health_snapshot_writes_fps_and_latency(
         self, db_session, session_factory
     ) -> None:
-        camera = await CameraRepository(db_session).add(
-            Camera(name="cam-1", status="CONNECTED", lifecycle_state="OPERATIONAL")
-        )
+        camera = await CameraRepository(db_session).add(Camera(name="cam-1", status="CONNECTED"))
         await db_session.commit()
         adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
 

@@ -559,7 +559,17 @@ class CameraWebRtcBranch:
         self._annotate_probe_target = None
         self._renderer = None
 
-        for element in self._elements:
+        # Sink-to-source, the reverse of construction order: NULLing an
+        # upstream element (e.g. the queue right after the SGIE tee) while
+        # its downstream neighbors are still PLAYING can deadlock a
+        # streaming thread mid-push -- hardware-confirmed during repeated
+        # delete/re-register cycles (real hardware bug: the GLib main-loop
+        # thread wedged inside this exact loop, freezing every subsequent
+        # pipeline mutation, including unrelated cameras, since it is the
+        # only thread that services AsyncBridge.schedule_on_mainloop()).
+        # GStreamer's own application manual documents this ordering
+        # requirement when removing elements from a running pipeline.
+        for element in reversed(self._elements):
             element.set_state(Gst.State.NULL)
         for element in self._elements:
             self._pipeline.remove(element)

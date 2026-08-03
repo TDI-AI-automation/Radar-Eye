@@ -62,7 +62,6 @@ def _to_camera_schema(camera: Camera) -> CameraSchema:
         name=camera.name,
         location=camera.location,
         status=camera.status,  # type: ignore[arg-type]
-        lifecycle_state=camera.lifecycle_state,  # type: ignore[arg-type]
         ai_enabled=camera.ai_enabled,
         recording_enabled=camera.recording_enabled,
         created_at=camera.created_at,

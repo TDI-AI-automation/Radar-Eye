@@ -9,14 +9,6 @@
 
 export type CameraConnectionStatus = "CONNECTED" | "DISCONNECTED" | "RECONNECTING";
 
-export type CameraLifecycleState =
-  | "DRAFT"
-  | "TESTING"
-  | "VERIFIED"
-  | "OPERATIONAL"
-  | "MAINTENANCE"
-  | "DISABLED";
-
 export type CameraBrand = "HIKVISION" | "DAHUA" | "UNIVIEW" | "AXIS" | "HANWHA";
 
 export class Camera {
@@ -25,7 +17,6 @@ export class Camera {
     readonly name: string,
     readonly location: string | null,
     readonly status: CameraConnectionStatus,
-    readonly lifecycleState: CameraLifecycleState,
     readonly aiEnabled: boolean,
     readonly recordingEnabled: boolean,
     readonly brand: CameraBrand | null,

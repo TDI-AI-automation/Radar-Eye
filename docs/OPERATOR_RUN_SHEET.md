@@ -298,11 +298,14 @@ Manual Test Sequence
 
 The Cameras screen in this build only supports viewing/editing
 Name/Location for a camera that already exists — it has no "Add Camera"
-button, and no control for AI enable/disable or lifecycle state. Those
-three actions are done with curl against the Backend API terminal in
-Section 5, using the same login credential. The DeepStream Runtime
-terminal (Section 6) and the dashboard (Section 8) are where you confirm
-each action actually took effect.
+button, and no control for AI enable/disable. Those actions are done
+with curl against the Backend API terminal in Section 5, using the same
+login credential. There is no intermediate lifecycle state: a
+registered camera connects automatically, and the only operator
+controls are registration/deletion (implicit connect/disconnect) and AI
+Enable/Disable. The DeepStream Runtime terminal (Section 6) and the
+dashboard (Section 8) are where you confirm each action actually took
+effect.
 
 1.
 Get a login token.
@@ -322,28 +325,19 @@ curl -s -X POST http://127.0.0.1:8000/cameras -H "Authorization: Bearer $TOKEN" 
 
 Expected result:
 
-JSON response with "success":true and "lifecycle_state":"DRAFT".
-Reload the Cameras page in the browser — the camera now appears in the
-list (name, location, status DISCONNECTED).
+JSON response with "success":true. Reload the Cameras page in the
+browser — the camera now appears in the list (name, location, status
+DISCONNECTED, then CONNECTED within one Desired State poll tick as
+Camera Runtime picks it up automatically — no lifecycle promotion step
+required).
 
 Save the camera_id from the response for the next steps:
 
 CAMERA_ID="<paste camera_id from the response here>"
 
 3.
-Advance the camera through the lifecycle to OPERATIONAL. This is a
-three-step state machine — DRAFT can only go to TESTING, TESTING can
-only go to VERIFIED or back to DRAFT, VERIFIED can only go to
-OPERATIONAL. Attempting to jump straight to OPERATIONAL fails.
-
-curl -s -X PATCH "http://127.0.0.1:8000/cameras/$CAMERA_ID/lifecycle" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"target_state":"TESTING"}'
-curl -s -X PATCH "http://127.0.0.1:8000/cameras/$CAMERA_ID/lifecycle" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"target_state":"VERIFIED"}'
-curl -s -X PATCH "http://127.0.0.1:8000/cameras/$CAMERA_ID/lifecycle" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"target_state":"OPERATIONAL"}'
-
-Expected result:
-
-Each response has "success":true and the matching "lifecycle_state".
-Within 1 second, the DeepStream Runtime terminal (Section 6) prints:
+Confirm the camera connected automatically. Within 1 second of
+registration, the DeepStream Runtime terminal (Section 6) prints:
 
 {"asctime": "...", "levelname": "INFO", "name": "apps.deepstream.app.runtime", "message": "Desired State synchronization: ('add_source:<camera_id>',)"}
 
@@ -383,22 +377,30 @@ Expected result:
 Same as step 4.
 
 7.
-Take the camera out of service, then back in.
+Delete the camera, then re-register the same physical camera (same
+name/RTSP credentials) — this is the normal operator workflow for
+taking a camera out of service and back in, and the runtime must treat
+the newly registered camera as a completely new runtime instance with
+no leftover state from the deleted one.
 
-curl -s -X PATCH "http://127.0.0.1:8000/cameras/$CAMERA_ID/lifecycle" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"target_state":"MAINTENANCE"}'
-curl -s -X PATCH "http://127.0.0.1:8000/cameras/$CAMERA_ID/lifecycle" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"target_state":"OPERATIONAL"}'
+curl -s -X DELETE "http://127.0.0.1:8000/cameras/$CAMERA_ID" -H "Authorization: Bearer $TOKEN"
+curl -s -X POST http://127.0.0.1:8000/cameras -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"gate-camera-01","location":"Front Gate","rtsp_url":"rtsp://192.168.68.10:554/Streaming/Channels/101","username":"admin","password":"REPLACE_ME","transport":"tcp"}'
+CAMERA_ID="<paste the new camera_id from the second response here>"
 
 Expected result:
 
 DeepStream Runtime terminal prints, in order:
 
-{"asctime": "...", "message": "Desired State synchronization: ('remove_source:<camera_id>',)"}
-{"asctime": "...", "message": "Desired State synchronization: ('add_source:<camera_id>', 'enable_ai:<camera_id>')"}
+{"asctime": "...", "message": "Desired State synchronization: ('remove_source:<old_camera_id>',)"}
+{"asctime": "...", "message": "Desired State synchronization: ('add_source:<new_camera_id>',)"}
 
 No Traceback, no CRITICAL line, no gap in the periodic performance
-snapshot lines before/after. This is the exact operation the
-remove_source() pad-lifecycle fix targets — a crash here is a real
-regression, not a flake.
+snapshot lines before/after. Live Monitoring works again for the new
+camera_id without restarting any process. This is the exact operation
+the remove_source() pad-lifecycle fix and the on_source_connected
+convergence-loop fix (see docs/CAMERA_RUNTIME_LIFECYCLE.md §6) target —
+a crash, or the camera staying stuck in Reconnecting/Disconnected, is a
+real regression, not a flake.
 
 8.
 Point a real object matching your test scenario at the camera.

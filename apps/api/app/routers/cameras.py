@@ -11,7 +11,6 @@ Refinement.
   - GET /cameras/{camera_id}/calibration
   - PATCH /cameras/{camera_id} (Phase 4, admin-only, audit-logged)
   - POST /cameras (Camera Registry, admin-only, audit-logged)
-  - PATCH /cameras/{camera_id}/lifecycle (Camera Registry, admin-only, audit-logged)
   - DELETE /cameras/{camera_id} (admin-only, audit-logged)
 
 ``GET /cameras/{camera_id}/health`` already exists (RM-09, routers/health.py)
@@ -20,11 +19,16 @@ Refinement.
 ``camera_stream_profiles`` for whichever connection fields are present,
 via ``CameraRegistryService.update_connection()``.
 
+A registered camera has exactly two operator controls: AI Enable/Disable
+(``ai_enabled``, this router) and Connect/Disconnect, which is implicit
+in registration/deletion, not a separate state -- there is no Lifecycle
+state machine to PATCH.
+
 Every read route requires a valid access token (any authenticated role) per
 docs/RM-12_IMPLEMENTATION_PLAN.md Phase 3 -- no per-route role gate; every
 write route additionally requires the ``admin`` role, matching the existing
-PATCH route's precedent (camera registration/lifecycle is at least as
-sensitive as a name/location edit).
+PATCH route's precedent (camera registration is at least as sensitive as
+a name/location edit).
 """
 
 from __future__ import annotations
@@ -57,11 +61,7 @@ from apps.api.app.security.dependencies import (
     require_role,
 )
 from apps.api.app.security.encryption import get_credential_encryption_provider
-from apps.api.app.services.camera_registry import (
-    CameraLifecycleTransitionError,
-    CameraNameConflictError,
-    CameraRegistryService,
-)
+from apps.api.app.services.camera_registry import CameraNameConflictError, CameraRegistryService
 from apps.api.app.services.rtsp_url_generator import (
     brand_label,
     default_port_for_brand,
@@ -74,7 +74,6 @@ from shared.schemas.camera import (
     CameraBrandInfoSchema,
     CameraCalibrationSchema,
     CameraCreateRequestSchema,
-    CameraLifecycleUpdateRequestSchema,
     CameraSchema,
     CameraUpdateRequestSchema,
     WebRtcAnswerResponseSchema,
@@ -97,7 +96,6 @@ def _to_camera_schema(camera: Camera, profile: CameraStreamProfile | None) -> Ca
         name=camera.name,
         location=camera.location,
         status=camera.status,  # type: ignore[arg-type]
-        lifecycle_state=camera.lifecycle_state,  # type: ignore[arg-type]
         ai_enabled=camera.ai_enabled,
         recording_enabled=camera.recording_enabled,
         brand=profile.brand if profile is not None else None,  # type: ignore[arg-type]
@@ -224,42 +222,6 @@ async def register_camera(
     return ApiResponse(success=True, data=response_data)
 
 
-@router.patch("/cameras/{camera_id}/lifecycle", response_model=ApiResponse[CameraSchema])
-async def update_camera_lifecycle(
-    camera_id: uuid.UUID,
-    body: CameraLifecycleUpdateRequestSchema,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    audit_logger: Annotated[AuditLogger, Depends(get_audit_logger)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    bus: Annotated[EventBus, Depends(get_event_bus)],
-    user: Annotated[DecodedToken, Depends(require_role(ROLE_ADMIN))],
-) -> ApiResponse[CameraSchema]:
-    camera = await CameraRepository(session).get(camera_id)
-    if camera is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera not found")
-
-    service = CameraRegistryService(session, get_credential_encryption_provider(settings), bus)
-    previous_state = camera.lifecycle_state
-    try:
-        camera = await service.transition_lifecycle(camera, body.target_state)
-    except CameraLifecycleTransitionError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-
-    if camera.lifecycle_state != previous_state:
-        await audit_logger.record(
-            session,
-            actor_user_id=user.user_id,
-            action="CHANGE_CAMERA_LIFECYCLE",
-            resource_type="camera",
-            resource_id=str(camera.id),
-            details={"previous_state": previous_state, "new_state": camera.lifecycle_state},
-        )
-    profile = await CameraStreamProfileRepository(session).get_by_camera_id(camera.id)
-    response_data = _to_camera_schema(camera, profile)
-    await session.commit()
-    return ApiResponse(success=True, data=response_data)
-
-
 @router.patch("/cameras/{camera_id}", response_model=ApiResponse[CameraSchema])
 async def update_camera(
     camera_id: uuid.UUID,
@@ -338,7 +300,7 @@ async def delete_camera(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Cannot delete a camera with existing incidents, review items, or recordings -- "
-            "transition it to DISABLED instead to preserve that history.",
+            "that history must be resolved or exported first.",
         ) from exc
 
     await audit_logger.record(

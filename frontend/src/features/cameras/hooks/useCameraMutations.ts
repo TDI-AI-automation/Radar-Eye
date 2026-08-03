@@ -1,10 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  createCamera,
-  deleteCamera,
-  updateCamera,
-  updateCameraLifecycle,
-} from "@/api/endpoints/cameras";
+import { createCamera, deleteCamera, updateCamera } from "@/api/endpoints/cameras";
 import { toCameraDomain } from "@/domain/mappers/cameraMapper";
 import { queryKeys } from "@/queries/queryKeys";
 
@@ -41,29 +36,10 @@ export function useCreateCamera() {
   });
 }
 
-/** PATCH /cameras/{id}/lifecycle -- admin-only. Transitions lifecycle_state
- * (RM-12 §10's state machine); the backend rejects an illegal transition
- * with 422, surfaced to the caller as a thrown AppError. */
-export function useUpdateCameraLifecycle() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (args: {
-      cameraId: string;
-      body: Parameters<typeof updateCameraLifecycle>[1];
-    }) => {
-      const dto = await updateCameraLifecycle(args.cameraId, args.body);
-      return dto ? toCameraDomain(dto) : null;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cameras.list() });
-    },
-  });
-}
-
 /** DELETE /cameras/{id} -- admin-only. 409s (AppError) if the camera has
  * existing incidents/review items/recordings -- that history is never
- * cascade-deleted; callers should surface that as "transition to DISABLED
- * instead" rather than retrying. */
+ * cascade-deleted; callers should surface that as "resolve or export that
+ * history first" rather than retrying. */
 export function useDeleteCamera() {
   const queryClient = useQueryClient();
   return useMutation({

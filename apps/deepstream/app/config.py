@@ -94,9 +94,9 @@ class DeepStreamSettings(BaseModel):
     already-implemented DesiredStateSynchronizer.synchronize() after
     startup. synchronization.py's own docstring is explicit that Step 4
     deliberately did not wire any automatic trigger for it -- this is
-    temporary polling infrastructure so UI-driven lifecycle/ai_enabled
-    changes reach the running pipeline without a process restart, until a
-    later milestone replaces it with event-driven synchronization."""
+    temporary polling infrastructure so UI-driven ai_enabled changes reach
+    the running pipeline without a process restart, until a later
+    milestone replaces it with event-driven synchronization."""
 
     observed_state_flush_interval_seconds: float = 3.0
     """How often Observed State's high-frequency metrics (fps, latency_ms)
