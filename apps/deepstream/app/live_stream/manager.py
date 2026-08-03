@@ -2,8 +2,8 @@
 
 Mirrors ``visualization/manager.py``'s own "nothing outside this package
 touches internal collaborators" rule: ``runtime.py`` only ever calls
-``add_camera``/``remove_camera``/``start``/``stop``/``handle_offer``
-here.
+``add_camera``/``remove_camera``/``select_input``/``start``/``stop``/
+``handle_offer`` here.
 """
 
 from __future__ import annotations
@@ -14,11 +14,13 @@ import uuid
 from typing import Any
 
 from apps.deepstream.app.bridge import AsyncBridge
-from apps.deepstream.app.config import LiveStreamSettings
-from apps.deepstream.app.live_stream.branch import CameraWebRtcBranch
+from apps.deepstream.app.config import LiveStreamSettings, VisualizationSettings
+from apps.deepstream.app.instrumentation import PerformanceInstrumentation
+from apps.deepstream.app.live_stream.branch import CameraWebRtcBranch, StreamInput
 from apps.deepstream.app.live_stream.consumer import BitstreamAppsrcBridge
 from apps.deepstream.app.live_stream.signaling_server import LiveStreamSignalingServer
 from apps.deepstream.app.media_publisher.bitstream import BitstreamPublisher
+from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,22 @@ class LiveStreamManager:
         bridge: AsyncBridge,
         loop: asyncio.AbstractEventLoop,
         settings: LiveStreamSettings,
+        visualization_settings: VisualizationSettings,
+        track_annotations: TrackAnnotationRegistry,
+        instrumentation: PerformanceInstrumentation | None,
+        streammux_width: int,
+        streammux_height: int,
     ) -> None:
         self._pipeline = pipeline
         self._bitstream_publisher = bitstream_publisher
         self._bridge = bridge
         self._loop = loop
         self._settings = settings
+        self._visualization_settings = visualization_settings
+        self._track_annotations = track_annotations
+        self._instrumentation = instrumentation
+        self._width = streammux_width
+        self._height = streammux_height
         self._appsrc_bridge = BitstreamAppsrcBridge()
         self._branches: dict[uuid.UUID, CameraWebRtcBranch] = {}
         self._signaling_server: LiveStreamSignalingServer | None = None
@@ -70,11 +82,26 @@ class LiveStreamManager:
         if not self._settings.enabled or camera_id in self._branches:
             return
 
+        sgie_tee = self._pipeline.sgie_tee()
+        if sgie_tee is None:
+            logger.warning(
+                "Live Monitoring: no SGIE tee available (build() not called with "
+                "live_stream_enabled=True?) -- camera %s will have no video branch",
+                camera_id,
+            )
+            return
+
         branch = CameraWebRtcBranch(
             self._pipeline.gst_pipeline(),
+            sgie_tee,
             camera_id,
             camera_name,
+            streammux_width=self._width,
+            streammux_height=self._height,
             live_settings=self._settings,
+            visualization_settings=self._visualization_settings,
+            track_annotations=self._track_annotations,
+            instrumentation=self._instrumentation,
             appsrc_bridge=self._appsrc_bridge,
             bridge=self._bridge,
             loop=self._loop,
@@ -117,6 +144,15 @@ class LiveStreamManager:
             logger.exception(
                 "Live Monitoring failed to tear down WebRTC branch for camera %s", camera_id
             )
+
+    def select_input(self, camera_id: uuid.UUID, target: StreamInput) -> None:
+        """Called from RuntimeSupervisor._set_valve's own
+        schedule_on_mainloop callback -- already running on the GLib
+        thread, so this is a direct, synchronous call, not a second
+        schedule."""
+        branch = self._branches.get(camera_id)
+        if branch is not None:
+            branch.select_input(target)
 
     async def handle_offer(self, camera_id: uuid.UUID, sdp_offer_text: str) -> str:
         branch = self._branches.get(camera_id)

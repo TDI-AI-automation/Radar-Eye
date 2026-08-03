@@ -53,6 +53,7 @@ from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
+from apps.deepstream.app.live_stream.branch import StreamInput
 from apps.deepstream.app.live_stream.manager import LiveStreamManager
 from apps.deepstream.app.media_publisher.media_publisher import MediaPublisher
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
@@ -194,17 +195,29 @@ class DeepStreamRuntime:
             bridge=self._bridge,
             loop=loop,
             settings=live_stream,
+            visualization_settings=visualization,
+            track_annotations=self.visualization_manager.track_annotations,
+            instrumentation=self._instrumentation,
+            streammux_width=settings.streammux_width,
+            streammux_height=settings.streammux_height,
         )
         """Live Monitoring's permanent video delivery path -- see
-        apps/deepstream/app/live_stream/__init__.py. Stage B: transport
-        only, one input (the camera's original bitstream via
-        MediaPublisher's BitstreamPublisher) -- no AI/overlay wiring, no
-        on_valve_changed hook. A future stage adds a second (annotated)
-        input and the runtime translation that selects between them."""
+        apps/deepstream/app/live_stream/__init__.py. Stage C: two inputs
+        (input A: the camera's original bitstream via MediaPublisher's
+        BitstreamPublisher; input B: the AI pipeline's own already-
+        produced annotated output, tapped off the shared SGIE tee and
+        encoded independently) -- input-selector picks between them,
+        driven by RuntimeSupervisor's AI valve state via
+        _select_stream_source below. Reuses VisualizationManager's
+        already-live TrackAnnotationRegistry (fed by
+        ThreatEngineRuntimeAdapter on every frame regardless of
+        Visualization's own enabled flag) -- no new overlay-rendering
+        mechanism."""
         self.runtime_supervisor = RuntimeSupervisor(
             self._pipeline,
             self._bridge,
             ConcurrentEnableLimiter(max_concurrent=settings.streammux_batch_size),
+            on_valve_changed=self._select_stream_source,
         )
         self._desired_state_reader = DesiredStateReader(session_factory, encryption)
         self.desired_state_synchronizer = DesiredStateSynchronizer(
@@ -314,6 +327,18 @@ class DeepStreamRuntime:
         removal via DesiredStateSynchronizer) since all of them funnel
         through remove_source()."""
         self._bridge.schedule(self.live_stream_manager.remove_camera(camera_id))
+
+    def _select_stream_source(self, camera_id: uuid.UUID, ai_active: bool) -> None:
+        """RuntimeSupervisor's on_valve_changed hook -- the one place
+        allowed to translate AI-eligibility state into Live Streaming's
+        own, semantics-free StreamInput vocabulary (see
+        live_stream/branch.py's StreamInput docstring). Fires already on
+        the GLib thread (RuntimeSupervisor._set_valve's own
+        schedule_on_mainloop callback), so live_stream_manager.select_input
+        is called directly, not scheduled again."""
+        self.live_stream_manager.select_input(
+            camera_id, StreamInput.B if ai_active else StreamInput.A
+        )
 
     def _on_health_snapshot(self, camera_id: uuid.UUID, status: Any, fps: float | None) -> None:
         """HeartbeatScheduler's on_health_snapshot hook -- fires every
