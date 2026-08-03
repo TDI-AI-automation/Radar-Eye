@@ -49,6 +49,20 @@ class ThreatEngineSettings(BaseModel):
     enabled: bool
 
 
+class CorsSettings(BaseModel):
+    """Origins the browser-facing frontend (radar-eye-command) is allowed
+    to call this API from. Structural, not secret, so it lives in
+    configs/settings.yaml like other deployment-shaped config -- unlike
+    AuthSettings/DatabaseSettings there's no secret value here to keep out
+    of the file. Defaults cover the frontend's own documented local dev
+    setup (src/api/instance.ts / src/ws/connection.ts default to
+    localhost:8000 for the API; the frontend's `@lovable.dev/vite-tanstack-
+    config` dev server pins port 8080 in-sandbox, per its own
+    validatePort()) so a fresh checkout works without editing YAML."""
+
+    allowed_origins: list[str] = ["http://localhost:8080", "http://127.0.0.1:8080"]
+
+
 class AuthSettings(BaseModel):
     """JWT signing/expiry configuration (RM-12, docs/RM-12_ARCHITECTURE.md
     §3.2). ``jwt_secret`` is environment-only, like ``encryption_key`` --
@@ -85,6 +99,7 @@ class Settings(BaseModel):
     database: DatabaseSettings
     recording: RecordingSettings
     threat_engine: ThreatEngineSettings
+    cors: CorsSettings
     auth: AuthSettings
     encryption_key: SecretStr
     log_level: str
@@ -130,6 +145,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         database=database,
         recording=RecordingSettings(**raw.get("recording", {})),
         threat_engine=ThreatEngineSettings(**raw.get("threat_engine", {})),
+        cors=CorsSettings(**raw.get("cors", {})),
         auth=auth,
         encryption_key=env.encryption_key,
         log_level=env.log_level,
