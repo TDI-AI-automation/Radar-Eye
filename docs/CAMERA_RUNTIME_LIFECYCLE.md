@@ -7,6 +7,16 @@ as it exists today (`apps/deepstream/app/main.py` → `DeepStreamRuntime` in
 defect was fixed. Not user documentation — this is the "read this instead
 of the source" document for a new engineer joining the subsystem.
 
+**Migration in progress (ADR-028, "Media Architecture Reset"):** camera
+ingestion and Live Streaming/WebRTC are being extracted out of this
+runtime into independent processes — see `docs/DEEPSTREAM_PIPELINE_SPEC.md`'s
+Pipeline Overview/Stage 1/Stage 1.5 for the target state. This document
+still accurately describes the runtime as it exists *today*, mid-migration;
+sections describing camera source-bin construction, the bitstream tee,
+and `live_stream/` will be rewritten as each migration phase lands.
+Section 7's superseded bullet is marked below rather than silently
+removed, to keep the historical record of what was decided and why.
+
 ---
 
 ## 1. Startup Sequence
@@ -358,10 +368,20 @@ redesign, just where new work should attach:
 - **Recording** — a new Tier 1 (and/or Tier 2) consumer registered with
   `MediaPublisher`, exactly like any other subscriber; no pipeline
   topology change needed.
-- **RTSP/WebRTC streaming to the frontend** — likewise a new Tier 1/Tier
+- ~~**RTSP/WebRTC streaming to the frontend** — likewise a new Tier 1/Tier
   2 consumer; Media Publisher was built with zero default subscribers
   specifically so a real transport can be added without touching the
-  publisher lifecycle itself.
+  publisher lifecycle itself.~~ **Superseded by ADR-028.** This
+  direction was followed (`apps/deepstream/app/live_stream/`, tapping
+  `MediaPublisher`'s bitstream tee, sharing this runtime's one
+  `Gst.Pipeline`) and subsequently found to be the direct cause of a
+  real production defect: live video became architecturally hostage to
+  AI model-loading time, since the shared pipeline's state-change walk
+  processes every child element serially. ADR-028 reverses this
+  direction — Live Streaming is now an independent process, subscribing
+  to a locally re-published copy of the camera's stream, never
+  attached to this runtime's `MediaPublisher`/`Gst.Pipeline` at all.
+  See `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5.
 - **Event-driven Desired State updates** — replacing §1.3's temporary
   poll loop. `DesiredStateSynchronizer.synchronize()` already "takes no
   transport-specific arguments and is safe to call from anywhere" (its

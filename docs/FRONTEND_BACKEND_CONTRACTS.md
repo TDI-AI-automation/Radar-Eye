@@ -57,6 +57,51 @@ Purpose:
 
 Real-time operational monitoring.
 
+## WebRTC
+
+POST /cameras/{camera_id}/webrtc/offer
+
+Request:
+
+{
+  "sdp": "...",
+  "type": "offer"
+}
+
+Response:
+
+{
+  "sdp": "...",
+  "type": "answer"
+}
+
+Purpose:
+
+Live video delivery. The browser sends one SDP offer per
+`RTCPeerConnection`; this route returns the SDP answer. Once
+negotiated, media flows directly between the browser and whichever
+process owns Live Streaming — never through this route, and never
+through the API service at all.
+
+Backend ownership (ADR-028):
+
+This route proxies the offer/answer exchange to the **Live Streaming
+Service** (an independent process — see `docs/DEEPSTREAM_PIPELINE_SPEC.md`
+Stage 1.5), loopback-only, never network-exposed directly. The frontend
+has no awareness of, and no dependency on, which backend process
+answers this route — `WebRtcVideoProvider`'s contract is exactly the
+request/response shape above, nothing more.
+
+Channels:
+
+Two independent products exist behind this same route shape, selected
+by which camera/channel the operator is viewing — "Live View" (the
+camera's original stream, always available, never delayed by AI) and
+"AI Streaming" (DeepStream's annotated output, available once AI is
+enabled and DeepStream has finished initializing for that camera). The
+browser never sees "raw," "annotated," or "AI" in this contract; it
+only ever requests video for a camera and receives it.
+
 ---
 
 # Incident Center

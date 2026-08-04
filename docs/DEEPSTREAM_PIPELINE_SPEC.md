@@ -10,56 +10,73 @@ This document is the authoritative specification for all DeepStream processing s
 
 # Pipeline Overview
 
-RTSP Camera
-    ↓
-Source Bin
-    ↓
-StreamMux
-    ↓
-Primary GIE (Detector)
-    ↓
-NvDCF Tracker
-    ↓
-Secondary GIE (Uniform Classifier)
-    ↓
-[fork: tee — visualization.enabled gates whether this fork exists at all]
-    ├── Inference Path (always present)
-    │       ↓
-    │   Distance Estimation
-    │       ↓
-    │   Threat Engine
-    │       ↓
-    │   Incident Service
-    │       ↓
-    │   Recording Service
-    │       ↓
-    │   Event Bus
-    │       ↓
-    │   API Service
-    │       ↓
-    │   Frontend
-    │
-    └── Visualization Path (optional, RM-11.SIV — see Stage 5.5)
-            ↓
-        OSD Overlay (NvDsDisplayMeta)
-            ↓
-        H.264 Encode
-            ↓
-        RTSP Output
-            ↓
-        Operator (VLC / any RTSP client)
+**Media Architecture Reset (ADR-028): Camera Ingestion is not part of
+DeepStream.** DeepStream is one of several independent consumers of a
+camera's encoded stream, not its owner. Everything below Stage 1 that
+used to be described as "the DeepStream pipeline" is DeepStream's own
+internal AI pipeline only — Camera Ingestion, Live Streaming, and
+Recording are separate processes/services, each independently
+subscribing to Stage 1's output.
 
-The fork point is downstream of Secondary GIE and downstream of the only
-metadata-extraction pass (`RuntimeAdapter`, which runs off a pad probe
-before the fork) — the Visualization Path never re-runs inference, never
-re-parses `NvDsBatchMeta`, and cannot affect what the Inference Path
-receives. When `visualization.enabled: false` (default), the fork does not
-exist — Secondary GIE links directly to the pipeline terminator, identical
-to pre-RM-11.SIV-visualization behavior.
+```
+Camera
+    ↓
+RTSP / H.264
+    ↓
+Stage 1: Camera Ingestion Service (rtspsrc → depay → h264parse)
+    ↓
+Encoded Split — every subsystem below subscribes independently,
+                 to a locally re-published copy, never to the camera
+                 directly (see Stage 1's own section for why)
+    ├── Stage 1.5: Live Streaming Service
+    │       ↓
+    │   WebRTC → Browser (Live View channel)
+    │
+    ├── DeepStream (Stages 2-5.5: AI pipeline)
+    │       ↓
+    │   NVDEC → StreamMux → Primary GIE → NvDCF Tracker →
+    │   Secondary GIE → Distance Estimation → Threat Engine →
+    │   Incident Service → Event Bus → API Service → Frontend
+    │       │
+    │       └── OSD Overlay → H.264 Encode → re-published locally as
+    │           "AI Streaming" → picked up by Stage 1.5's second,
+    │           independent WebRTC channel (see Stage 5.5)
+    │
+    └── Stage 9: Recording Service
+            ↓
+        Continuous segments (independent of AI/Incident) +
+        incident-triggered event clips (via Incident Service, as before)
+```
+
+DeepStream's fork (downstream of Secondary GIE, downstream of the only
+metadata-extraction pass, `RuntimeAdapter`) is unchanged in shape — the
+AI Streaming branch never re-runs inference, never re-parses
+`NvDsBatchMeta`, and cannot affect the Inference Path. What changed is
+everything *above* DeepStream: it no longer owns the camera connection,
+Live Streaming is never inside its process, and its own encoded output
+is one of several independent local publishers, not a direct WebRTC
+peer connection.
+
+**Governing principle: every media representation exists exactly
+once.** The camera's original encoded H.264 exists once (Stage 1).
+DeepStream's decoded NVMM frame exists once, inside DeepStream only.
+DeepStream's OSD-annotated encoded frame exists once (Stage 5.5). Every
+subsystem consumes one of those existing representations by
+subscribing to it; no subsystem creates another copy of a
+representation that already exists simply because it's convenient.
+This is what keeps GPU/CPU/network cost bounded as Live Streaming,
+Recording, and future analytics all attach to the same small set of
+canonical streams.
 
 ---
 
 # Stage 1: Camera Ingestion
+
+Owner:
+
+**Camera Ingestion Service** — an independent process. Never DeepStream
+(ADR-028). This is the one and only subsystem that opens a real RTSP
+connection to the physical camera.
 
 Input:
 
@@ -71,35 +88,102 @@ Camera Count:
 
 Deployment Target:
 
-- 1 × Jetson AGX Orin 32GB
+- 1 × Jetson AGX Orin 32GB (co-located with every other service, single
+  node, per the project's deployment target — "independent process"
+  means process/ownership isolation, not separate hardware)
 
 Output:
 
-- GPU Decoded Frames
+- The camera's original, unmodified encoded H.264 access units, exactly
+  once per camera — republished locally (loopback-only RTSP re-server,
+  one per camera) for every subsystem below to consume independently.
+  No subsystem holds its own connection to the physical camera.
+
+Why one connection, republished, rather than one per consumer:
+
+Empirically confirmed on this deployment's hardware: the physical
+camera has a low concurrent-RTSP-session tolerance (observed refusing
+new connections under connection churn, while still answering ICMP
+ping). One upstream connection, many local subscribers, is a hard
+requirement of this specific hardware, not a preference.
 
 Requirements:
 
 - Reconnect automatically
 - Detect camera failures
 - Emit CameraDisconnectedEvent
+- Never decode, never touch NVDEC/CUDA/TensorRT — decode is DeepStream's
+  concern alone (Stage 2)
 
 ---
 
-# Stage 2: StreamMux
+# Stage 1.5: Live Streaming Service
+
+Owner:
+
+**Live Streaming Service** — an independent process. Never DeepStream
+(ADR-028).
+
+Purpose:
+
+Deliver encoded H.264 to the operator's browser over WebRTC. Two
+independent channels per camera, each a plain local RTSP subscriber:
+
+- **Live View**: subscribes to Stage 1's republished output directly.
+  No NVDEC, no inference, no TensorRT, no CUDA preprocessing, no
+  dependency on AI state or DeepStream being alive at all. Lowest
+  latency, never delayed by AI initialization or AI failure.
+- **AI Streaming**: subscribes to DeepStream's own republished,
+  OSD-annotated output (Stage 5.5). Independent of the Live View
+  channel — losing this channel (e.g. DeepStream down) never affects
+  Live View.
+
+Chain (per channel):
+
+`rtspsrc → depay → rtph264pay → webrtcbin`. No decode, no re-encode —
+whichever upstream (Stage 1 or Stage 5.5) already produced the encoded
+bytestream is passed straight to the browser.
+
+Startup independence:
+
+Comes up the moment Stage 1's endpoint for a camera is reachable —
+never waits on DeepStream's model-loading time (see ADR-028's Problem
+statement for the defect this fixes).
+
+Failure isolation:
+
+DeepStream crashing takes down only the AI Streaming channel; Live View
+is unaffected. Live Streaming Service crashing affects only browser
+delivery — AI, Recording, and Camera Ingestion are unaffected.
+
+---
+
+# Stage 2: Decode + StreamMux
+
+Owner:
+
+DeepStream. This is DeepStream's own first step -- a plain `rtspsrc`
+subscription to Stage 1's locally re-published encoded stream (never a
+direct connection to the physical camera; see ADR-028), followed by
+NVDEC decode, only for cameras DeepStream is currently subscribed to
+(AI enabled).
 
 Component:
 
-nvstreammux
+`nvv4l2decoder` (NVDEC) → `nvstreammux`
 
 Responsibilities:
 
+- Decode (NVDEC)
 - Stream synchronization
 - Batch generation
 - Frame aggregation
 
 Input:
 
-- Multiple camera streams
+- Multiple cameras' locally re-published encoded streams (Stage 1
+  output), one `rtspsrc` subscription per camera DeepStream is
+  currently consuming
 
 Output:
 
@@ -268,10 +352,18 @@ hardware, see `docs/SIV_BASELINE.md`.
 
 Output:
 
-RTSP, `rtsp://<host>:<rtsp_port>/<stream_name>` (defaults `8554`/`radar-eye`,
-`configs/visualization.yaml`). Future WebRTC/HLS output is an internal
-addition to this same package (`VisualizationManager` is the sole external
-boundary) — not implemented in RM-11.SIV.
+Two independent consumers of this same encoded output, per ADR-028 —
+"every media representation exists exactly once":
+
+- Direct RTSP, `rtsp://<host>:<rtsp_port>/<stream_name>` (defaults
+  `8554`/`radar-eye`, `configs/visualization.yaml`) — for VLC or any
+  other RTSP client, unchanged diagnostic access.
+- **AI Streaming**: the same encoded output, locally re-published the
+  same way Camera Ingestion re-publishes Live View (Stage 1), picked up
+  by Stage 1.5's Live Streaming Service as the browser-facing AI
+  Streaming channel. DeepStream itself never runs WebRTC/`webrtcbin`
+  code — `VisualizationManager` remains the sole external boundary,
+  now serving both consumers off one encoded stream.
 
 ---
 
@@ -377,13 +469,18 @@ Outputs:
 
 # Stage 9: Recording Service
 
-Purpose:
+Owner:
 
-Evidence generation.
+**Recording Service** — an independent process/consumer of Stage 1's
+Encoded Split, per ADR-028's principle 8: recording subscribes directly
+to the encoded stream, never to AI/DeepStream output. Two distinct
+recording modes, two distinct sources:
 
-Recording Mode:
+Continuous Recording:
 
-Continuous Recording
+Source: Stage 1 (Camera Ingestion's encoded output) directly —
+independent of AI/Incident state, never interrupted by AI being
+disabled or DeepStream being down.
 
 Codec:
 
@@ -392,6 +489,13 @@ H.265
 Retention:
 
 30 Days
+
+Event Clips (Evidence):
+
+Source: Incident Service (Stage 8), as before — pre-event and
+post-event buffer around an incident, extracted around the incident's
+timestamp. Distinct concept from Continuous Recording above, not a
+replacement for it.
 
 Evidence Types:
 
@@ -408,6 +512,14 @@ Generated Events:
 
 - SnapshotCreatedEvent
 - ClipCreatedEvent
+
+Archive:
+
+Retention/indexing/retrieval/export of both Continuous Recording
+segments and Event Clips is **Archive Service's** responsibility, not
+Recording Service's — Recording creates media, Archive manages its
+lifecycle after creation (ADR-028 principle 9). See `docs/
+DATABASE_SCHEMA.md` for the storage/table split.
 
 ---
 

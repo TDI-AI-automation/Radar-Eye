@@ -135,11 +135,14 @@ What frontend live-streaming protocol is required?
 
 Status:
 
-OPEN
+CLOSED
 
-Owner:
+Answer:
 
-Client
+WebRTC. Implemented and hardware-validated (Live Monitoring's Live View
+channel). See ADR-028 and `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5
+for the owning service and `docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live
+Monitoring / WebRTC section for the request/response contract.
 
 ---
 

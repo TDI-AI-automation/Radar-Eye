@@ -698,3 +698,43 @@ Applies to all present and future milestones and subsystems, not RM-11 alone.
 Reason:
 
 Isolates the application domain from a specific inference/runtime SDK. If the inference backend is replaced (TensorRT, Triton, ONNX Runtime, OpenVINO, CPU inference, simulation, recorded playback, etc.), only the Runtime Adapter requires modification; every other subsystem remains unchanged.
+
+---
+
+# ADR-028
+
+Decision:
+
+Media Architecture Reset -- Camera Ingestion and Live Streaming are separate processes from DeepStream.
+
+Status:
+
+ACCEPTED
+
+Supersedes:
+
+DEEPSTREAM_PIPELINE_SPEC.md's Stage 1 (Camera Ingestion), to the extent it framed ingestion as owned by DeepStream. CAMERA_RUNTIME_LIFECYCLE.md Section 7's prior direction that Live Streaming/WebRTC be built as an internal extension of DeepStream's Media Publisher.
+
+Problem:
+
+A live pipeline trace (hardware-measured) proved that DeepStream owning camera ingestion inside its own Gst.Pipeline is not merely inelegant -- it is a reproducible production defect. GstBin/GstPipeline state changes walk every child element serially, on one thread, inside one blocking set_state() call. nvinfer (PGIE/SGIE) performs synchronous TensorRT engine deserialization inside that walk. Measured: SGIE 4.9s + PGIE 4.3s = 9.18s before set_state() returns, during which rtspsrc/depay -- part of a topologically unrelated branch with zero GStreamer link to PGIE/SGIE -- could not advance past READY, because they were queued behind PGIE/SGIE in the same bin's child-iteration order. Live video was architecturally hostage to AI model-loading time, despite having no data dependency on it.
+
+Decision:
+
+Camera ingestion (rtspsrc -> rtph264depay -> h264parse) is owned by a new, independent Camera Ingestion Service -- never by DeepStream. Camera Ingestion holds exactly one upstream RTSP connection per camera and republishes the encoded H.264 locally (loopback RTSP re-server) for every subsystem to consume independently. DeepStream becomes a pure AI consumer: NVDEC -> nvstreammux -> PGIE -> Tracker -> SGIE -> OSD -> AI Streaming output. It owns AI and nothing else -- not camera connectivity, not Live Streaming. Live Streaming (WebRTC delivery to the browser, for both Live View and AI Streaming) is a new, independent Live Streaming Service, never part of the DeepStream process.
+
+Operational constraint informing this decision:
+
+The physical camera in this deployment has a low concurrent-RTSP-session tolerance, independently observed refusing new connections after heavy connection churn while remaining reachable via ICMP. Camera Ingestion's one-upstream-connection-per-camera design is required by this constraint, not merely preferred -- any design opening more independent RTSP connections to the camera than today would make this worse.
+
+Startup independence:
+
+Live Streaming's and DeepStream's startup sequences are independent of each other. Neither blocks on the other's readiness. Model loading may take any amount of time; it must never delay Live View.
+
+Failure isolation:
+
+If DeepStream crashes, Live View and Recording continue. If Live Streaming fails, AI continues. If Recording fails, Live View and AI continue. Camera Ingestion is the one accepted single point of failure for all consumers, mitigated by keeping it maximally simple (no AI/CUDA/TensorRT).
+
+Reason:
+
+Live video delivery must never be coupled to AI subsystem initialization time or AI subsystem failure. The previous architecture made this impossible to guarantee by construction, not just by configuration.
