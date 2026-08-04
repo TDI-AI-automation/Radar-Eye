@@ -427,7 +427,7 @@ class TestConcurrentCamerasDoNotBlockEachOther:
 
 @pytest.mark.asyncio
 class TestTeardown:
-    async def test_stop_cancels_in_flight_and_queued_commands(self) -> None:
+    async def test_stop_rejects_in_flight_and_queued_commands(self) -> None:
         loop = asyncio.get_running_loop()
         camera_id = uuid.uuid4()
         pipeline = FakePipeline()
@@ -459,9 +459,15 @@ class TestTeardown:
 
         await asyncio.wait_for(supervisor.stop(), timeout=2)
 
-        with pytest.raises(asyncio.CancelledError):
+        # RuntimeSupervisorError, not CancelledError: in_flight_task/queued_task
+        # are different asyncio Tasks than the ones stop() itself cancels
+        # (worker.task) -- delivering a raw CancelledError to an unrelated
+        # awaiter risks it being misread as a request to cancel that task
+        # too (see _run_worker's own comment; this is the hardware-confirmed
+        # bug that silently killed DesiredStateSynchronizer's forever-loop).
+        with pytest.raises(RuntimeSupervisorError):
             await in_flight_task
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(RuntimeSupervisorError):
             await queued_task
 
     async def test_stop_is_safe_with_no_workers(self) -> None:
@@ -548,7 +554,7 @@ class TestRemoveCamera:
         assert supervisor.worker_camera_ids() == frozenset({kept_id})
         assert supervisor.ai_enabled_camera_ids() == frozenset({kept_id})
 
-    async def test_cancels_a_queued_command_for_the_removed_camera(self) -> None:
+    async def test_rejects_a_queued_command_for_the_removed_camera(self) -> None:
         loop = asyncio.get_running_loop()
         camera_id = uuid.uuid4()
         pipeline = FakePipeline()
@@ -579,8 +585,12 @@ class TestRemoveCamera:
 
         await asyncio.wait_for(supervisor.remove_camera(camera_id), timeout=2)
 
-        with pytest.raises(asyncio.CancelledError):
+        # RuntimeSupervisorError, not CancelledError -- see
+        # test_stop_rejects_in_flight_and_queued_commands's comment: these
+        # are different asyncio Tasks than the one remove_camera() itself
+        # cancels (worker.task).
+        with pytest.raises(RuntimeSupervisorError):
             await in_flight_task
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(RuntimeSupervisorError):
             await queued_task
         assert camera_id not in supervisor.worker_camera_ids()

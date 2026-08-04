@@ -199,8 +199,25 @@ class RuntimeSupervisor:
             try:
                 outcome = await self._execute(camera_id, worker, command.enable)
             except asyncio.CancelledError:
+                # This worker's own task was cancelled (remove_camera(), when
+                # the camera is torn down mid-command) -- not a request from
+                # whoever is awaiting command.future (e.g. DesiredStateSynchronizer,
+                # a completely different task). Cancelling that future would
+                # deliver asyncio.CancelledError to that unrelated awaiter,
+                # which -- being a BaseException -- passes straight through
+                # its own `except Exception` handling and gets misread as a
+                # request to cancel *that* task too (hardware-confirmed: this
+                # silently killed DesiredStateSynchronizer's forever-loop when
+                # a camera's first AI command raced its own connection
+                # failure). Setting an exception instead delivers a normal,
+                # catchable failure -- the awaiter learns the command didn't
+                # complete without being told it was itself cancelled.
                 if not command.future.done():
-                    command.future.cancel()
+                    command.future.set_exception(
+                        RuntimeSupervisorError(
+                            f"Camera {camera_id} was removed while this command was in flight"
+                        )
+                    )
                 raise
             except Exception as exc:  # noqa: BLE001 -- propagated to the caller's future
                 self._runtime_error_count += 1
@@ -335,15 +352,26 @@ class RuntimeSupervisor:
                 pass
         while not worker.queue.empty():
             pending = worker.queue.get_nowait()
+            # set_exception, not cancel() -- same reasoning as _run_worker's
+            # own CancelledError handler above: whoever is awaiting this
+            # future is a different task than this one, and .cancel() would
+            # incorrectly read to them as a request to cancel themselves.
             if not pending.future.done():
-                pending.future.cancel()
+                pending.future.set_exception(
+                    RuntimeSupervisorError(
+                        f"Camera {camera_id} was removed while this command was still queued"
+                    )
+                )
             worker.queue.task_done()
 
     async def stop(self) -> None:
         """Cancels every camera's worker task and rejects any command still
-        queued or in flight with a deterministic ``CancelledError`` on its
-        future, rather than leaving a caller awaiting a future that would
-        otherwise never resolve."""
+        queued or in flight with a deterministic ``RuntimeSupervisorError``
+        on its future (not ``CancelledError`` -- see ``_run_worker``'s own
+        comment: the caller awaiting that future is a different task than
+        this one, and delivering it a raw ``CancelledError`` risks being
+        misread as a request to cancel that task too), rather than leaving
+        a caller awaiting a future that would otherwise never resolve."""
         for worker in self._workers.values():
             if worker.task is not None:
                 worker.task.cancel()
@@ -356,6 +384,8 @@ class RuntimeSupervisor:
             while not worker.queue.empty():
                 pending = worker.queue.get_nowait()
                 if not pending.future.done():
-                    pending.future.cancel()
+                    pending.future.set_exception(
+                        RuntimeSupervisorError("RuntimeSupervisor is stopping")
+                    )
                 worker.queue.task_done()
         self._workers.clear()
