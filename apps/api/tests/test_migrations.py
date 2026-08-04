@@ -25,6 +25,8 @@ _EXPECTED_TABLES = {
     "cameras",
     "camera_stream_profiles",
     "camera_calibrations",
+    "camera_media_endpoints",
+    "camera_subsystem_health",
     "incidents",
     "incident_events",
     "human_review_items",
@@ -48,7 +50,8 @@ async def _reset_schema(settings) -> None:
         await conn.execute(
             text(
                 "DROP TABLE IF EXISTS snapshots, recordings, incident_events, incidents, "
-                "human_review_items, camera_stream_profiles, camera_calibrations, users, "
+                "human_review_items, camera_stream_profiles, camera_calibrations, "
+                "camera_media_endpoints, camera_subsystem_health, users, "
                 "system_events, cameras, audit_log, alembic_version CASCADE"
             )
         )

@@ -45,6 +45,13 @@ API_PORT = 8000
 API_HEALTH_URL = f"http://{API_HOST}:{API_PORT}/health/system"
 API_DOCS_URL = f"http://{API_HOST}:{API_PORT}/docs"
 FRONTEND_DEFAULT_PORT = 8080
+# Must match configs/ingestion.yaml's `publish_rtsp_port:` -- Camera
+# Ingestion Service's Media Distribution Interface (Phase 1 = RTSP)
+# binds this fixed TCP port on every start (ADR-028, Media Architecture
+# Reset). Standalone in this phase -- no consumer is wired to it yet,
+# but it's launched/health-checked alongside everything else so it can
+# be verified independently.
+INGESTION_PORT = 8600
 # Must match configs/live_stream.yaml's `port:` -- DeepStream Runtime's Live
 # Monitoring signaling server binds this fixed TCP port on every start
 # (added by Stage C; run.py has no app-code import to read it from the
@@ -301,6 +308,8 @@ def _own_service_sigs(port: int) -> tuple[str, ...]:
         return ("uvicorn", "apps.api")
     if port == LIVE_STREAM_PORT:
         return ("apps.deepstream",)
+    if port == INGESTION_PORT:
+        return ("apps.ingestion",)
     return ("bun", "vite", "node")
 
 
@@ -380,6 +389,7 @@ def run_prerequisite_checks() -> list[Check]:
         _check_port(API_PORT, "Backend API"),
         _check_port(FRONTEND_DEFAULT_PORT, "Frontend"),
         _check_port(LIVE_STREAM_PORT, "Live Monitoring signaling"),
+        _check_port(INGESTION_PORT, "Camera Ingestion media distribution"),
     ]
 
 
@@ -605,6 +615,39 @@ class Orchestrator:
         env = self._base_env()
 
         # ------------------------------------------------------------------
+        # Camera Ingestion Service (ADR-028, Media Architecture Reset) --
+        # standalone in this phase, wired to zero consumers, but started
+        # first / stopped last (see shutdown()'s reversed(self.services))
+        # so it's already positioned correctly for later phases, when
+        # Live Streaming/Recording/AI Runtime start depending on it.
+        # Always started fresh, never adopted -- same reasoning as
+        # DeepStream below (owns live GStreamer/RTSP state).
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(INGESTION_PORT):
+            print(
+                _fail(
+                    f"Camera Ingestion already running (port {INGESTION_PORT} -- media "
+                    "distribution -- is already bound by an apps.ingestion process) -- "
+                    "stop it first if you want to restart"
+                )
+            )
+            return False
+
+        ingestion = ManagedService(
+            name="ingestion",
+            command=[str(VENV_PYTHON), "-m", "apps.ingestion.app.main"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-ingestion running"),
+        )
+        self.services.append(ingestion)
+        print(_c("\nStarting Camera Ingestion Service...", _BOLD))
+        ingestion.start(env)
+        if not ingestion.wait_until_healthy(timeout=30.0):
+            self._report_startup_failure(ingestion)
+            return False
+        print(_pass("Camera Ingestion Service healthy"))
+
+        # ------------------------------------------------------------------
         # Backend API
         # ------------------------------------------------------------------
         if _is_own_service_on_port(API_PORT):
@@ -721,6 +764,7 @@ class Orchestrator:
         self.shutdown()
 
     _DISPLAY_NAMES = {
+        "ingestion": "Camera Ingestion Service",
         "api": "Backend API",
         "deepstream": "DeepStream Runtime",
         "frontend": "Frontend",
