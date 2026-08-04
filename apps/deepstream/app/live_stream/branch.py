@@ -26,6 +26,7 @@ import asyncio
 import enum
 import logging
 import re
+import threading
 import time
 import uuid
 from typing import Any
@@ -100,10 +101,26 @@ class CameraWebRtcBranch:
         self._loop = loop
 
         self._elements: list[Any] = []
+        """Persistent, camera-lifetime elements only (both input chains +
+        the selector) -- built once in build(), torn down once in
+        teardown(). Deliberately excludes payloader/webrtc_caps/webrtcbin;
+        see ``_transport_elements``."""
         self._appsrc: Any = None
         self._input_selector: Any = None
         self._selector_pads: dict[StreamInput, Any] = {}
+
+        self._transport_elements: list[Any] = []
+        """payloader, webrtc_caps, webrtcbin -- rebuilt fresh on *every*
+        handle_offer() call, not just the first. See that method's own
+        docstring: a persistent, reused webrtcbin was found (hardware-
+        confirmed) to never properly restart ICE on a second browser
+        connection -- client-side ICE connectivity permanently stuck at
+        "checking", 100% reproducible from the second connection onward.
+        Rebuilding fresh sidesteps relying on libnice/webrtcbin's own
+        ICE-restart support entirely: every connection is structurally
+        identical to the (always-reliable) first one."""
         self._payloader: Any = None
+        self._webrtc_caps: Any = None
         self._webrtcbin: Any = None
         self._rtp_probe_target: Any = None
         self._rtp_probe_id: int | None = None
@@ -126,10 +143,13 @@ class CameraWebRtcBranch:
     # -- Construction (GLib main-loop thread only) ---------------------
 
     def build(self) -> None:
-        """Constructs and links the full per-camera branch. Raises
-        immediately on any construction/link failure, matching
-        VisualizationPipelineBuilder's own "fail fast, never return a
-        half-built branch" discipline."""
+        """Constructs and links the persistent, camera-lifetime part of the
+        branch: both input chains plus the selector. Deliberately does
+        *not* construct payloader/webrtc_caps/webrtcbin -- see
+        ``_build_webrtc_transport``, built fresh on every ``handle_offer()``
+        call instead. Raises immediately on any construction/link failure,
+        matching VisualizationPipelineBuilder's own "fail fast, never
+        return a half-built branch" discipline."""
         Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
 
         raw_src = self._raw_input_chain(Gst)
@@ -147,6 +167,29 @@ class CameraWebRtcBranch:
         self._current_input = StreamInput.A
         self._input_selector = selector
 
+        # Stage C: a single probe on the selector's own src pad sees every
+        # buffer that actually reaches the browser, regardless of which
+        # input produced it -- the one place "first buffer of whichever
+        # input is now active" is unambiguous, without needing a second
+        # probe per branch. Persistent (unlike the transport-chain probe
+        # below), since it lives on the selector, not on webrtc_caps.
+        selector_src_pad = selector.get_static_pad("src")
+        self._switch_output_probe_id = selector_src_pad.add_probe(
+            Gst.PadProbeType.BUFFER, self._on_selector_output
+        )
+
+        for element in self._elements:
+            element.sync_state_with_parent()
+
+    def _build_webrtc_transport(self) -> None:
+        """Builds a fresh payloader -> webrtc_caps -> webrtcbin chain and
+        links it off the (persistent, already-PLAYING) selector. Called
+        from ``handle_offer()`` for *every* browser connection -- see that
+        method's docstring for why a reused webrtcbin doesn't work.
+        GLib main-loop thread only."""
+        Gst, GstWebRTC, _GstSdp, _GstVideo = _import_gst()
+        assert self._input_selector is not None
+
         payloader = self._make(Gst, "rtph264pay", f"live-pay-{self._camera_id}")
         payloader.set_property("pt", 96)  # placeholder -- reset to whatever
         # the browser's offer actually negotiates, in handle_offer() below,
@@ -154,8 +197,8 @@ class CameraWebRtcBranch:
         # note in manager.py). 96 is never itself sent over the wire.
         payloader.set_property("config-interval", -1)  # in-band SPS/PPS every keyframe
         self._pipeline.add(payloader)
-        self._elements.append(payloader)
-        self._link(selector, payloader)
+        self._transport_elements.append(payloader)
+        self._link(self._input_selector, payloader)
         self._payloader = payloader
 
         # webrtcbin's create-answer runs before any real data has ever
@@ -184,22 +227,14 @@ class CameraWebRtcBranch:
             ),
         )
         self._pipeline.add(webrtc_caps)
-        self._elements.append(webrtc_caps)
+        self._transport_elements.append(webrtc_caps)
         self._link(payloader, webrtc_caps)
+        self._webrtc_caps = webrtc_caps
 
+        self._first_rtp_packet_seen = False
         self._rtp_probe_target = webrtc_caps.get_static_pad("src")
         self._rtp_probe_id = self._rtp_probe_target.add_probe(
             Gst.PadProbeType.BUFFER, self._on_rtp_buffer
-        )
-
-        # Stage C: a single probe on the selector's own src pad sees every
-        # buffer that actually reaches the browser, regardless of which
-        # input produced it -- the one place "first buffer of whichever
-        # input is now active" is unambiguous, without needing a second
-        # probe per branch.
-        selector_src_pad = selector.get_static_pad("src")
-        self._switch_output_probe_id = selector_src_pad.add_probe(
-            Gst.PadProbeType.BUFFER, self._on_selector_output
         )
 
         webrtcbin = self._make(Gst, "webrtcbin", f"live-webrtc-{self._camera_id}")
@@ -207,7 +242,7 @@ class CameraWebRtcBranch:
         for stun_server in self._settings.stun_servers:
             webrtcbin.set_property("stun-server", stun_server)
         self._pipeline.add(webrtcbin)
-        self._elements.append(webrtcbin)
+        self._transport_elements.append(webrtcbin)
         webrtcbin.connect("notify::ice-gathering-state", self._on_ice_gathering_state_changed)
         webrtcbin.connect("notify::ice-connection-state", self._on_webrtc_state_changed)
         webrtcbin.connect("notify::connection-state", self._on_webrtc_state_changed)
@@ -220,11 +255,61 @@ class CameraWebRtcBranch:
         if transceiver is not None:
             # Server only ever sends video for this feature -- never
             # receives anything back from the browser.
-            transceiver.set_property("direction", _GstWebRTC.WebRTCRTPTransceiverDirection.SENDONLY)
+            transceiver.set_property("direction", GstWebRTC.WebRTCRTPTransceiverDirection.SENDONLY)
         self._webrtcbin = webrtcbin
 
-        for element in self._elements:
+        for element in self._transport_elements:
             element.sync_state_with_parent()
+
+    def _teardown_webrtc_transport(self) -> None:
+        """Tears down the current payloader/webrtc_caps/webrtcbin (if any
+        -- a no-op before the first ever connection). GLib main-loop
+        thread only.
+
+        Quiesces the selector's src pad first, exactly like
+        ``DeepStreamPipeline.remove_source()``'s own IDLE-probe pattern
+        (see that method's docstring for the hardware-confirmed reason):
+        the selector is persistent and stays PLAYING throughout, actively
+        fed by the still-live raw/annotated chains, so without this guard
+        a buffer could be mid-push into the payloader's sink pad at the
+        exact moment this method NULLs it -- the same class of freeze this
+        whole subsystem has already been hardware-confirmed to hit once."""
+        if self._webrtcbin is None:
+            return
+        Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
+
+        if self._rtp_probe_id is not None and self._rtp_probe_target is not None:
+            self._rtp_probe_target.remove_probe(self._rtp_probe_id)
+        self._rtp_probe_id = None
+        self._rtp_probe_target = None
+
+        selector_src_pad = self._input_selector.get_static_pad("src")
+        quiesced = threading.Event()
+
+        def _on_idle(_pad: Any, _info: Any) -> Any:
+            quiesced.set()
+            return Gst.PadProbeReturn.OK
+
+        probe_id = selector_src_pad.add_probe(Gst.PadProbeType.IDLE, _on_idle)
+        if not quiesced.wait(timeout=1.0):
+            logger.warning(
+                "Timed out quiescing camera %s's selector before rebuilding WebRTC "
+                "transport -- proceeding anyway",
+                self._camera_id,
+            )
+        selector_src_pad.remove_probe(probe_id)
+
+        # Sink-to-source, same discipline (and the same hardware-confirmed
+        # reason) as teardown()'s own reversed-NULL loop below.
+        for element in reversed(self._transport_elements):
+            element.set_state(Gst.State.NULL)
+        for element in self._transport_elements:
+            self._pipeline.remove(element)
+        self._transport_elements = []
+
+        self._payloader = None
+        self._webrtc_caps = None
+        self._webrtcbin = None
 
     def _raw_input_chain(self, Gst: Any) -> Any:
         """appsrc, fed directly by ``BitstreamAppsrcBridge`` with the
@@ -443,13 +528,41 @@ class CameraWebRtcBranch:
     async def handle_offer(self, sdp_offer_text: str) -> str:
         """Given a browser's non-trickle SDP offer (ICE already fully
         gathered client-side), returns the complete answer SDP (this
-        server's ICE also fully gathered) as plain text. One call per
-        browser connection -- no renegotiation is ever needed afterward:
-        this stage never changes the webrtcbin/payloader/track after the
-        connection is built, including when ``select_input`` runs."""
-        if self._webrtcbin is None:
+        server's ICE also fully gathered) as plain text.
+
+        Called once per *browser connection*, not once per camera lifetime
+        -- the operator's browser gets a brand new ``RTCPeerConnection``
+        (and therefore a brand new offer) every time Live Monitoring
+        mounts (page navigation, refresh, reconnect), which happens
+        routinely and repeatedly against the same long-lived branch.
+
+        Rebuilds payloader/webrtc_caps/webrtcbin fresh on every call (see
+        ``_build_webrtc_transport``'s own docstring) -- hardware-confirmed
+        real bug, found investigating this exact symptom: a *reused*
+        webrtcbin's client-side ICE connectivity got permanently stuck at
+        "checking" on the second and every subsequent connection (100%
+        reproducible), even after fixing the separate, also-real
+        ``_ice_gathering_complete`` staleness bug below. Rebuilding fresh
+        sidesteps relying on libnice/webrtcbin's own ICE-restart support
+        -- every connection is now structurally identical to the (always
+        reliable) first one. Never touches the persistent selector/input
+        chains, and is unrelated to ``select_input()``, which still never
+        touches webrtcbin/payloader/the peer connection."""
+        if self._input_selector is None:
             raise RuntimeError(f"WebRTC branch not built for camera {self._camera_id}")
         Gst, GstWebRTC, GstSdp, _GstVideo = _import_gst()
+
+        def _rebuild_transport() -> None:
+            self._teardown_webrtc_transport()
+            self._build_webrtc_transport()
+
+        await self._run_on_mainloop(_rebuild_transport)
+
+        # _ice_gathering_complete is an instance field, not tied to any one
+        # webrtcbin object -- still needs resetting here even though the
+        # webrtcbin above is now always freshly built, since a fresh
+        # object doesn't reset a stale Python-level flag by itself.
+        self._ice_gathering_complete = False
 
         # The browser's offer picks its own dynamic RTP payload type number
         # for H264 (see build()'s webrtc_caps comment) -- rtph264pay must
@@ -540,12 +653,14 @@ class CameraWebRtcBranch:
 
     def teardown(self) -> None:
         Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
-        self._appsrc_bridge.remove_appsrc(self._camera_id)
+        cid = self._camera_id
 
-        if self._rtp_probe_id is not None and self._rtp_probe_target is not None:
-            self._rtp_probe_target.remove_probe(self._rtp_probe_id)
-        self._rtp_probe_id = None
-        self._rtp_probe_target = None
+        self._appsrc_bridge.remove_appsrc(cid)
+
+        # Handles the RTP-buffer probe + payloader/webrtc_caps/webrtcbin
+        # (including quiescing the selector's src pad first) -- a no-op if
+        # no browser ever connected to this camera.
+        self._teardown_webrtc_transport()
 
         if self._switch_output_probe_id is not None and self._input_selector is not None:
             selector_src_pad = self._input_selector.get_static_pad("src")
