@@ -145,9 +145,16 @@ class RuntimeAdapter:
             )
         )
 
-    async def on_camera_reconnecting(self, camera_id: uuid.UUID) -> None:
+    async def on_camera_reconnecting(self, camera_id: uuid.UUID, *, reconnect: bool = True) -> None:
+        """``reconnect=False`` is used for a source bin that was just
+        *added* (initial registration or a brand new camera picked up by
+        an ongoing convergence pass) rather than one recovering from a
+        failure -- see ``DeepStreamRuntime``'s ``on_source_connected``
+        wiring in ``runtime.py``. Without this, a camera that has never
+        actually reconnected from anything would show a nonzero
+        ``reconnect_count`` the moment it's first added."""
         self._status[camera_id] = "RECONNECTING"
-        await self._persist_observed_state(camera_id, status="RECONNECTING", reconnect=True)
+        await self._persist_observed_state(camera_id, status="RECONNECTING", reconnect=reconnect)
 
     async def on_camera_disconnected(self, camera_id: uuid.UUID, reason: str) -> None:
         """DEEPSTREAM_PIPELINE_SPEC.md 'Failure Handling' -> 'Camera Failure':

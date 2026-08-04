@@ -307,6 +307,24 @@ class TestObservedStatePersistence:
         assert refreshed.status == "RECONNECTING"
         assert refreshed.reconnect_count == 2
 
+    async def test_on_camera_reconnecting_with_reconnect_false_does_not_bump_count(
+        self, db_session, session_factory
+    ) -> None:
+        """A source that was just *added* (not recovering from a failure)
+        must not look like it already reconnected -- see runtime.py's
+        on_source_connected wiring (Observed-State-accuracy fix)."""
+        camera = await CameraRepository(db_session).add(Camera(name="cam-1", status="CONNECTED"))
+        await db_session.commit()
+        adapter = RuntimeAdapter(bus=InProcessEventBus(), session_factory=session_factory)
+
+        await adapter.on_camera_reconnecting(camera.id, reconnect=False)
+
+        async with session_factory() as verify_session:
+            refreshed = await CameraRepository(verify_session).get(camera.id)
+        assert refreshed is not None
+        assert refreshed.status == "RECONNECTING"
+        assert refreshed.reconnect_count == 0
+
     async def test_on_camera_disconnected_persists_status_and_reason(
         self, db_session, session_factory
     ) -> None:

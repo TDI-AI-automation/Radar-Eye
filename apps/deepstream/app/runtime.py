@@ -170,6 +170,7 @@ class DeepStreamRuntime:
             live_stream_enabled=live_stream.enabled,
             on_source_added=self._on_live_stream_source_added,
             on_source_removed=self._on_source_removed,
+            on_source_first_buffer=self._on_source_first_buffer,
         )
 
         # RM-12 Camera Runtime v1 (Steps 1-7): first production wiring of
@@ -225,7 +226,7 @@ class DeepStreamRuntime:
             self._pipeline,
             self._bridge,
             self.runtime_supervisor,
-            on_source_connected=self._runtime_adapter.on_camera_connected,
+            on_source_connected=self._on_source_added_pending_confirmation,
         )
         self.telemetry = TelemetryCollector(
             pipeline=self._pipeline,
@@ -323,6 +324,36 @@ class DeepStreamRuntime:
         this hook is only ever invoked later, once add_source() actually
         runs, by which point construction has long finished."""
         self._bridge.schedule(self.live_stream_manager.add_camera(camera_id, camera_name))
+
+    async def _on_source_added_pending_confirmation(self, camera_id: uuid.UUID) -> None:
+        """DesiredStateSynchronizer's on_source_connected hook -- despite
+        the name (kept for that module's own docstring/tests, which are
+        about "a source this synchronizer just added", not about the
+        specific status it produces), this no longer marks the camera
+        CONNECTED. Observed-State-accuracy fix (found investigating a
+        real "UI shows healthy/connected but the video is black"
+        report): add_source() succeeding only means the GStreamer
+        elements were constructed and linked -- it says nothing about
+        whether rtspsrc has actually finished its RTSP handshake with
+        the camera. Marking RECONNECTING here (reconnect=False -- this
+        is a fresh add, not a recovery, so it must not bump
+        reconnect_count) and leaving the promotion to CONNECTED to
+        _on_source_first_buffer below means the UI now reflects reality:
+        "trying to establish the stream" until a real buffer is actually
+        observed, not the instant pipeline construction finishes."""
+        await self._runtime_adapter.on_camera_reconnecting(camera_id, reconnect=False)
+
+    def _on_source_first_buffer(self, camera_id: uuid.UUID) -> None:
+        """DeepStreamPipeline's one-shot first-buffer probe (see
+        _attach_first_buffer_probe) -- runs on a GStreamer streaming
+        thread, so hand off to asyncio the same way every other
+        non-asyncio-thread callback in this module already does. The
+        one and only place a camera is ever promoted to CONNECTED --
+        covers both the initial add (_on_source_added_pending_confirmation
+        marks RECONNECTING first) and every reconnect (add_source() is
+        the single choke point both paths funnel through, so a fresh
+        one-shot probe is attached to the fresh bin either way)."""
+        self._bridge.schedule(self._runtime_adapter.on_camera_connected(camera_id))
 
     def _on_source_removed(self, camera_id: uuid.UUID) -> None:
         """DeepStreamPipeline.remove_source()'s on_source_removed hook --
@@ -571,7 +602,11 @@ class DeepStreamRuntime:
                 return False
             succeeded_after_attempt = policy.attempt_count
             policy.reset()
-            self._bridge.schedule(self._runtime_adapter.on_camera_connected(source.camera_id))
+            # Promotion to CONNECTED now happens via _on_source_first_buffer
+            # (add_source() above attaches a fresh one-shot probe to the new
+            # bin) -- not here, the same Observed-State-accuracy fix as the
+            # initial-add path. Status stays RECONNECTING (set above, before
+            # this retry attempt) until a real buffer actually arrives.
             _audit_logger.info(
                 "Pipeline Restarted: camera=%s attempt=%d",
                 source.camera_id,

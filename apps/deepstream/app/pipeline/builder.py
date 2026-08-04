@@ -32,6 +32,7 @@ from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.media_publisher.tier2 import Tier2Publisher
 from apps.deepstream.app.models_config import ModelConfigResolver
+from apps.deepstream.app.pipeline.frame_distributor import bitstream_tee_element_name
 from apps.deepstream.app.visualization.manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class DeepStreamPipeline:
         live_stream_enabled: bool = False,
         on_source_added: Callable[[uuid.UUID, str], None] | None = None,
         on_source_removed: Callable[[uuid.UUID], None] | None = None,
+        on_source_first_buffer: Callable[[uuid.UUID], None] | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
@@ -143,6 +145,17 @@ class DeepStreamPipeline:
         dropping a camera from Desired State entirely once it's deleted)
         -- without DesiredStateSynchronizer or this class needing any
         awareness of Live Monitoring itself."""
+        self._on_source_first_buffer = on_source_first_buffer
+        """Optional, None-safe -- fired exactly once per add_source() call
+        (initial add, or a reconnect's fresh bin), the moment a real
+        buffer is actually observed flowing from the camera (see
+        _attach_first_buffer_probe). Observed-State-accuracy fix: unlike
+        on_source_added (fired the instant the GStreamer elements are
+        merely constructed and linked, before rtspsrc has necessarily
+        finished its handshake with the camera), this is the earliest
+        point that actually confirms the RTSP stream is delivering data
+        -- runtime.py uses it, not on_source_added, to promote a camera
+        to CONNECTED."""
         self._nvstreamdemux: Any = None
         self._frame_counter = frame_counter
         self._on_bus_message = on_bus_message
@@ -436,6 +449,7 @@ class DeepStreamPipeline:
         self._sources[source.camera_id] = source
         self._pad_index_to_camera_id[pad_index] = source.camera_id
         bin_.sync_state_with_parent()
+        self._attach_first_buffer_probe(bin_, source.camera_id)
 
         # Visualization renderer needs a fixed camera_id (RM-11.SIV
         # validates a single camera), only known once a camera is actually
@@ -501,6 +515,36 @@ class DeepStreamPipeline:
                     "continuing without it (inference is unaffected)",
                     source.camera_id,
                 )
+
+    def _attach_first_buffer_probe(self, bin_: Any, camera_id: uuid.UUID) -> None:
+        """One-shot: fires ``on_source_first_buffer`` the moment a real
+        buffer is observed at the bitstream tee's sink pad -- fed
+        directly by this camera's own ``h264parse``, before any decode/
+        AI-valve dependency. Observed-State-accuracy fix: ``add_source()``
+        merely constructing and linking GStreamer elements says nothing
+        about whether ``rtspsrc`` has actually finished its handshake
+        with the camera; this is the earliest point that confirms the
+        RTSP stream is really delivering data. Removes itself after
+        firing once. A no-op if no callback was supplied, or if (unit
+        tests using a stub bin) the bitstream tee doesn't exist."""
+        if self._on_source_first_buffer is None:
+            return
+        Gst = _import_gst()
+        tee = bin_.get_by_name(bitstream_tee_element_name(camera_id))
+        if tee is None:
+            return
+        pad = tee.get_static_pad("sink")
+        probe_id_holder: list[int] = []
+
+        def _on_first_buffer(_pad: Any, _info: Any) -> Any:
+            if probe_id_holder:
+                pad.remove_probe(probe_id_holder[0])
+            callback = self._on_source_first_buffer
+            if callback is not None:
+                callback(camera_id)
+            return Gst.PadProbeReturn.OK
+
+        probe_id_holder.append(pad.add_probe(Gst.PadProbeType.BUFFER, _on_first_buffer))
 
     def is_built(self) -> bool:
         """RM-12 Camera Runtime Step 5 (Telemetry): a passive readiness

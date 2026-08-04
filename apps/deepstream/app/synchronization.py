@@ -111,9 +111,21 @@ class DesiredStateSynchronizer:
         convergence pass (e.g. a camera deleted and re-registered while
         the process keeps running) -- that source connects at the
         GStreamer level perfectly well, but Observed State (what the
-        operator's browser actually reads) never gets persisted as
-        CONNECTED, so the UI shows it stuck Reconnecting/Disconnected
-        forever even though the pipeline is fine."""
+        operator's browser actually reads) never gets persisted at all
+        unless something calls RuntimeAdapter on its behalf.
+
+        Observed-State-accuracy update: despite the name, this callback
+        no longer marks the camera CONNECTED itself -- runtime.py wires
+        it to mark RECONNECTING instead (a source was *added*, not yet
+        *confirmed*; add_source() succeeding only means the GStreamer
+        elements were constructed and linked, not that rtspsrc has
+        actually finished its handshake with the camera). Promotion to
+        CONNECTED happens separately, once a real buffer is observed
+        flowing (DeepStreamPipeline's on_source_first_buffer hook, see
+        runtime.py). This callback's own contract is unchanged: fire
+        once per source this synchronizer just added, so it -- not
+        just the initial-boot and reconnect paths -- also gets Observed
+        State written for it."""
         self._recording_pending: dict[uuid.UUID, bool] = {}
         self._synchronization_count = 0
         self._last_synchronization_duration_seconds: float | None = None
@@ -153,7 +165,8 @@ class DesiredStateSynchronizer:
             # longer appears in Camera Registry's Desired State at all
             # (deleted). This is now the *only* way a source is removed --
             # a registered camera always wants an active source.
-            for camera_id in self._pipeline.active_camera_ids():
+            active_ids = self._pipeline.active_camera_ids()
+            for camera_id in active_ids:
                 if camera_id not in desired_by_id:
                     await self._remove_source(camera_id)
                     actions.append(f"remove_source:{camera_id}")
