@@ -1,6 +1,7 @@
 """Tests for apps.ingestion.app.source -- Camera Ingestion's entire
-GStreamer scope (ADR-028): rtspsrc -> rtph264depay -> h264parse ->
-[ghost pad]. No decode, no valve, no bitstream tee.
+GStreamer scope (ADR-028): rtspsrc -> rtph264depay -> h264parse -> tee.
+No decode, no valve, no streammux, no inference, no webrtcbin, no
+encoder.
 
 Requires the real GStreamer SDK -- skipped, not failed, when
 unavailable, matching this repo's established convention
@@ -21,7 +22,13 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
 
 from apps.ingestion.app.camera_registry import CameraSource  # noqa: E402
-from apps.ingestion.app.source import IngestedSource, build_source_bin  # noqa: E402
+from apps.ingestion.app.source import (  # noqa: E402
+    IngestedSource,
+    build_source_bin,
+    release_split_pad,
+    request_split_pad,
+    tee_element_name,
+)
 
 Gst.init(None)
 
@@ -52,16 +59,29 @@ def _make_source(camera_id: uuid.UUID | None = None) -> CameraSource:
 
 
 class TestBuildSourceBin:
-    def test_bin_has_a_src_ghost_pad(self) -> None:
+    def test_bin_has_no_static_src_pad(self) -> None:
+        """No ghost pad -- the Encoded Split tee is the bin's only
+        interface; consumers request their own pad from it by name."""
         bin_ = build_source_bin(_make_source())
-        assert bin_.get_static_pad("src") is not None
+        assert bin_.get_static_pad("src") is None
 
-    def test_ghost_pad_targets_h264parse_not_the_depayloader(self) -> None:
+    def test_tee_is_discoverable_by_name_and_fed_by_h264parse(self) -> None:
         source = _make_source()
         bin_ = build_source_bin(source)
         parse = bin_.get_by_name(f"parse-{source.camera_id}")
-        ghost_pad = bin_.get_static_pad("src")
-        assert ghost_pad.get_target() == parse.get_static_pad("src")
+        tee = bin_.get_by_name(tee_element_name(source.camera_id))
+        assert tee is not None
+        tee_sink = tee.get_static_pad("sink")
+        assert tee_sink.is_linked()
+        assert tee_sink.get_peer() == parse.get_static_pad("src")
+
+    def test_tee_produces_a_working_request_pad(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        tee = bin_.get_by_name(tee_element_name(source.camera_id))
+        pad = tee.get_request_pad("src_%u")
+        assert pad is not None
+        tee.release_request_pad(pad)
 
     def test_depay_links_to_parse(self) -> None:
         source = _make_source()
@@ -87,7 +107,8 @@ class TestBuildSourceBin:
     def test_no_decode_no_valve_elements_present(self) -> None:
         """Confirms the platform-service scope boundary at the pipeline
         level, not just by code inspection: this bin contains exactly
-        rtspsrc/depay/parse, nothing else."""
+        rtspsrc/depay/parse/tee, nothing else -- no decoder, no
+        streammux, no inference, no webrtcbin, no encoder."""
         source = _make_source()
         bin_ = build_source_bin(source)
         names = set()
@@ -101,7 +122,65 @@ class TestBuildSourceBin:
             f"rtspsrc-{source.camera_id}",
             f"depay-{source.camera_id}",
             f"parse-{source.camera_id}",
+            tee_element_name(source.camera_id),
         }
+
+
+class TestSplitPad:
+    """request_split_pad/release_split_pad -- the ghosting step that
+    lets an Encoded Split tee branch (which lives inside this module's
+    child Gst.Bin) be linked to an element added to a *different*
+    Gst.Bin/Gst.Pipeline, exactly how shared.media_transport.rtsp.
+    RtspMediaPublisher consumes it. A tee request pad handed to
+    Pad.link() without this ghosting step fails cross-bin (GStreamer
+    requires linked pads to share a bin scope) -- these tests exercise
+    that exact cross-bin link, not just pad construction, so a
+    regression here fails in this suite instead of only on real
+    hardware."""
+
+    def test_request_split_pad_is_linkable_to_an_element_outside_the_bin(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        pipeline = Gst.Pipeline.new("test-pipeline")
+        pipeline.add(bin_)
+
+        sink = Gst.ElementFactory.make("fakesink", "sink")
+        pipeline.add(sink)
+
+        split_pad = request_split_pad(bin_, source.camera_id)
+        try:
+            assert split_pad.link(sink.get_static_pad("sink")) == Gst.PadLinkReturn.OK
+        finally:
+            release_split_pad(bin_, source.camera_id, split_pad)
+            pipeline.set_state(Gst.State.NULL)
+
+    def test_two_independent_split_pads_can_coexist(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        pipeline = Gst.Pipeline.new("test-pipeline")
+        pipeline.add(bin_)
+
+        first = request_split_pad(bin_, source.camera_id)
+        second = request_split_pad(bin_, source.camera_id)
+        try:
+            assert first.get_name() != second.get_name()
+        finally:
+            release_split_pad(bin_, source.camera_id, first)
+            release_split_pad(bin_, source.camera_id, second)
+            pipeline.set_state(Gst.State.NULL)
+
+    def test_release_split_pad_removes_the_ghost(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        pipeline = Gst.Pipeline.new("test-pipeline")
+        pipeline.add(bin_)
+
+        split_pad = request_split_pad(bin_, source.camera_id)
+        ghost_name = split_pad.get_name()
+        release_split_pad(bin_, source.camera_id, split_pad)
+
+        assert bin_.get_static_pad(ghost_name) is None
+        pipeline.set_state(Gst.State.NULL)
 
 
 class TestIngestedSource:

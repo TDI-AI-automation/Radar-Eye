@@ -31,7 +31,12 @@ from apps.api.app.repositories.media import (
 )
 from apps.ingestion.app.camera_registry import CameraRegistry, CameraSource
 from apps.ingestion.app.config import IngestionSettings
-from apps.ingestion.app.source import IngestedSource
+from apps.ingestion.app.source import (
+    IngestedSource,
+    release_split_pad,
+    request_split_pad,
+    tee_element_name,
+)
 from shared.gst_bridge import AsyncBridge
 from shared.media_transport.rtsp import RtspMediaPublisher
 from shared.reconnect import ReconnectPolicy
@@ -173,8 +178,10 @@ class IngestionRuntime:
             self._pipeline.add(bin_)
             bin_.sync_state_with_parent()
             self._attach_first_buffer_probe(ingested.camera_id, bin_)
+            split_pad = request_split_pad(bin_, ingested.camera_id)
+            ingested.split_pad = split_pad
             assert self._publisher is not None
-            return self._publisher.publish(ingested.camera_id, bin_.get_static_pad("src"))
+            return self._publisher.publish(ingested.camera_id, split_pad)
 
         endpoint = await asyncio.wrap_future(self._bridge.schedule_on_mainloop(_build_on_mainloop))
         async with self._session_factory() as session:
@@ -186,14 +193,31 @@ class IngestionRuntime:
             )
             await session.commit()
 
+    def _release_split_pad(self, ingested: IngestedSource) -> None:
+        """Releases the Encoded Split tee's request pad handed to the
+        publisher, mirroring this codebase's established tee-pad
+        teardown discipline (e.g. visualization/pipeline_builder.py's
+        ``tee.release_request_pad``). Called after ``unpublish()`` (the
+        downstream consumer of this pad) and before the bin itself is
+        NULLed/removed, matching the sink-to-source teardown order used
+        throughout this codebase."""
+        if ingested.split_pad is None or ingested.bin is None:
+            return
+        release_split_pad(ingested.bin, ingested.camera_id, ingested.split_pad)
+        ingested.split_pad = None
+
     def _attach_first_buffer_probe(self, camera_id: uuid.UUID, bin_: Any) -> None:
         """One-shot: promotes this camera to CONNECTED the moment a real
-        buffer is observed at the bin's own ghost src pad -- the
+        buffer is observed at the Encoded Split tee's sink pad -- the
         earliest point that confirms the RTSP stream is actually
         delivering data, as opposed to the bin merely having been built
-        and linked (see module docstring)."""
+        and linked (see module docstring). Probing the tee's sink pad
+        (rather than any one of its downstream branches) means this
+        signal stays correct regardless of how many local consumers the
+        tee ends up feeding."""
         Gst = _import_gst()
-        pad = bin_.get_static_pad("src")
+        tee = bin_.get_by_name(tee_element_name(camera_id))
+        pad = tee.get_static_pad("sink")
         probe_id_holder: list[int] = []
 
         def _on_first_buffer(_pad: Any, _info: Any) -> Any:
@@ -220,6 +244,7 @@ class IngestionRuntime:
             Gst = _import_gst()
             assert self._publisher is not None
             self._publisher.unpublish(camera_id)
+            self._release_split_pad(ingested)
             if ingested.bin is not None:
                 ingested.bin.set_state(Gst.State.NULL)
                 self._pipeline.remove(ingested.bin)
@@ -261,6 +286,7 @@ class IngestionRuntime:
             Gst = _import_gst()
             assert self._publisher is not None
             self._publisher.unpublish(camera_id)
+            self._release_split_pad(ingested)
             if ingested.bin is not None:
                 ingested.bin.set_state(Gst.State.NULL)
                 self._pipeline.remove(ingested.bin)
