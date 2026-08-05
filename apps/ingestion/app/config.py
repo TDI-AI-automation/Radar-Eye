@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INGESTION_PATH = REPO_ROOT / "configs" / "ingestion.yaml"
 
 

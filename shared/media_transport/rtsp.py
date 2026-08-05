@@ -249,6 +249,7 @@ def build_rtsp_source_element(endpoint: MediaEndpoint) -> Any:
     rtspsrc.set_property("location", endpoint.address)
     rtspsrc.set_property("protocols", "tcp")
     rtspsrc.set_property("latency", 200)
+    rtspsrc.set_property("tcp-timeout", 5_000_000)  # 5s -- see module docstring
 
     depay.link(parse)
 

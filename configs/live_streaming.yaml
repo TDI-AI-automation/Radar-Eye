@@ -1,0 +1,26 @@
+# Live Streaming Service (ADR-028, Phase 2).
+#
+# Subscribes only to Camera Ingestion's published endpoints
+# (camera_media_endpoints where subsystem="ingestion") -- never opens
+# its own RTSP connection to a camera, never imports apps.ingestion or
+# apps.deepstream. Owns WebRTC/signaling/peer connections/browser
+# sessions only.
+
+upstream_subsystem: ingestion
+
+reconnect_initial_backoff_seconds: 1.0
+reconnect_max_backoff_seconds: 30.0
+reconnect_backoff_multiplier: 2.0
+desired_state_poll_interval_seconds: 1.0
+rtsp_default_latency_ms: 200
+
+# Signaling server bind host/port -- 127.0.0.1 only, never network-exposed.
+# Deliberately not 8590 (configs/live_stream.yaml) -- that port and file
+# still belong to the old, unmigrated apps.deepstream.app.live_stream
+# package during this build-alongside-then-cutover period.
+signaling_host: 127.0.0.1
+signaling_port: 8591
+
+# Empty -- a single-node, air-gapped, LAN deployment only ever needs host
+# ICE candidates; no STUN/TURN server is reachable or required.
+stun_servers: []

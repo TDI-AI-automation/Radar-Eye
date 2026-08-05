@@ -49,6 +49,18 @@ class CameraMediaEndpointRepository(Repository[CameraMediaEndpoint]):
         if existing is not None:
             await self.delete(existing)
 
+    async def list_by_subsystem(self, subsystem: str) -> list[CameraMediaEndpoint]:
+        """Every camera currently published by ``subsystem`` -- how a
+        downstream consumer (e.g. Live Streaming) discovers what to
+        subscribe to. Deliberately camera-scoped, not credential-scoped:
+        a consumer using this never touches ``cameras``/
+        ``camera_stream_profiles`` at all, only ``MediaEndpoint``-shaped
+        rows (ADR-028's "it only knows MediaEndpoint" boundary)."""
+        result = await self._session.execute(
+            select(CameraMediaEndpoint).where(CameraMediaEndpoint.subsystem == subsystem)
+        )
+        return list(result.scalars().all())
+
 
 class CameraSubsystemHealthRepository(Repository[CameraSubsystemHealth]):
     model = CameraSubsystemHealth

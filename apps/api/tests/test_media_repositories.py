@@ -81,6 +81,29 @@ class TestCameraMediaEndpointRepository:
 
         assert await repo.get_by_camera_and_subsystem(camera.id, "ingestion") is None
 
+    async def test_list_by_subsystem_returns_only_that_subsystems_rows(self, db_session) -> None:
+        camera_a = await _make_camera(db_session, "cam-a")
+        camera_b = await _make_camera(db_session, "cam-b")
+        repo = CameraMediaEndpointRepository(db_session)
+        await repo.set_endpoint(
+            camera_a.id, "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/a"
+        )
+        await repo.set_endpoint(
+            camera_b.id, "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/b"
+        )
+        await repo.set_endpoint(
+            camera_a.id, "ai", transport="rtsp", address="rtsp://127.0.0.1:8601/a"
+        )
+
+        rows = await repo.list_by_subsystem("ingestion")
+
+        assert {row.camera_id for row in rows} == {camera_a.id, camera_b.id}
+        assert all(row.subsystem == "ingestion" for row in rows)
+
+    async def test_list_by_subsystem_empty_when_none_published(self, db_session) -> None:
+        repo = CameraMediaEndpointRepository(db_session)
+        assert await repo.list_by_subsystem("ingestion") == []
+
 
 @pytest.mark.asyncio
 class TestCameraSubsystemHealthRepository:
