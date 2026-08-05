@@ -70,9 +70,6 @@ class PerformanceSnapshot:
     pgie_fps: float | None
     sgie_fps: float | None
     event_throughput_per_sec: float | None
-    threat_throughput_per_sec: float | None
-    alarm_throughput_per_sec: float | None
-    incident_throughput_per_sec: float | None
     visualization_fps: float | None
     overlay_time_avg_ms: float | None
 
@@ -151,11 +148,10 @@ class _RollingRateCounter:
     """Counts calls within a rolling time window and reports a per-second
     rate -- the same rolling-window principle as _FPS_WINDOW_SIZE/
     _LATENCY_WINDOW_SIZE above, generalized here (RM-11.SIV Task 7) rather
-    than duplicating that arithmetic six more times for pgie/sgie fps and
-    event/threat/alarm/incident throughput. The pre-existing FPS/latency
-    fields are left exactly as they were (already hardware-verified in
-    RM-11 Phase 1/2) -- this class is additive, used only by the new
-    metrics below."""
+    than duplicating that arithmetic for pgie/sgie fps and event
+    throughput. The pre-existing FPS/latency fields are left exactly as
+    they were (already hardware-verified in RM-11 Phase 1/2) -- this class
+    is additive, used only by the new metrics below."""
 
     def __init__(self, *, window_size: int = 120) -> None:
         self._timestamps: deque[float] = deque(maxlen=window_size)
@@ -174,7 +170,9 @@ class _RollingRateCounter:
 
 class PerformanceInstrumentation:
     """Owns every metric named in the RM-11 Phase 1 approval, plus
-    RM-11.SIV's PGIE/SGIE fps and event/threat/alarm/incident throughput."""
+    RM-11.SIV's PGIE/SGIE fps and event-publication throughput. Per
+    ADR-029, AI Runtime publishes ObservationEvent only -- there is no
+    separate threat/alarm/incident throughput to track here anymore."""
 
     def __init__(self, *, pgie_is_placeholder: bool) -> None:
         self._pgie_is_placeholder = pgie_is_placeholder
@@ -195,9 +193,6 @@ class PerformanceInstrumentation:
         self._pgie_rate = _RollingRateCounter()
         self._sgie_rate = _RollingRateCounter()
         self._event_rate = _RollingRateCounter()
-        self._threat_rate = _RollingRateCounter()
-        self._alarm_rate = _RollingRateCounter()
-        self._incident_rate = _RollingRateCounter()
         self._visualization_rate = _RollingRateCounter()
         self._overlay_time_samples_ms: deque[float] = deque(maxlen=_LATENCY_WINDOW_SIZE)
 
@@ -225,15 +220,6 @@ class PerformanceInstrumentation:
 
     def record_event_published(self) -> None:
         self._event_rate.record()
-
-    def record_threat_assessment(self) -> None:
-        self._threat_rate.record()
-
-    def record_alarm(self) -> None:
-        self._alarm_rate.record()
-
-    def record_incident(self) -> None:
-        self._incident_rate.record()
 
     def record_visualization_frame(self, *, overlay_time_ms: float) -> None:
         """Called once per frame from the OSD renderer's probe callback
@@ -303,9 +289,6 @@ class PerformanceInstrumentation:
             pgie_fps=self._pgie_rate.rate_per_second(),
             sgie_fps=self._sgie_rate.rate_per_second(),
             event_throughput_per_sec=self._event_rate.rate_per_second(),
-            threat_throughput_per_sec=self._threat_rate.rate_per_second(),
-            alarm_throughput_per_sec=self._alarm_rate.rate_per_second(),
-            incident_throughput_per_sec=self._incident_rate.rate_per_second(),
             visualization_fps=self._visualization_rate.rate_per_second(),
             overlay_time_avg_ms=self._overlay_time_avg_ms(),
         )

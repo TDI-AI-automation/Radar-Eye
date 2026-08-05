@@ -42,7 +42,7 @@ class TestBuildReport:
 
         assert "fps" in report["pipeline"]
         assert "gpu_utilization_pct" in report["system"]
-        assert "threat_per_sec" in report["throughput"]
+        assert "event_per_sec" in report["throughput"]
         assert report["pipeline"]["pgie_is_placeholder"] is False
 
 

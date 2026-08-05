@@ -1,21 +1,21 @@
-"""DeepStream runtime composition and lifecycle (Phase 0 + Phase 1 + Phase 2).
+"""DeepStream runtime composition and lifecycle -- AI Runtime (ADR-029).
 
-Wires together everything RM-11 owns: the camera roster (DB), the GStreamer
-pipeline (streammux/PGIE/tracker/SGIE as of Phase 2), the GLib<->asyncio
-bridge, the Runtime Adapter, the heartbeat scheduler, performance
-instrumentation (Phase 1), and the ThreatEngineRuntimeAdapter orchestration
-layer (Phase 2). Per the RM-11 design review's Decision A, this all lives
-in one OS process sharing one asyncio loop -- ``DeepStreamRuntime`` does not
-start its own competing loop; callers (see ``main.py``) pass in the loop
-they are already running.
+Wires together everything AI Runtime owns: the camera roster (DB), the
+GStreamer pipeline (streammux/PGIE/tracker/SGIE), the GLib<->asyncio bridge,
+the Runtime Adapter, the heartbeat scheduler, and performance instrumentation.
+This all lives in one OS process sharing one asyncio loop -- ``DeepStreamRuntime``
+does not start its own competing loop; callers (see ``main.py``) pass in the
+loop they are already running.
 
-Every processed ``FrameObservation`` reaches two independent consumers,
-scheduled separately onto the asyncio loop: ``RuntimeAdapter`` (Phase 0/1 --
-instrumentation and logging) and ``ThreatEngineRuntimeAdapter`` (Phase 2 --
-threat assessment orchestration). Keeping them as separate scheduled calls,
-rather than nesting one inside the other, preserves the architecture the
-Phase 2 design review approved: DeepStream Runtime -> Runtime Adapter ->
-FrameObservation -> ThreatEngineRuntimeAdapter -> application services.
+Every processed ``FrameObservation`` reaches exactly one consumer, scheduled
+onto the asyncio loop: ``RuntimeAdapter`` (instrumentation, logging, and
+publishing ``ObservationEvent`` -- AI Runtime's only outward product besides
+AI Streaming). Per ADR-029, AI Runtime is a pure CV engine: it never calls
+Calibration, Threat Engine, Incident Service, Alert Service, or Hardware
+Action Service directly (that orchestration -- formerly
+``ThreatEngineRuntimeAdapter``, RM-11 Phase 2 -- has been removed from this
+process; see ADR-029 and ADR_INDEX.md). Downstream services consume
+``ObservationEvent`` off the Event Bus instead.
 
 Reconnect orchestration lives here (not in ``ingestion/source.py``, which
 only builds/tears down GStreamer elements): a bus ERROR/EOS message for a
@@ -38,7 +38,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.deepstream.app.ai_runtime.detection import RuntimeAdapter
-from apps.deepstream.app.ai_runtime.threat_bridge import ThreatEngineRuntimeAdapter
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import (
     DeepStreamSettings,
@@ -63,7 +62,6 @@ from apps.deepstream.app.stage_logging import get_audit_logger
 from apps.deepstream.app.synchronization import DesiredStateSynchronizer
 from apps.deepstream.app.telemetry import TelemetryCollector
 from apps.deepstream.app.visualization.manager import VisualizationManager
-from services.incident_service.alarm import AlarmService
 from shared.events.bus import EventBus
 
 logger = logging.getLogger(__name__)
@@ -138,21 +136,6 @@ class DeepStreamRuntime:
             session_factory=session_factory,
         )
 
-        # Phase 2: AlarmService is a long-lived singleton (its in-memory
-        # _records state must persist across escalation calls, unlike
-        # IncidentService/CalibrationService which are constructed fresh
-        # per short-lived session -- see ai_runtime/threat_bridge.py).
-        self._alarm_service = AlarmService(bus=bus)
-        self._threat_runtime_adapter = ThreatEngineRuntimeAdapter(
-            session_factory=session_factory,
-            bus=bus,
-            alarm_service=self._alarm_service,
-            heartbeat=self.heartbeat_registry,
-            tracer=self._tracer,
-            instrumentation=self._instrumentation,
-            track_annotations=self.visualization_manager.track_annotations,
-        )
-
         self._live_stream_settings = live_stream
         self._frame_counter = FrameCounter()
         self._bridge = AsyncBridge(loop)
@@ -210,10 +193,11 @@ class DeepStreamRuntime:
         encoded independently) -- input-selector picks between them,
         driven by RuntimeSupervisor's AI valve state via
         _select_stream_source below. Reuses VisualizationManager's
-        already-live TrackAnnotationRegistry (fed by
-        ThreatEngineRuntimeAdapter on every frame regardless of
-        Visualization's own enabled flag) -- no new overlay-rendering
-        mechanism."""
+        already-live TrackAnnotationRegistry -- no new overlay-rendering
+        mechanism. Per ADR-029, nothing populates this registry from
+        inside AI Runtime anymore (previously ThreatEngineRuntimeAdapter);
+        it is a preserved interface, read as always-empty until a later
+        phase feeds it again over the Event Bus."""
         self.runtime_supervisor = RuntimeSupervisor(
             self._pipeline,
             self._bridge,
@@ -514,7 +498,6 @@ class DeepStreamRuntime:
             self._heartbeat.stop()
         self._pipeline.stop()
         self._bridge.stop()
-        await self._alarm_service.stop()  # ADR-012/026 fail-safe shutdown
 
     def _on_inference_buffer(
         self,
@@ -527,8 +510,8 @@ class DeepStreamRuntime:
         Extraction happens synchronously, still inside RuntimeAdapter
         (ADR-027) -- see extract_frame_observations's docstring for why
         this cannot be deferred onto the asyncio loop. Only the resulting
-        plain FrameObservation values cross the bridge, to two independent
-        consumers (see the module docstring).
+        plain FrameObservation values cross the bridge, to RuntimeAdapter's
+        own scheduled consumer (see the module docstring).
 
         ``metadata_monotonic_seconds`` is captured immediately after
         extraction returns (still synchronous, same thread) -- close enough
@@ -548,7 +531,6 @@ class DeepStreamRuntime:
                     metadata_monotonic_seconds=metadata_monotonic_seconds,
                 )
             )
-            self._bridge.schedule(self._threat_runtime_adapter.on_frame_observation(observation))
 
     def _on_bus_message(self, message: Any) -> None:
         """Runs on the GLib main-loop thread (bus signal watch dispatch)."""

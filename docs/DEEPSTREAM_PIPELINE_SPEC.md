@@ -18,6 +18,16 @@ internal AI pipeline only — Camera Ingestion, Live Streaming, and
 Recording are separate processes/services, each independently
 subscribing to Stage 1's output.
 
+**Pipeline Decomposition (ADR-029): DeepStream is a pure CV engine.**
+Everything downstream of metadata extraction — Distance Estimation,
+Threat Engine evaluation, Incident lifecycle, Alerting, hardware
+actuation, and evidence capture — is also not part of DeepStream.
+DeepStream's own AI pipeline (Stages 2–5.5 below) ends at metadata
+extraction and AI Streaming output; it never calls into Calibration,
+Threat Engine, Incident Service, Alert Service, or Hardware Action
+Service in-process. Those run as independent processes, triggered only
+by the metadata event DeepStream publishes (Stage 5.6).
+
 ```
 Camera
     ↓
@@ -32,20 +42,49 @@ Encoded Split — every subsystem below subscribes independently,
     │       ↓
     │   WebRTC → Browser (Live View channel)
     │
-    ├── DeepStream (Stages 2-5.5: AI pipeline)
+    ├── DeepStream / AI Runtime (Stages 2-5.6: pure CV engine, ADR-029)
     │       ↓
     │   NVDEC → StreamMux → Primary GIE → NvDCF Tracker →
-    │   Secondary GIE → Distance Estimation → Threat Engine →
-    │   Incident Service → Event Bus → API Service → Frontend
+    │   Secondary GIE → Metadata Extraction (RuntimeAdapter, ADR-027)
     │       │
-    │       └── OSD Overlay → H.264 Encode → re-published locally as
-    │           "AI Streaming" → picked up by Stage 1.5's second,
-    │           independent WebRTC channel (see Stage 5.5)
+    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → re-published
+    │       │       locally as "AI Streaming" → picked up by Stage
+    │       │       1.5's second, independent WebRTC channel
+    │       │
+    │       └── Stage 5.6: ObservationEvent → published on the Event
+    │               Bus (Stage 10) — DeepStream's last step; it does
+    │               not call any downstream service directly, and this
+    │               event carries observations only (detections,
+    │               tracks, classifications, confidence, bounding
+    │               boxes, timestamps, camera_id, frame_id) — never a
+    │               decision (no threat level, alert, incident, or
+    │               hostile/intruder field)
     │
-    └── Stage 9: Recording Service
-            ↓
-        Continuous segments (independent of AI/Incident) +
-        incident-triggered event clips (via Incident Service, as before)
+    ├── Stage 6+7: Incident Service (Phase 5) — consumes Stage 5.6's
+    │       ObservationEvent; owns Distance Estimation + Threat Engine
+    │       evaluation as part of its own event handling; produces
+    │       ThreatAssessmentEvent / HumanReviewItemCreatedEvent
+    │       ↓
+    │   Stage 8: Incident Service lifecycle → IncidentCreatedEvent /
+    │   IncidentUpdatedEvent
+    │       ↓
+    │   Stage 8.5: Alert Service (Phase 6) → AlertRaisedEvent
+    │       ↓
+    │   Stage 8.6: Hardware Action Service (Phase 7) → GPIO / Siren /
+    │   Floodlight / PTZ
+    │
+    ├── Stage 8.7: Evidence Service (Phase 8) — consumes Stage 5.6's
+    │       ObservationEvent directly (not gated on Incident Service);
+    │       when a full frame is needed, requests/captures it from
+    │       Stage 1.5's AI Streaming output (never from DeepStream
+    │       directly — DeepStream gains no JPEG/image-writing
+    │       responsibility) → SnapshotCreatedEvent
+    │
+    └── Stage 9+: Recording / Archive / Playback / Search / Export —
+            POSTPONED per ADR-029, resumes after Phase 8. Design
+            unchanged (ADR-017): continuous segments (independent of
+            AI/Incident) + incident-triggered event clips (via
+            Incident Service, as before)
 ```
 
 DeepStream's fork (downstream of Secondary GIE, downstream of the only
@@ -55,7 +94,12 @@ AI Streaming branch never re-runs inference, never re-parses
 everything *above* DeepStream: it no longer owns the camera connection,
 Live Streaming is never inside its process, and its own encoded output
 is one of several independent local publishers, not a direct WebRTC
-peer connection.
+peer connection. What ADR-029 changes is everything *below*
+DeepStream's metadata extraction: Distance Estimation, Threat Engine,
+Incident Service, Alert Service, and Hardware Action Service are no
+longer in-process calls made from inside DeepStream (superseding the
+RM-11 Phase 2 `ThreatEngineRuntimeAdapter` design) — they are separate
+processes reacting to Stage 5.6's published `ObservationEvent`.
 
 **Governing principle: every media representation exists exactly
 once.** The camera's original encoded H.264 exists once (Stage 1).
@@ -67,6 +111,34 @@ representation that already exists simply because it's convenient.
 This is what keeps GPU/CPU/network cost bounded as Live Streaming,
 Recording, and future analytics all attach to the same small set of
 canonical streams.
+
+**Governing principle (ADR-029): every business decision is owned by
+exactly one service.** Detection/tracking/classification is decided
+once, in AI Runtime. Distance/zone and threat level are decided once,
+in Incident Service. Alarm eligibility/dedup/escalation is decided
+once, in Alert Service. Physical actuation is decided once, in
+Hardware Action Service. No service re-derives a decision another
+service already owns; no independently-deployed subsystem calls
+another's internal logic directly (e.g. `IncidentService ->
+AlertService.trigger()` in-process is prohibited) — every hand-off
+downstream is by event, never by in-process call across these
+boundaries. This does not restrict a subsystem's own in-process use of
+a shared library it is the sole caller of (Incident Service invoking
+`services/threat_engine`/`services/calibration` remains a library call
+within one process, not a cross-subsystem call).
+
+**Governing principle (ADR-029): AI Runtime publishes observations,
+not decisions.** `ObservationEvent` (Stage 5.6) carries only what was
+directly observed or measured — detections, tracks, classifications,
+confidence, bounding boxes, timestamps, `camera_id`, `frame_id`. It
+never carries a decision: no threat level, alert, incident, "intruder,"
+escalation, or "hostile" field. Every decision is computed downstream
+by the service that owns it.
+
+**Governing principle (ADR-029): the Event Bus is transport only.**
+Publish, subscribe, deliver — nothing else. No filtering, routing
+logic, business rules, severity-based retries, transformation, or
+enrichment inside the bus itself (see Stage 10).
 
 ---
 
@@ -367,7 +439,72 @@ Two independent consumers of this same encoded output, per ADR-028 —
 
 ---
 
-# Stage 6: Distance Estimation
+# Stage 5.6: ObservationEvent (ADR-029)
+
+Owner:
+
+**AI Runtime** (`apps/deepstream`) — this is DeepStream's last step.
+Nothing downstream of this stage runs inside the DeepStream process.
+
+Purpose:
+
+Publish the per-frame detection/track/classification results
+`RuntimeAdapter` already extracts (`FrameObservation` /
+`DetectionObservation` / `TrackObservation`, ADR-027) as a formal event
+on the Event Bus (Stage 10), instead of handing them to an in-process
+orchestrator. This is the sole hand-off point between AI Runtime and
+every downstream business service. Named for what it contains, not who
+produced it — a future perception engine replacing DeepStream would
+still publish `ObservationEvent`; only the documented Producer changes.
+
+Input:
+
+- `FrameObservation` / `DetectionObservation` / `TrackObservation`
+  (already produced by `RuntimeAdapter`'s existing metadata-extraction
+  pass — no new extraction logic, just a new publication step)
+
+Output:
+
+- `ObservationEvent` (payload schema: see `docs/EVENT_CONTRACTS.md`)
+
+Observations only, never decisions (ADR-029 Governing Principle):
+
+- Included: detections, tracks, classifications, confidence, bounding
+  boxes, timestamps, `camera_id`, `frame_id`
+- Excluded: threat level, alert, incident, "intruder," escalation,
+  "hostile" — any field that represents a decision rather than a
+  measurement. Those are computed downstream, never by AI Runtime.
+
+Consumers:
+
+- Incident Service (Stage 6+7+8)
+- Evidence Service (Stage 8.7)
+
+Explicitly prohibited beyond this stage, inside `apps/deepstream`
+(ADR-029):
+
+- Incident logic
+- Alert logic
+- Snapshot logic
+- Database writes, beyond existing telemetry
+- GPIO / siren / floodlight control
+- Notification logic
+- Any other business rule
+
+---
+
+# Stage 6+7: Distance Estimation + Threat Engine
+
+Owner:
+
+**Incident Service** (Phase 5) — these are no longer DeepStream
+pipeline stages. They run as part of Incident Service's own handling
+of the Stage 5.6 metadata event, calling `services/calibration` and
+`services/threat_engine` unchanged (superseding the RM-11 Phase 2
+`ThreatEngineRuntimeAdapter` design, which made these calls from inside
+DeepStream — see ADR-029).
+
+## Distance Estimation
 
 Purpose:
 
@@ -406,9 +543,7 @@ Output Metadata:
   "zone": "zone_1"
 }
 
----
-
-# Stage 7: Threat Engine
+## Threat Engine
 
 Purpose:
 
@@ -446,6 +581,12 @@ Generated Events:
 
 # Stage 8: Incident Service
 
+Owner:
+
+**Incident Service** (Phase 5) — an independent process, consuming
+Stage 5.6's metadata event (via Stage 6+7's threat evaluation, in the
+same process).
+
 Purpose:
 
 Incident lifecycle management.
@@ -467,7 +608,104 @@ Outputs:
 
 ---
 
-# Stage 9: Recording Service
+# Stage 8.5: Alert Service (ADR-029, new)
+
+Owner:
+
+**Alert Service** (Phase 6) — an independent process, consuming
+`IncidentCreatedEvent` / `IncidentUpdatedEvent`.
+
+Purpose:
+
+Alert generation, severity, deduplication, escalation, operator
+notification (UI / SMS / Email / WhatsApp — `docs/OPEN_QUESTIONS.md`
+Q-005).
+
+Owns:
+
+The HIGH/FIRE alarm-eligibility rule (ADR-026), relocated here from an
+undifferentiated "Alarm Service."
+
+Generated Events:
+
+- AlertRaisedEvent
+
+---
+
+# Stage 8.6: Hardware Action Service (ADR-029, new)
+
+Owner:
+
+**Hardware Action Service** (Phase 7) — an independent process,
+consuming `AlertRaisedEvent`. Trigger source per ADR-012, amended by
+ADR-029: Alert Service, not Threat Engine directly.
+
+Purpose:
+
+Physical actuation only — GPIO relay, siren, floodlight, PTZ preset,
+future physical integrations (ADR-012's Supported Targets).
+
+Prohibited:
+
+Any eligibility, dedup, escalation, or notification decision — those
+belong to Alert Service (Stage 8.5). Hardware Action Service only acts
+on what it's told.
+
+---
+
+# Stage 8.7: Evidence Service (ADR-029, new)
+
+Owner:
+
+**Evidence Service** (Phase 8) — an independent process, consuming
+`ObservationEvent` (Stage 5.6) directly. Not gated on Incident Service
+or Alert Service state.
+
+Purpose:
+
+Full-frame snapshots, object/person crops (new capability — split out
+of `services/recording`'s prior incident-level-only
+`SnapshotCreatedEvent`), evidence storage, incident attachment.
+
+Frame acquisition (metadata-only in, image out):
+
+Evidence Service consumes `ObservationEvent` only — no video/frame data
+flows to it directly, and AI Runtime gains no JPEG/image-writing
+responsibility. When `ObservationEvent` indicates a snapshot is
+warranted, Evidence Service requests/captures the actual frame from
+Stage 1.5's already-published **AI Streaming** output (the same
+representation Live Streaming already subscribes to for the browser),
+never a new representation created by DeepStream for this purpose —
+per ADR-028's "every media representation exists exactly once":
+
+```
+ObservationEvent
+      ↓
+Evidence Service (decides a snapshot is warranted)
+      ↓
+requests/captures a frame from AI Streaming (Stage 1.5 / Stage 5.5)
+      ↓
+writes the JPEG, emits SnapshotCreatedEvent
+```
+
+Generated Events:
+
+- SnapshotCreatedEvent
+
+Not this stage's responsibility:
+
+Event clips (video) — those remain bundled with the postponed
+Recording Service (Stage 9+), produced only once Recording resumes.
+
+---
+
+# Stage 9+: Recording Service (POSTPONED per ADR-029)
+
+Status:
+
+Phase 9+ — deferred until Phase 8 (Evidence Service) is complete. Part
+of the locked Phase 3→4→5→6→7→8→9+ sequence; resumes as originally
+specified below, not redesigned.
 
 Owner:
 
@@ -490,16 +728,17 @@ Retention:
 
 30 Days
 
-Event Clips (Evidence):
+Event Clips (video):
 
 Source: Incident Service (Stage 8), as before — pre-event and
 post-event buffer around an incident, extracted around the incident's
 timestamp. Distinct concept from Continuous Recording above, not a
-replacement for it.
+replacement for it. Snapshots are no longer part of this service's
+scope — see Stage 8.7 (Evidence Service), which produces them
+independently of Recording's postponement.
 
 Evidence Types:
 
-- Snapshots
 - Event Clips
 
 Clip Policy:
@@ -510,7 +749,6 @@ Post-event buffer
 
 Generated Events:
 
-- SnapshotCreatedEvent
 - ClipCreatedEvent
 
 Archive:
@@ -529,12 +767,25 @@ Purpose:
 
 Internal service communication.
 
+Status (ADR-029, Phase 4):
+
+Production, cross-process transport — replaces the in-process-only
+`InProcessEventBus` (RM-04) now that AI Runtime, Incident Service,
+Alert Service, Hardware Action Service, Evidence Service, and Recording
+(once resumed) each run as independent OS processes, per ADR-028's
+process-separation model. The `EventBus` abstract contract itself is
+unchanged; only the concrete transport is swapped, per RM-04's own
+standing note that this was always the intended extension point.
+
 Consumers:
 
 - API Service
-- Recording Service
+- AI Runtime (publishes only — Stage 5.6)
 - Incident Service
-- Alarm Service
+- Alert Service
+- Hardware Action Service
+- Evidence Service
+- Recording Service (once resumed)
 
 Transport:
 
@@ -544,6 +795,11 @@ Requirements:
 
 - Immutable events
 - Versioned contracts
+- Transport only (ADR-029 Governing Principle) — publish, subscribe,
+  deliver, nothing else. Explicitly prohibited inside the bus:
+  filtering, routing logic, business rules, severity-based retries,
+  transformation, enrichment. Any of those belong to the consuming
+  service, never to the bus.
 
 ---
 

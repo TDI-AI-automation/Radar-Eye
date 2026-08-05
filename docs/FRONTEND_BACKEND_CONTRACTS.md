@@ -385,6 +385,18 @@ HumanReviewItemCreatedEvent
 
 ---
 
+## Alert Events (ADR-029, new)
+
+WebSocket:
+
+/ws/alerts
+
+Event:
+
+AlertRaisedEvent
+
+---
+
 ## Alarm Events
 
 WebSocket:
@@ -394,6 +406,10 @@ WebSocket:
 Event:
 
 AlarmRequestedEvent
+
+Note (ADR-029):
+
+Producer is now Alert Service, not Threat Engine (see `docs/EVENT_CONTRACTS.md`) — this channel reflects Hardware Action Service's trigger requests, not a direct Threat Engine output.
 
 ---
 

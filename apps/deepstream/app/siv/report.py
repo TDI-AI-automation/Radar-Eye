@@ -33,14 +33,12 @@ _HEARTBEAT_COMPONENTS = (
     "tracker",
     "sgie",
     "runtime_adapter",
-    "threat_runtime_adapter",
-    "threat_engine",
-    "calibration",
-    "incident",
-    "alarm",
     "event_bus",
     "heartbeat",
 )
+"""ADR-029: threat_runtime_adapter/threat_engine/calibration/incident/alarm
+removed -- see the identical note on siv/watchdog.py's own
+_HEARTBEAT_COMPONENTS tuple."""
 
 
 def build_report(
@@ -80,9 +78,6 @@ def build_report(
         },
         "throughput": {
             "event_per_sec": snapshot.event_throughput_per_sec,
-            "threat_per_sec": snapshot.threat_throughput_per_sec,
-            "alarm_per_sec": snapshot.alarm_throughput_per_sec,
-            "incident_per_sec": snapshot.incident_throughput_per_sec,
         },
         # Counts (as opposed to throughput above) double as this report's
         # "Validation Results" -- healthy=True across every component,

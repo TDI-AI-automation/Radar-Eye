@@ -195,8 +195,10 @@ class TestSystemMetricsSampling:
 
 
 class TestThroughputCounters:
-    """RM-11.SIV Task 7 -- pgie/sgie fps and event/threat/alarm/incident
-    throughput, via the new _RollingRateCounter helper."""
+    """RM-11.SIV Task 7 -- pgie/sgie fps and event-publication throughput,
+    via the new _RollingRateCounter helper. Per ADR-029, AI Runtime
+    publishes ObservationEvent only -- there is no separate threat/alarm/
+    incident throughput to track here anymore."""
 
     def test_no_records_yields_none(self) -> None:
         instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
@@ -205,9 +207,6 @@ class TestThroughputCounters:
         assert snapshot.pgie_fps is None
         assert snapshot.sgie_fps is None
         assert snapshot.event_throughput_per_sec is None
-        assert snapshot.threat_throughput_per_sec is None
-        assert snapshot.alarm_throughput_per_sec is None
-        assert snapshot.incident_throughput_per_sec is None
 
     def test_pgie_fps_from_two_records_one_second_apart(self, clock: _FakeClock) -> None:
         instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
@@ -231,23 +230,14 @@ class TestThroughputCounters:
         assert snapshot.pgie_fps == pytest.approx(1.0)
         assert snapshot.sgie_fps == pytest.approx(2.0)
 
-    def test_event_threat_alarm_incident_throughput(self, clock: _FakeClock) -> None:
+    def test_event_published_throughput(self, clock: _FakeClock) -> None:
         instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
         instrumentation.record_event_published()
-        instrumentation.record_threat_assessment()
-        instrumentation.record_alarm()
-        instrumentation.record_incident()
         clock.advance(2.0)
         instrumentation.record_event_published()
-        instrumentation.record_threat_assessment()
-        instrumentation.record_alarm()
-        instrumentation.record_incident()
 
         snapshot = instrumentation.snapshot()
         assert snapshot.event_throughput_per_sec == pytest.approx(0.5)
-        assert snapshot.threat_throughput_per_sec == pytest.approx(0.5)
-        assert snapshot.alarm_throughput_per_sec == pytest.approx(0.5)
-        assert snapshot.incident_throughput_per_sec == pytest.approx(0.5)
 
 
 class TestVisualizationFrame:
