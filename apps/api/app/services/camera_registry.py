@@ -23,6 +23,10 @@ from apps.api.app.repositories.camera import (
     CameraRepository,
     CameraStreamProfileRepository,
 )
+from apps.api.app.repositories.media import (
+    CameraMediaEndpointRepository,
+    CameraSubsystemHealthRepository,
+)
 from apps.api.app.security.encryption import CredentialEncryptionProvider
 from apps.api.app.services.rtsp_url_generator import (
     default_port_for_brand,
@@ -51,6 +55,8 @@ class CameraRegistryService:
         self._cameras = CameraRepository(session)
         self._profiles = CameraStreamProfileRepository(session)
         self._calibrations = CameraCalibrationRepository(session)
+        self._media_endpoints = CameraMediaEndpointRepository(session)
+        self._subsystem_health = CameraSubsystemHealthRepository(session)
         self._encryption = encryption
         self._bus = bus
 
@@ -194,12 +200,23 @@ class CameraRegistryService:
 
     async def delete(self, camera: Camera) -> None:
         """Removes a camera and its own setup data (stream profile,
-        calibration history) in one transaction. Does not touch incidents,
-        human review items, or recordings referencing this camera --
-        those are evidence (CLAUDE.md's Evidence Preservation principle),
-        never cascade-deleted; if any exist, the database's own foreign
-        key constraint raises IntegrityError, which the router translates
-        into a clear 409 rather than silently destroying history.
+        calibration history, ADR-028 media-distribution bookkeeping) in one
+        transaction. Does not touch incidents, human review items, or
+        recordings referencing this camera -- those are evidence (CLAUDE.md's
+        Evidence Preservation principle), never cascade-deleted; if any
+        exist, the database's own foreign key constraint raises
+        IntegrityError, which the router translates into a clear 409 rather
+        than silently destroying history.
+
+        ``camera_media_endpoints``/``camera_subsystem_health`` (ADR-028) are
+        not evidence either -- ephemeral cross-process runtime bookkeeping
+        (which endpoint is currently published, which subsystem last
+        reported healthy), re-created automatically the moment a camera is
+        re-registered. Left uncleaned, these rows' own foreign key
+        constraint would raise IntegrityError here too, and the router's
+        catch-all would misreport that as blocking evidence exactly the
+        same as a real one -- so they're deleted here, before the camera
+        row, same as stream profile/calibration history above.
 
         Camera Runtime picks this up for free: DesiredStateSynchronizer
         already removes a source whose camera_id no longer appears in
@@ -211,6 +228,10 @@ class CameraRegistryService:
             await self._profiles.delete(profile)
         for calibration in await self._calibrations.list_for_camera(camera.id):
             await self._calibrations.delete(calibration)
+        for endpoint in await self._media_endpoints.list_by_camera(camera.id):
+            await self._media_endpoints.delete(endpoint)
+        for health in await self._subsystem_health.list_by_camera(camera.id):
+            await self._subsystem_health.delete(health)
         await self._cameras.delete(camera)
 
     async def _publish(self, event: CameraRegisteredEvent) -> None:

@@ -5,6 +5,8 @@ methods are upserts; these tests exercise exactly that contract.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from apps.api.app.models.camera import Camera
@@ -30,6 +32,7 @@ class TestCameraMediaEndpointRepository:
             camera.id, "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/x"
         )
 
+        assert endpoint is not None
         assert endpoint.camera_id == camera.id
         assert endpoint.subsystem == "ingestion"
         assert endpoint.transport == "rtsp"
@@ -104,6 +107,50 @@ class TestCameraMediaEndpointRepository:
         repo = CameraMediaEndpointRepository(db_session)
         assert await repo.list_by_subsystem("ingestion") == []
 
+    async def test_list_by_camera_returns_every_subsystems_row_for_that_camera(
+        self, db_session
+    ) -> None:
+        camera_a = await _make_camera(db_session, "cam-a")
+        camera_b = await _make_camera(db_session, "cam-b")
+        repo = CameraMediaEndpointRepository(db_session)
+        await repo.set_endpoint(
+            camera_a.id, "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/a"
+        )
+        await repo.set_endpoint(
+            camera_a.id, "ai", transport="rtsp", address="rtsp://127.0.0.1:8601/a"
+        )
+        await repo.set_endpoint(
+            camera_b.id, "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/b"
+        )
+
+        rows = await repo.list_by_camera(camera_a.id)
+
+        assert {row.subsystem for row in rows} == {"ingestion", "ai"}
+        assert all(row.camera_id == camera_a.id for row in rows)
+
+    async def test_list_by_camera_empty_when_none_published(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        repo = CameraMediaEndpointRepository(db_session)
+        assert await repo.list_by_camera(camera.id) == []
+
+    async def test_set_endpoint_for_deleted_camera_returns_none_not_integrity_error(
+        self, db_session
+    ) -> None:
+        """Regression test for a real, hardware-observed race: a reporting
+        subsystem's roster-sync loop can still be holding a camera_id the
+        operator just deleted via apps.api. The write must degrade
+        gracefully -- there is no camera left to publish an endpoint for --
+        not raise IntegrityError and crash-loop the subsystem's own
+        synchronize() forever."""
+        repo = CameraMediaEndpointRepository(db_session)
+
+        result = await repo.set_endpoint(
+            uuid.uuid4(), "ingestion", transport="rtsp", address="rtsp://127.0.0.1:8600/gone"
+        )
+
+        assert result is None
+        await db_session.commit()  # session must still be usable after the swallow
+
 
 @pytest.mark.asyncio
 class TestCameraSubsystemHealthRepository:
@@ -113,6 +160,7 @@ class TestCameraSubsystemHealthRepository:
 
         health = await repo.set_health(camera.id, "ingestion", status="RECONNECTING")
 
+        assert health is not None
         assert health.camera_id == camera.id
         assert health.subsystem == "ingestion"
         assert health.status == "RECONNECTING"
@@ -143,3 +191,41 @@ class TestCameraSubsystemHealthRepository:
         ai = await repo.get_by_camera_and_subsystem(camera.id, "ai")
         assert ingestion is not None and ingestion.status == "CONNECTED"
         assert ai is not None and ai.status == "DISCONNECTED" and ai.detail == "model not loaded"
+
+    async def test_list_by_camera_returns_every_subsystems_row_for_that_camera(
+        self, db_session
+    ) -> None:
+        camera_a = await _make_camera(db_session, "cam-a")
+        camera_b = await _make_camera(db_session, "cam-b")
+        repo = CameraSubsystemHealthRepository(db_session)
+        await repo.set_health(camera_a.id, "ingestion", status="CONNECTED")
+        await repo.set_health(camera_a.id, "deepstream", status="CONNECTED")
+        await repo.set_health(camera_b.id, "ingestion", status="CONNECTED")
+
+        rows = await repo.list_by_camera(camera_a.id)
+
+        assert {row.subsystem for row in rows} == {"ingestion", "deepstream"}
+        assert all(row.camera_id == camera_a.id for row in rows)
+
+    async def test_list_by_camera_empty_when_none_reported(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        repo = CameraSubsystemHealthRepository(db_session)
+        assert await repo.list_by_camera(camera.id) == []
+
+    async def test_set_health_for_deleted_camera_returns_none_not_integrity_error(
+        self, db_session
+    ) -> None:
+        """Regression test for the exact crash reproduced on real hardware:
+        Live Streaming's _remove_camera() writes a final "DISCONNECTED,
+        endpoint removed" health row when a camera's published endpoint
+        disappears -- including when that's because the camera itself was
+        just deleted via apps.api. That write must degrade gracefully, not
+        raise IntegrityError and crash-loop the synchronize() loop."""
+        repo = CameraSubsystemHealthRepository(db_session)
+
+        result = await repo.set_health(
+            uuid.uuid4(), "live_streaming", status="DISCONNECTED", detail="endpoint removed"
+        )
+
+        assert result is None
+        await db_session.commit()  # session must still be usable after the swallow
