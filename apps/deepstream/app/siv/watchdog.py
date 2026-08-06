@@ -70,14 +70,13 @@ _HEARTBEAT_COMPONENTS = (
     "tracker",
     "sgie",
     "runtime_adapter",
-    "threat_runtime_adapter",
-    "threat_engine",
-    "calibration",
-    "incident",
-    "alarm",
     "heartbeat",
     "pipeline_fps",
 )
+"""ADR-029: threat_runtime_adapter/threat_engine/calibration/incident/alarm
+removed -- AI Runtime no longer calls any of those, so nothing would ever
+beat them again; leaving them would make the dashboard/watchdog show 5
+permanently, falsely unhealthy components."""
 """Components fed by HeartbeatRegistry.beat() calls elsewhere in the
 pipeline. "event_bus" is handled separately -- see the module docstring."""
 

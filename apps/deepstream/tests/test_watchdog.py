@@ -46,8 +46,6 @@ class TestNoActivityIsUnhealthy:
             "pgie",
             "tracker",
             "sgie",
-            "incident",
-            "alarm",
             "pipeline_fps",
         ):
             assert statuses[component].healthy is False

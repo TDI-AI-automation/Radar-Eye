@@ -55,8 +55,14 @@ from apps.deepstream.app.instrumentation import PerformanceInstrumentation
 from apps.deepstream.app.pipeline_trace import PipelineTracer
 from apps.deepstream.app.stage_logging import get_audit_logger, get_stage_logger
 from shared.events.bus import EventBus
-from shared.events.payloads import CameraDisconnectedPayload, SystemEventPayload
-from shared.events.types import CameraDisconnectedEvent, SystemEvent
+from shared.events.payloads import (
+    BoundingBoxPayload,
+    CameraDisconnectedPayload,
+    ObservationDetection,
+    ObservationEventPayload,
+    SystemEventPayload,
+)
+from shared.events.types import CameraDisconnectedEvent, ObservationEvent, SystemEvent
 from shared.schemas.camera import CameraConnectionStatus
 
 logger = logging.getLogger(__name__)
@@ -373,10 +379,14 @@ class RuntimeAdapter:
         ingress_monotonic_seconds: float,
         metadata_monotonic_seconds: float,
     ) -> None:
-        """Records the observation for instrumentation. No business events
-        are published here -- ThreatAssessmentEvent construction needs
-        uniform classification (SGIE) and a distance zone (Calibration),
-        both explicitly out of Phase 1's scope (deferred to Phase 2).
+        """Records the observation for instrumentation and publishes it as
+        an ``ObservationEvent`` -- AI Runtime's only outward product besides
+        AI Streaming (ADR-029). This is an observation, not a business
+        event: it carries only what was directly measured (detections,
+        tracks, classifications, confidence, bounding boxes, timestamps,
+        camera_id, frame_num), never a decision -- no threat level,
+        incident, alert, or similar field. AI Runtime does not know, and
+        must never know, who (if anyone) consumes this event.
 
         Takes monotonic timing values as explicit separate arguments rather
         than deriving them from ``observation``'s wall-clock timestamp
@@ -400,6 +410,16 @@ class RuntimeAdapter:
                 metadata_seconds=metadata_monotonic_seconds,
             )
 
+        await self._bus.publish(
+            ObservationEvent(
+                event_type="ObservationEvent",
+                source=_SOURCE_COMPONENT,
+                payload=self._build_observation_payload(observation),
+            )
+        )
+        if self._instrumentation is not None:
+            self._instrumentation.record_event_published()
+
         if self._observation_count % _OBSERVATION_LOG_INTERVAL == 1:
             _runtime_adapter_logger.info(
                 "Frame observation: camera=%s frame_num=%d detections=%d (observation #%d)",
@@ -408,3 +428,39 @@ class RuntimeAdapter:
                 len(observation.detections),
                 self._observation_count,
             )
+
+    @staticmethod
+    def _build_observation_payload(observation: FrameObservation) -> ObservationEventPayload:
+        """Builds the ``ObservationEvent`` payload from ``observation``.
+
+        ``observation_id`` is generated exactly once here, immediately
+        after metadata extraction (already done by the time this method
+        runs) and before the payload is constructed -- never regenerated if
+        the event is rebuilt. Every ``detection_id`` is likewise generated
+        once per detection here; it identifies a detection within this one
+        event only and is never reused across observations, unlike
+        ``track_id`` (temporal identity across frames/events).
+        """
+        return ObservationEventPayload(
+            observation_id=uuid.uuid4(),
+            camera_id=observation.camera_id,
+            frame_num=observation.frame_num,
+            frame_timestamp=observation.metadata_timestamp,
+            detections=[
+                ObservationDetection(
+                    detection_id=uuid.uuid4(),
+                    track_id=detection.track_id,
+                    class_id=detection.class_id,
+                    label=detection.label,
+                    confidence=detection.confidence,
+                    bbox=BoundingBoxPayload(
+                        left=detection.bbox.left,
+                        top=detection.bbox.top,
+                        width=detection.bbox.width,
+                        height=detection.bbox.height,
+                    ),
+                    secondary_label=detection.secondary_label,
+                )
+                for detection in observation.detections
+            ],
+        )

@@ -300,11 +300,6 @@ class WatchdogStaleThresholds(BaseModel):
     tracker: float = 5.0
     sgie: float = 5.0
     runtime_adapter: float = 5.0
-    threat_runtime_adapter: float = 5.0
-    threat_engine: float = 10.0
-    calibration: float = 10.0
-    incident: float = 10.0
-    alarm: float = 10.0
     event_bus: float = 10.0
     heartbeat: float = 3.0
 

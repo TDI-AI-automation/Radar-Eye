@@ -109,6 +109,10 @@ Phase 1 implementation:
 
 Specific siren and relay hardware models remain unknown.
 
+Ownership resolved by ADR-029:
+
+UI/SMS/Email/WhatsApp are owned by Alert Service (Phase 6); GPIO Relay/Audio Siren (and floodlight/PTZ) are owned by Hardware Action Service (Phase 7), consuming Alert Service's `AlertRaisedEvent`. This resolves *which service* owns each channel — the specific hardware models remain the still-open part of this question.
+
 ---
 
 ## Q-006
@@ -135,11 +139,14 @@ What frontend live-streaming protocol is required?
 
 Status:
 
-OPEN
+CLOSED
 
-Owner:
+Answer:
 
-Client
+WebRTC. Implemented and hardware-validated (Live Monitoring's Live View
+channel). See ADR-028 and `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5
+for the owning service and `docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live
+Monitoring / WebRTC section for the request/response contract.
 
 ---
 

@@ -1,26 +1,25 @@
 """AI Runtime -- the subsystem that turns DeepStream/pyds metadata into
-threat decisions.
+``ObservationEvent`` (ADR-029). A pure CV engine: it publishes observations,
+never a decision -- no threat, incident, alert, or hardware-action logic
+lives here.
 
-RM-12 Camera Runtime Step 6 gave this its own explicit package (a pure
-reorganization of RM-11's existing ``runtime_adapter.py``/
-``threat_runtime_adapter.py``/``observations.py`` -- no behavior changed):
-
-- ``observations``: the shared, pyds-free data contract between the two
-  modules below (``FrameObservation``, ``DetectionObservation``, etc.).
+- ``observations``: the shared, pyds-free data contract this package
+  produces (``FrameObservation``, ``DetectionObservation``, etc.).
 - ``detection``: ``RuntimeAdapter``, the ADR-027 anti-corruption layer --
   the only code in the repository permitted to import ``pyds``/touch
-  ``NvDsBatchMeta``. Produces ``observations.FrameObservation`` values.
-- ``threat_bridge``: ``ThreatEngineRuntimeAdapter``, which consumes those
-  ``FrameObservation`` values and orchestrates Calibration/ThreatEngine/
-  Incident/Alarm. Never touches ``pyds``, ``Gst``, or ``GLib``.
+  ``NvDsBatchMeta``. Produces ``observations.FrameObservation`` values and
+  publishes them as ``ObservationEvent`` on the Event Bus -- AI Runtime's
+  only outward product besides AI Streaming.
 
-Kept as two modules (not merged) because they own genuinely different
-responsibilities on either side of the ADR-027 boundary; kept in one
-package because that boundary, and the shared ``observations`` contract
-crossing it, is easiest to see and preserve when they sit together.
+Per ADR-029, this package has no compile-time dependency on
+``services.threat_engine``, ``services.calibration``, or
+``services.incident_service`` -- that orchestration (formerly
+``ThreatEngineRuntimeAdapter`` in a since-removed ``threat_bridge`` module,
+RM-11 Phase 2) has been removed; downstream services consume
+``ObservationEvent`` instead.
 
 No submodule is re-exported here -- callers import
-``apps.deepstream.app.ai_runtime.detection``/``.threat_bridge``/
-``.observations`` directly, matching every other subsystem package in
-``apps/deepstream/app`` (``ingestion``, ``pipeline``, ``visualization``).
+``apps.deepstream.app.ai_runtime.detection``/``.observations`` directly,
+matching every other subsystem package in ``apps/deepstream/app``
+(``ingestion``, ``pipeline``, ``visualization``).
 """

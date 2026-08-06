@@ -5,18 +5,21 @@ skips if unreachable, via this package's conftest.py fixtures. Uses the
 ``session_factory`` fixture (not ``db_session``) since ``DesiredStateReader``
 opens its own short-lived session per ``read_all()`` call, matching
 ``ThreatEngineRuntimeAdapter``'s established pattern.
+
+ADR-028: connection info comes from ``camera_media_endpoints``
+(subsystem="ingestion" -- the row Camera Ingestion publishes once it holds
+a camera's stream), never ``camera_stream_profiles`` directly -- AI Runtime
+must never connect to the physical camera itself.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from apps.api.app.models.camera import Camera, CameraStreamProfile
-from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
-from apps.api.app.security.encryption import FernetCredentialEncryptionProvider
+from apps.api.app.models.camera import Camera
+from apps.api.app.repositories.camera import CameraRepository
+from apps.api.app.repositories.media import CameraMediaEndpointRepository
 from apps.deepstream.app.desired_state import DesiredStateReader
-
-_TEST_KEY = "CLrFKStOGSTRHci9yIv1kJV-SxMwWNDHzUiSWl3C3jA="
 
 
 async def _make_camera(
@@ -38,43 +41,55 @@ async def _make_camera(
 
 @pytest.mark.asyncio
 class TestReadAll:
-    async def test_camera_without_stream_profile_has_no_connection_info(
+    async def test_camera_without_published_endpoint_has_no_connection_info(
         self, db_session, session_factory
     ) -> None:
         await _make_camera(db_session)
         await db_session.commit()
-        encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
 
-        states = await DesiredStateReader(session_factory, encryption).read_all()
+        states = await DesiredStateReader(session_factory).read_all()
 
         assert len(states) == 1
         assert states[0].rtsp_url is None
         assert states[0].transport is None
 
-    async def test_camera_with_stream_profile_has_decrypted_connection_info(
+    async def test_camera_with_published_ingestion_endpoint_has_connection_info(
         self, db_session, session_factory
     ) -> None:
         camera = await _make_camera(db_session, name="gate-camera", ai_enabled=True)
-        encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
-        rtsp_url = "rtsp://192.0.2.10:554/stream1"
-        await CameraStreamProfileRepository(db_session).add(
-            CameraStreamProfile(
-                camera_id=camera.id,
-                rtsp_url_encrypted=encryption.encrypt(rtsp_url),
-                transport="tcp",
-            )
+        local_url = f"rtsp://127.0.0.1:8600/{camera.id}"
+        await CameraMediaEndpointRepository(db_session).set_endpoint(
+            camera.id, "ingestion", transport="tcp", address=local_url
         )
         await db_session.commit()
 
-        states = await DesiredStateReader(session_factory, encryption).read_all()
+        states = await DesiredStateReader(session_factory).read_all()
 
         assert len(states) == 1
         state = states[0]
         assert state.camera_id == camera.id
         assert state.name == "gate-camera"
         assert state.ai_enabled is True
-        assert state.rtsp_url == rtsp_url
+        assert state.rtsp_url == local_url
         assert state.transport == "tcp"
+
+    async def test_ignores_endpoints_from_other_subsystems(
+        self, db_session, session_factory
+    ) -> None:
+        """A published "ai" (annotated-media) endpoint must never be
+        mistaken for the "ingestion" one AI Runtime is meant to subscribe
+        to -- it would be this same process's own future output."""
+        camera = await _make_camera(db_session)
+        await CameraMediaEndpointRepository(db_session).set_endpoint(
+            camera.id, "ai", transport="rtsp", address="rtsp://127.0.0.1:8601/other"
+        )
+        await db_session.commit()
+
+        states = await DesiredStateReader(session_factory).read_all()
+
+        assert len(states) == 1
+        assert states[0].rtsp_url is None
+        assert states[0].transport is None
 
     async def test_reads_current_desired_state_fields(self, db_session, session_factory) -> None:
         await _make_camera(
@@ -83,9 +98,8 @@ class TestReadAll:
             recording_enabled=True,
         )
         await db_session.commit()
-        encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
 
-        states = await DesiredStateReader(session_factory, encryption).read_all()
+        states = await DesiredStateReader(session_factory).read_all()
 
         assert len(states) == 1
         assert states[0].ai_enabled is False
@@ -96,8 +110,7 @@ class TestReadAll:
     ) -> None:
         camera = await _make_camera(db_session, ai_enabled=False)
         await db_session.commit()
-        encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
-        reader = DesiredStateReader(session_factory, encryption)
+        reader = DesiredStateReader(session_factory)
 
         first = await reader.read_all()
         assert first[0].ai_enabled is False
@@ -109,8 +122,6 @@ class TestReadAll:
         assert second[0].ai_enabled is True
 
     async def test_no_cameras_returns_empty_list(self, session_factory) -> None:
-        encryption = FernetCredentialEncryptionProvider(_TEST_KEY)
-
-        states = await DesiredStateReader(session_factory, encryption).read_all()
+        states = await DesiredStateReader(session_factory).read_all()
 
         assert states == []

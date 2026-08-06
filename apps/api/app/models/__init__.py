@@ -12,6 +12,7 @@ from apps.api.app.models.base import Base
 from apps.api.app.models.camera import Camera, CameraCalibration, CameraStreamProfile
 from apps.api.app.models.human_review import HumanReviewItem
 from apps.api.app.models.incident import Incident, IncidentEvent
+from apps.api.app.models.media import CameraMediaEndpoint, CameraSubsystemHealth
 from apps.api.app.models.recording import Recording, Snapshot
 from apps.api.app.models.system_event import SystemEvent
 from apps.api.app.models.user import User
@@ -21,7 +22,9 @@ __all__ = [
     "Base",
     "Camera",
     "CameraCalibration",
+    "CameraMediaEndpoint",
     "CameraStreamProfile",
+    "CameraSubsystemHealth",
     "HumanReviewItem",
     "Incident",
     "IncidentEvent",

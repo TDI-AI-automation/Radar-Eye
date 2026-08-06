@@ -37,11 +37,6 @@ class TestRenderShowsMoreThanHealthyUnhealthy:
             "NvDCF (Tracker)",
             "SGIE",
             "RuntimeAdapter",
-            "ThreatEngineRuntimeAdapter",
-            "Calibration",
-            "ThreatEngine",
-            "Incident",
-            "Alarm",
             "EventBus",
             "Heartbeat",
         ):
@@ -53,9 +48,6 @@ class TestRenderShowsMoreThanHealthyUnhealthy:
 
         assert "PGIE FPS" in output
         assert "SGIE FPS" in output
-        assert "Threats/sec" in output
-        assert "Alarms/sec" in output
-        assert "Incidents/sec" in output
         assert "Events/sec" in output
         assert "Latency" in output
         assert "GPU" in output

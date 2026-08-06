@@ -33,6 +33,10 @@ from apps.api.app.models.incident import Incident
 from apps.api.app.models.user import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, User
 from apps.api.app.repositories.audit_log import AuditLogRepository
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
+from apps.api.app.repositories.media import (
+    CameraMediaEndpointRepository,
+    CameraSubsystemHealthRepository,
+)
 from apps.api.app.routers.cameras import get_webrtc_proxy_client
 from apps.api.app.security.auth import create_token_pair, hash_password
 from shared.constants.incident_types import IncidentStatus, IncidentType
@@ -429,6 +433,47 @@ class TestCamerasDelete:
                 headers=_auth_header(admin, ROLE_ADMIN),
             )
         assert response.status_code == 404
+
+    async def test_deletes_camera_with_media_endpoint_and_health_rows(
+        self, db_engine, db_session
+    ) -> None:
+        """ADR-028's camera_media_endpoints/camera_subsystem_health rows
+        (published by Camera Ingestion/AI Runtime once a real camera is
+        connected) are ephemeral runtime bookkeeping, not evidence -- they
+        must not block deletion the way an incident does. Regression test
+        for a real bug: CameraRegistryService.delete() didn't clean these
+        up, so their own foreign key constraint raised IntegrityError,
+        which this router's generic except-IntegrityError handler
+        misreported as "existing incidents, review items, or recordings"
+        even though none existed."""
+        camera = await _make_camera(db_session)
+        await CameraMediaEndpointRepository(db_session).set_endpoint(
+            camera.id, "ingestion", transport="rtsp", address=f"rtsp://127.0.0.1:8600/{camera.id}"
+        )
+        await CameraSubsystemHealthRepository(db_session).set_health(
+            camera.id, "ingestion", status="CONNECTED"
+        )
+        await CameraSubsystemHealthRepository(db_session).set_health(
+            camera.id, "deepstream", status="CONNECTED"
+        )
+        admin = await _make_user(db_session, ROLE_ADMIN)
+        app = create_app()
+        async with await _client(app) as client:
+            response = await client.delete(
+                f"/cameras/{camera.id}", headers=_auth_header(admin, ROLE_ADMIN)
+            )
+
+        assert response.status_code == 200
+        from apps.api.app.db import create_session_factory
+
+        async with create_session_factory(db_engine)() as fresh_session:
+            assert await CameraRepository(fresh_session).get(camera.id) is None
+            assert (
+                await CameraMediaEndpointRepository(fresh_session).list_by_camera(camera.id) == []
+            )
+            assert (
+                await CameraSubsystemHealthRepository(fresh_session).list_by_camera(camera.id) == []
+            )
 
     async def test_rejects_deleting_a_camera_with_an_incident(self, db_engine, db_session) -> None:
         """Evidence Preservation (CLAUDE.md) -- deleting a camera must

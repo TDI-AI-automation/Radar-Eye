@@ -183,8 +183,8 @@ class TestFrameObservation:
         assert adapter.last_observation is not None
 
     async def test_does_not_publish_business_events(self, bus: InProcessEventBus) -> None:
-        """Phase 1 explicitly excludes Threat Engine/Incident/Calibration
-        integration -- no ThreatAssessmentEvent or similar should appear."""
+        """ADR-029: AI Runtime never publishes a business decision -- no
+        ThreatAssessmentEvent or similar should ever appear."""
         sink: asyncio.Queue = asyncio.Queue()
         bus.subscribe("ThreatAssessmentEvent", _collecting_handler(sink))
         adapter = RuntimeAdapter(bus)
@@ -195,6 +195,73 @@ class TestFrameObservation:
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sink.get(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+class TestObservationEventPublication:
+    """ADR-029 Phase 3: on_frame_observation publishes ObservationEvent --
+    AI Runtime's only outward product besides AI Streaming."""
+
+    async def test_publishes_observation_event(self, bus: InProcessEventBus) -> None:
+        sink: asyncio.Queue = asyncio.Queue()
+        bus.subscribe("ObservationEvent", _collecting_handler(sink))
+        adapter = RuntimeAdapter(bus)
+        observation = _make_observation(frame_num=7)
+
+        await adapter.on_frame_observation(
+            observation, ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )
+
+        event = await asyncio.wait_for(sink.get(), timeout=1.0)
+        assert event.payload.camera_id == _CAMERA
+        assert event.payload.frame_num == 7
+        assert event.payload.frame_timestamp == _NOW
+        assert len(event.payload.detections) == 1
+        detection = event.payload.detections[0]
+        assert detection.track_id == 7
+        assert detection.class_id == 0
+        assert detection.label == "person"
+        assert detection.confidence == pytest.approx(0.9)
+        assert detection.secondary_label is None
+        assert detection.extensions is None
+
+    async def test_each_publish_gets_a_fresh_observation_id(self, bus: InProcessEventBus) -> None:
+        sink: asyncio.Queue = asyncio.Queue()
+        bus.subscribe("ObservationEvent", _collecting_handler(sink))
+        adapter = RuntimeAdapter(bus)
+
+        await adapter.on_frame_observation(
+            _make_observation(frame_num=1),
+            ingress_monotonic_seconds=1.0,
+            metadata_monotonic_seconds=1.01,
+        )
+        await adapter.on_frame_observation(
+            _make_observation(frame_num=2),
+            ingress_monotonic_seconds=2.0,
+            metadata_monotonic_seconds=2.01,
+        )
+
+        first = await asyncio.wait_for(sink.get(), timeout=1.0)
+        second = await asyncio.wait_for(sink.get(), timeout=1.0)
+        assert first.payload.observation_id != second.payload.observation_id
+        first_detection_id = first.payload.detections[0].detection_id
+        second_detection_id = second.payload.detections[0].detection_id
+        assert first_detection_id != second_detection_id
+
+    async def test_records_event_published_instrumentation(self, bus: InProcessEventBus) -> None:
+        instrumentation = PerformanceInstrumentation(pgie_is_placeholder=True)
+        adapter = RuntimeAdapter(bus, instrumentation=instrumentation)
+
+        await adapter.on_frame_observation(
+            _make_observation(), ingress_monotonic_seconds=1.0, metadata_monotonic_seconds=1.01
+        )
+        await adapter.on_frame_observation(
+            _make_observation(frame_num=2),
+            ingress_monotonic_seconds=2.0,
+            metadata_monotonic_seconds=2.01,
+        )
+
+        assert instrumentation.snapshot().event_throughput_per_sec is not None
 
 
 @pytest.mark.asyncio

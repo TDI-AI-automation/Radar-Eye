@@ -35,6 +35,7 @@ from shared.events.payloads import (
     HumanReviewItemCreatedPayload,
     IncidentCreatedPayload,
     IncidentUpdatedPayload,
+    ObservationEventPayload,
     SnapshotCreatedPayload,
     SystemEventPayload,
     ThreatAssessmentPayload,
@@ -44,6 +45,7 @@ from shared.events.payloads import (
 # Public event type aliases
 # ---------------------------------------------------------------------------
 
+ObservationEvent = EventEnvelope[ObservationEventPayload]
 ThreatAssessmentEvent = EventEnvelope[ThreatAssessmentPayload]
 HumanReviewItemCreatedEvent = EventEnvelope[HumanReviewItemCreatedPayload]
 IncidentCreatedEvent = EventEnvelope[IncidentCreatedPayload]
@@ -65,6 +67,7 @@ __all__ = [
     "HumanReviewItemCreatedEvent",
     "IncidentCreatedEvent",
     "IncidentUpdatedEvent",
+    "ObservationEvent",
     "SnapshotCreatedEvent",
     "SystemEvent",
     "ThreatAssessmentEvent",

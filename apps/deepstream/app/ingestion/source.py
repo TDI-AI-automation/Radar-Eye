@@ -151,11 +151,14 @@ def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
         bin_.add(element)
 
     rtspsrc.set_property("location", source.rtsp_url)
-    if source.transport:
-        # rtspsrc.protocols is a GstRTSPLowerTrans flags value (e.g. "tcp"/"udp");
-        # left unconstrained per DATABASE_SCHEMA.md -- no architecture document
-        # defines camera_stream_profiles.transport's value set (RM-03 design note).
-        rtspsrc.set_property("protocols", source.transport)
+    # ADR-028: this connects to Camera Ingestion's local loopback re-server,
+    # never the physical camera -- "tcp" hardcoded here (not derived from
+    # source.transport, which is the Media Distribution Interface's own
+    # "rtsp" vs. future "shm"/"srt" transport-*type* tag, not a GStreamer
+    # RTSP lower-transport value; the two are unrelated despite the shared
+    # field name) matches apps/live_stream's own proven, hardware-validated
+    # subscriber (shared/media_transport/rtsp.py's build_rtsp_source_element).
+    rtspsrc.set_property("protocols", "tcp")
     rtspsrc.set_property("latency", latency_ms)
     valve.set_property("drop", False)
 

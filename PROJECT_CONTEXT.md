@@ -282,6 +282,8 @@ Long-lived subsystem branches are the primary integration branches, each owning 
 - feature/developer-infrastructure — formatting, linting, static analysis, dependency management, pre-commit, CI/CD, coverage tooling, developer workflow
 - feature/testing — validation, regression testing, benchmarking, soak testing, and evaluation, ongoing throughout the project
 
+New subsystems introduced by the Media Architecture Reset (ADR-028, ADR-029) — apps/ingestion (Camera Ingestion Service), apps/live_stream (Live Streaming Service), and, as of ADR-029, services/alert_service, services/hardware_action, services/evidence — are being developed on `feature/media-architecture-reset` for now, pending their own promotion to long-lived subsystem branches per this same model. `apps/deepstream`'s AI Runtime scope-lock (ADR-029 Phase 3) continues on `feature/deepstream` unchanged.
+
 Short-lived ticket branches may branch from a subsystem branch for large or parallelizable work, and merge back into it.
 
 Subsystem branches merge into `develop` at a reviewed, approved integration point — not automatically after every milestone. `develop` merges into `main` only at a full production release.

@@ -45,11 +45,25 @@ API_PORT = 8000
 API_HEALTH_URL = f"http://{API_HOST}:{API_PORT}/health/system"
 API_DOCS_URL = f"http://{API_HOST}:{API_PORT}/docs"
 FRONTEND_DEFAULT_PORT = 8080
+# Must match configs/ingestion.yaml's `publish_rtsp_port:` -- Camera
+# Ingestion Service's Media Distribution Interface (Phase 1 = RTSP)
+# binds this fixed TCP port on every start (ADR-028, Media Architecture
+# Reset). Standalone in this phase -- no consumer is wired to it yet,
+# but it's launched/health-checked alongside everything else so it can
+# be verified independently.
+INGESTION_PORT = 8600
 # Must match configs/live_stream.yaml's `port:` -- DeepStream Runtime's Live
 # Monitoring signaling server binds this fixed TCP port on every start
 # (added by Stage C; run.py has no app-code import to read it from the
 # config file directly, matching every other constant on this page).
 LIVE_STREAM_PORT = 8590
+# Must match configs/live_streaming.yaml's `signaling_port:` -- the new,
+# independent Live Streaming Service (ADR-028, Phase 2). Deliberately a
+# different port from LIVE_STREAM_PORT above: that one still belongs to
+# the old, unmigrated apps.deepstream.app.live_stream package during
+# this build-alongside-then-cutover period; apps.api's WebRTC proxy has
+# not yet been repointed at this new service.
+LIVE_STREAMING_PORT = 8591
 
 _RESET = "\033[0m"
 _GREEN = "\033[32m"
@@ -301,6 +315,10 @@ def _own_service_sigs(port: int) -> tuple[str, ...]:
         return ("uvicorn", "apps.api")
     if port == LIVE_STREAM_PORT:
         return ("apps.deepstream",)
+    if port == INGESTION_PORT:
+        return ("apps.ingestion",)
+    if port == LIVE_STREAMING_PORT:
+        return ("apps.live_stream",)
     return ("bun", "vite", "node")
 
 
@@ -380,6 +398,8 @@ def run_prerequisite_checks() -> list[Check]:
         _check_port(API_PORT, "Backend API"),
         _check_port(FRONTEND_DEFAULT_PORT, "Frontend"),
         _check_port(LIVE_STREAM_PORT, "Live Monitoring signaling"),
+        _check_port(INGESTION_PORT, "Camera Ingestion media distribution"),
+        _check_port(LIVE_STREAMING_PORT, "Live Streaming Service signaling"),
     ]
 
 
@@ -605,6 +625,74 @@ class Orchestrator:
         env = self._base_env()
 
         # ------------------------------------------------------------------
+        # Camera Ingestion Service (ADR-028, Media Architecture Reset) --
+        # standalone in this phase, wired to zero consumers, but started
+        # first / stopped last (see shutdown()'s reversed(self.services))
+        # so it's already positioned correctly for later phases, when
+        # Live Streaming/Recording/AI Runtime start depending on it.
+        # Always started fresh, never adopted -- same reasoning as
+        # DeepStream below (owns live GStreamer/RTSP state).
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(INGESTION_PORT):
+            print(
+                _fail(
+                    f"Camera Ingestion already running (port {INGESTION_PORT} -- media "
+                    "distribution -- is already bound by an apps.ingestion process) -- "
+                    "stop it first if you want to restart"
+                )
+            )
+            return False
+
+        ingestion = ManagedService(
+            name="ingestion",
+            command=[str(VENV_PYTHON), "-m", "apps.ingestion.app.main"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-ingestion running"),
+        )
+        self.services.append(ingestion)
+        print(_c("\nStarting Camera Ingestion Service...", _BOLD))
+        ingestion.start(env)
+        if not ingestion.wait_until_healthy(timeout=30.0):
+            self._report_startup_failure(ingestion)
+            return False
+        print(_pass("Camera Ingestion Service healthy"))
+
+        # ------------------------------------------------------------------
+        # Live Streaming Service (ADR-028, Phase 2) -- a new, independent
+        # process, subscribing only to Camera Ingestion's published
+        # endpoints. Started right after Camera Ingestion for launcher
+        # readability only -- neither subsystem's own startup actually
+        # blocks on the other (each runs its own independent reconnect/
+        # poll loop against its upstream). Not yet the target of
+        # apps.api's WebRTC proxy; see configs/live_streaming.yaml.
+        # Always started fresh, never adopted -- same reasoning as
+        # Camera Ingestion/DeepStream (owns live GStreamer/WebRTC state).
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(LIVE_STREAMING_PORT):
+            print(
+                _fail(
+                    f"Live Streaming Service already running (port {LIVE_STREAMING_PORT} -- "
+                    "signaling -- is already bound by an apps.live_stream process) -- "
+                    "stop it first if you want to restart"
+                )
+            )
+            return False
+
+        live_streaming = ManagedService(
+            name="live_streaming",
+            command=[str(VENV_PYTHON), "-m", "apps.live_stream.app.main"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-live-streaming running"),
+        )
+        self.services.append(live_streaming)
+        print(_c("\nStarting Live Streaming Service...", _BOLD))
+        live_streaming.start(env)
+        if not live_streaming.wait_until_healthy(timeout=30.0):
+            self._report_startup_failure(live_streaming)
+            return False
+        print(_pass("Live Streaming Service healthy"))
+
+        # ------------------------------------------------------------------
         # Backend API
         # ------------------------------------------------------------------
         if _is_own_service_on_port(API_PORT):
@@ -721,6 +809,8 @@ class Orchestrator:
         self.shutdown()
 
     _DISPLAY_NAMES = {
+        "ingestion": "Camera Ingestion Service",
+        "live_streaming": "Live Streaming Service",
         "api": "Backend API",
         "deepstream": "DeepStream Runtime",
         "frontend": "Frontend",

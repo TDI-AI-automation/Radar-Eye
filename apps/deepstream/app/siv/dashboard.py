@@ -83,21 +83,6 @@ class Dashboard:
         lines += self._stage_block("NvDCF (Tracker)", "tracker")
         lines += self._stage_block("SGIE", "sgie", {"SGIE FPS": self._fmt(snapshot.sgie_fps)})
         lines += self._stage_block("RuntimeAdapter", "runtime_adapter")
-        lines += self._stage_block("ThreatEngineRuntimeAdapter", "threat_runtime_adapter")
-        lines += self._stage_block("Calibration", "calibration")
-        lines += self._stage_block(
-            "ThreatEngine",
-            "threat_engine",
-            {"Threats/sec": self._fmt(snapshot.threat_throughput_per_sec)},
-        )
-        lines += self._stage_block(
-            "IncidentService",
-            "incident",
-            {"Incidents/sec": self._fmt(snapshot.incident_throughput_per_sec)},
-        )
-        lines += self._stage_block(
-            "AlarmService", "alarm", {"Alarms/sec": self._fmt(snapshot.alarm_throughput_per_sec)}
-        )
         lines += self._stage_block(
             "EventBus",
             "event_bus",

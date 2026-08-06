@@ -233,6 +233,10 @@ Reason:
 
 Hardware independence.
 
+Amended by ADR-029:
+
+Trigger Source becomes Alert Service (Phase 6), not Threat Engine directly -- Hardware Action Service (Phase 7) is the sole consumer of these Supported Targets. Supported Targets unchanged.
+
 ---
 
 # ADR-013
@@ -621,6 +625,10 @@ Reason:
 
 Prevent unnecessary alarm activations.
 
+Amended by ADR-029:
+
+This eligibility rule is unchanged; it now belongs to Alert Service (Phase 6), not an undifferentiated "Alarm Service." Alert Service produces `AlertRaisedEvent`; Hardware Action Service (Phase 7) is the one that actually triggers hardware per ADR-012.
+
 ---
 
 # ADR-027
@@ -698,3 +706,97 @@ Applies to all present and future milestones and subsystems, not RM-11 alone.
 Reason:
 
 Isolates the application domain from a specific inference/runtime SDK. If the inference backend is replaced (TensorRT, Triton, ONNX Runtime, OpenVINO, CPU inference, simulation, recorded playback, etc.), only the Runtime Adapter requires modification; every other subsystem remains unchanged.
+
+---
+
+# ADR-028
+
+Decision:
+
+Media Architecture Reset -- Camera Ingestion and Live Streaming are separate processes from DeepStream.
+
+Status:
+
+ACCEPTED
+
+Supersedes:
+
+DEEPSTREAM_PIPELINE_SPEC.md's Stage 1 (Camera Ingestion), to the extent it framed ingestion as owned by DeepStream. CAMERA_RUNTIME_LIFECYCLE.md Section 7's prior direction that Live Streaming/WebRTC be built as an internal extension of DeepStream's Media Publisher.
+
+Problem:
+
+A live pipeline trace (hardware-measured) proved that DeepStream owning camera ingestion inside its own Gst.Pipeline is not merely inelegant -- it is a reproducible production defect. GstBin/GstPipeline state changes walk every child element serially, on one thread, inside one blocking set_state() call. nvinfer (PGIE/SGIE) performs synchronous TensorRT engine deserialization inside that walk. Measured: SGIE 4.9s + PGIE 4.3s = 9.18s before set_state() returns, during which rtspsrc/depay -- part of a topologically unrelated branch with zero GStreamer link to PGIE/SGIE -- could not advance past READY, because they were queued behind PGIE/SGIE in the same bin's child-iteration order. Live video was architecturally hostage to AI model-loading time, despite having no data dependency on it.
+
+Decision:
+
+Camera ingestion (rtspsrc -> rtph264depay -> h264parse) is owned by a new, independent Camera Ingestion Service -- never by DeepStream. Camera Ingestion holds exactly one upstream RTSP connection per camera and republishes the encoded H.264 locally (loopback RTSP re-server) for every subsystem to consume independently. DeepStream becomes a pure AI consumer: NVDEC -> nvstreammux -> PGIE -> Tracker -> SGIE -> OSD -> AI Streaming output. It owns AI and nothing else -- not camera connectivity, not Live Streaming. Live Streaming (WebRTC delivery to the browser, for both Live View and AI Streaming) is a new, independent Live Streaming Service, never part of the DeepStream process.
+
+Operational constraint informing this decision:
+
+The physical camera in this deployment has a low concurrent-RTSP-session tolerance, independently observed refusing new connections after heavy connection churn while remaining reachable via ICMP. Camera Ingestion's one-upstream-connection-per-camera design is required by this constraint, not merely preferred -- any design opening more independent RTSP connections to the camera than today would make this worse.
+
+Startup independence:
+
+Live Streaming's and DeepStream's startup sequences are independent of each other. Neither blocks on the other's readiness. Model loading may take any amount of time; it must never delay Live View.
+
+Failure isolation:
+
+If DeepStream crashes, Live View and Recording continue. If Live Streaming fails, AI continues. If Recording fails, Live View and AI continue. Camera Ingestion is the one accepted single point of failure for all consumers, mitigated by keeping it maximally simple (no AI/CUDA/TensorRT).
+
+Reason:
+
+Live video delivery must never be coupled to AI subsystem initialization time or AI subsystem failure. The previous architecture made this impossible to guarantee by construction, not just by configuration.
+
+---
+
+# ADR-029
+
+Decision:
+
+Post-Media-Architecture-Reset Pipeline Decomposition -- AI Runtime, Production EventBus, Incident Service, Alert Service, Hardware Action Service, and Evidence Service become independent, event-connected subsystems.
+
+Status:
+
+ACCEPTED
+
+Supersedes:
+
+The Design note (RM-11, Phase 2) entry in `docs/IMPLEMENTATION_STATUS.md`, to the extent it made `ThreatEngineRuntimeAdapter` (inside `apps/deepstream`) the orchestrator that calls `CalibrationService.estimate()` -> `ThreatEngine.ingest()` -> `IncidentService.handle_escalation()` -> `AlarmService.trigger()` in-process. That design was explicitly approved and hardware-validated at the time; this ADR replaces it, it does not retroactively invalidate the validation.
+
+Amends:
+
+ADR-012 (Alarm Integration Protocol) -- "Trigger Source: Threat Engine" becomes "Trigger Source: Alert Service." ADR-026 (Alarm Trigger Policy) -- the HIGH/FIRE eligibility rule itself does not change, only its owning service (relocates from an undifferentiated "Alarm Service" to Alert Service).
+
+Problem:
+
+ADR-028 (Media Architecture Reset) proved that folding unrelated subsystems into one OS process couples their failure and startup behavior by construction. Camera Ingestion and Live Streaming were pulled out first because they were the subsystems already causing a measured production defect. The same coupling exists one layer further in: `apps/deepstream` currently also hosts Distance Estimation, Threat Engine evaluation, Incident Service orchestration, and Alarm triggering, all as in-process calls made from inside the AI pipeline's own runtime adapter. This makes DeepStream's process boundary meaningless as a failure/ownership boundary -- a bug or slowdown in incident persistence or alarm hardware can now affect the AI pipeline that has no data dependency on it, the same class of problem ADR-028 already fixed once for camera connectivity.
+
+Separately, the original roadmap's next step (migrating Recording to Camera Ingestion, ADR-028's own Phase 3) is deprioritized: the system's mission-critical path is detection -> incident -> alert -> physical response, not recording. Recording is deferred, not cancelled -- it resumes after Phase 8, unchanged in design (ADR-017, `docs/RECORDING_POLICY.md`).
+
+Decision:
+
+Continue past ADR-028 Phase 2 (Live Streaming) with a new phase sequence, each phase an independent service connected only by events:
+
+- **Phase 3 -- AI Runtime**: `apps/deepstream` is restricted to pure CV-engine responsibilities: subscribe to Camera Ingestion's republished stream, NVDEC decode, `nvstreammux`, Primary GIE, NvDCF tracker, Secondary GIE, custom analytics, metadata extraction (the existing `RuntimeAdapter` boundary, ADR-027), AI OSD, AI Streaming output (unchanged, ADR-028 Stage 5.5). Explicitly prohibited inside `apps/deepstream`: incident logic, alert logic, snapshot logic, database writes beyond existing telemetry, GPIO/siren/floodlight control, notification logic, and any other business rule. Its only outputs are the AI Stream and `ObservationEvent` (see `docs/EVENT_CONTRACTS.md`), carrying what `ThreatEngineRuntimeAdapter` used to consume in-process, built from the existing `FrameObservation`/`DetectionObservation`/`TrackObservation` domain objects (ADR-027) -- serialized onto the bus instead of passed as Python objects. `ThreatEngineRuntimeAdapter`'s orchestration role is removed from `apps/deepstream` under this decision.
+- **Phase 4 -- Production EventBus**: RM-04 already built `EventBus` as an abstract contract with `InProcessEventBus` as an explicitly swappable initial implementation (see `docs/IMPLEMENTATION_STATUS.md`'s Design note (RM-04)). Phase 4 is that swap: a real cross-process transport, since Camera Ingestion, Live Streaming, AI Runtime, and every service below now run as independent processes. Zero business logic, typed and versioned per `EVENT_CONTRACTS.md`, reusable outside this project. The concrete transport remains an implementation-time engineering choice, not an architecture decision (same standing note as RM-04); it must remain air-gapped/offline-friendly, no cloud dependency (CLAUDE.md's Offline First principle).
+- **Phase 5 -- Incident Service**: consumes `ObservationEvent`. Owns Distance Estimation (calls `services/calibration`, unchanged) and Threat Engine evaluation (calls `services/threat_engine`, unchanged rule table per ADR-015) as part of its own event-handling path, plus incident state machine, lifecycle, evidence association, and persistence (unchanged from RM-07/ADR-021/ADR-024/ADR-025). `ThreatAssessmentEvent`'s logical producer is still "Threat Engine" (the rule table itself does not move or change); it now executes inside the Incident Service process rather than inside DeepStream.
+- **Phase 6 -- Alert Service** (new subsystem): consumes Incident events (`IncidentCreatedEvent`/`IncidentUpdatedEvent`). Owns alert generation, severity, deduplication, escalation, and operator notification (UI/SMS/Email/WhatsApp -- partially resolves `docs/OPEN_QUESTIONS.md` Q-005). Owns the HIGH/FIRE alarm-eligibility rule relocated from ADR-026's undifferentiated "Alarm Service." Produces a new `AlertRaisedEvent`.
+- **Phase 7 -- Hardware Action Service** (new subsystem): consumes `AlertRaisedEvent`. Owns physical actuation only -- GPIO relay, siren, floodlight, PTZ preset, future physical integrations (ADR-012's Supported Targets, unchanged) -- and nothing else. ADR-012's Trigger Source becomes Alert Service, not Threat Engine.
+- **Phase 8 -- Snapshot/Evidence Service** (new subsystem): consumes `ObservationEvent` directly (not gated on Recording or Incident state). Owns full-frame snapshots, object/person crops (new capability -- today's `SnapshotCreatedEvent` is incident-level only), evidence storage, and incident attachment. Splits this scope out of `services/recording`, which today produces both `SnapshotCreatedEvent` and `ClipCreatedEvent`. Event clips (video) remain bundled with the postponed Recording Service; only snapshots/crops move to Phase 8. Evidence Service does not receive frames from AI Runtime directly and AI Runtime does not gain any JPEG/image-writing responsibility -- when a full frame is actually needed, Evidence Service requests it from the already-published AI Streaming output (Stage 5.5, the same representation Live Streaming already subscribes to), per ADR-028's "every media representation exists exactly once": `ObservationEvent → Evidence Service (decides a snapshot is warranted) → requests/captures a frame from AI Streaming → writes the JPEG`. Evidence storage schema (e.g. crop coordinates, parent references) is Phase 8's own design-review-level detail, not decided by this ADR.
+- **Phase 9+ -- Recording, Archive, Playback, Search, Export**: postponed, not cancelled -- resumes once Phase 8 is complete. Design unchanged (ADR-017, ADR-028 principle 9, `docs/RECORDING_POLICY.md`).
+
+This sequence (Phase 3 → 4 → 5 → 6 → 7 → 8 → 9+) is locked. It does not change again unless implementation reveals a fundamental architectural issue -- in which case, per the Process Note below, this ADR is amended first, before code changes.
+
+Governing Principles (binding on every phase above):
+
+1. **Observations, not decisions.** AI Runtime's `ObservationEvent` carries only what was directly observed or measured: detections, tracks, classifications, confidence, bounding boxes, timestamps, `camera_id`, `frame_id`. It never carries a decision: no threat level, alert, incident, "intruder," escalation, or "hostile" field. Every decision (threat level, incident, alert, hardware action) is computed downstream, by the service that owns that decision -- never inferred or pre-judged by AI Runtime.
+2. **One subsystem, one business capability, communication only through events.** Every independently-deployed subsystem (Camera Ingestion, Live Streaming, AI Runtime, Incident Service, Alert Service, Hardware Action Service, Evidence Service, Recording) owns exactly one business capability. No subsystem may call another independently-deployed subsystem's internal logic directly (e.g. `IncidentService -> AlertService.trigger()` in-process is prohibited) -- only the EventBus connects them. This does not restrict a subsystem's own in-process use of a shared library it is the sole caller of: Incident Service invoking `services/threat_engine`/`services/calibration` (Phase 5, above) is a library call within one process's own boundary, not a cross-subsystem call, and remains permitted exactly as designed.
+3. **The EventBus is transport only.** Publish, subscribe, deliver -- nothing else. No filtering, routing logic, business rules, severity-based retries, transformation, or enrichment inside the bus itself. Any of those belong to whichever service consumes the event, never to the bus.
+
+Reason:
+
+Applying ADR-028's own decoupling principle end-to-end: every subsystem below Camera Ingestion should own exactly one responsibility and communicate only through events, so a failure or slowdown in one (recording, alarm hardware, evidence storage) can never propagate to another that has no data dependency on it -- the same guarantee ADR-028 already established for camera connectivity and live video.
+
+Process Note:
+
+If Phase 3 implementation reveals that this ADR is incorrect or incomplete, stop immediately and amend this ADR first, before writing or changing code. Code is never the source of truth for architecture -- this document is (per `CLAUDE.md`'s Architecture Rules priority order).
