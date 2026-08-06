@@ -90,14 +90,12 @@ class DeepStreamRuntime:
         live_stream: LiveStreamSettings,
         session_factory: async_sessionmaker[AsyncSession],
         bus: EventBus,
-        encryption: Any,
     ) -> None:
         self._loop = loop
         self._settings = settings
         self._models = models
         self._session_factory = session_factory
         self._bus = bus
-        self._encryption = encryption
 
         # RM-11.SIV Unified Heartbeat: one registry, shared by every
         # component below and (read-only) by the watchdog/dashboard --
@@ -204,7 +202,7 @@ class DeepStreamRuntime:
             ConcurrentEnableLimiter(max_concurrent=settings.streammux_batch_size),
             on_valve_changed=self._select_stream_source,
         )
-        self._desired_state_reader = DesiredStateReader(session_factory, encryption)
+        self._desired_state_reader = DesiredStateReader(session_factory)
         self.desired_state_synchronizer = DesiredStateSynchronizer(
             self._desired_state_reader,
             self._pipeline,

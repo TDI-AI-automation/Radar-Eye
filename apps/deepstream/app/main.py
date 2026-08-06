@@ -23,7 +23,6 @@ from apps.api.app.config import get_settings as get_api_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
-from apps.api.app.security.encryption import get_credential_encryption_provider
 from apps.deepstream.app.config import (
     get_live_stream_settings,
     get_logging_settings,
@@ -73,7 +72,6 @@ async def _run() -> None:
 
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
-    encryption = get_credential_encryption_provider(api_settings)
     bus = InProcessEventBus(source="deepstream")
     health_collector = HealthCollector()
 
@@ -87,7 +85,6 @@ async def _run() -> None:
         live_stream=live_stream_settings,
         session_factory=session_factory,
         bus=bus,
-        encryption=encryption,
     )
     runtime.set_health_collector(health_collector)
 
