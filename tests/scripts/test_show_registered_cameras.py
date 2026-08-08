@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from apps.api.app.config import Settings
 from apps.api.app.models.camera import Camera, CameraStreamProfile
 from apps.api.app.security.encryption import get_credential_encryption_provider
 from scripts.show_registered_cameras import _mask_rtsp_url, show_registered_cameras
@@ -33,22 +34,20 @@ class TestMaskRtspUrl:
 @pytest.mark.asyncio
 class TestShowRegisteredCameras:
     async def test_lists_camera_with_masked_host(
-        self, db_engine: AsyncEngine, db_session: AsyncSession
+        self, db_engine: AsyncEngine, db_session: AsyncSession, test_settings: Settings
     ) -> None:
-        from apps.api.app.config import get_settings
-
         camera = Camera(name="test-cam-01", status="DISCONNECTED")
         db_session.add(camera)
         await db_session.flush()
 
-        encryption = get_credential_encryption_provider(get_settings())
+        encryption = get_credential_encryption_provider(test_settings)
         encrypted = encryption.encrypt("rtsp://operator:s3cret@192.168.1.50:554/stream1")
         db_session.add(
             CameraStreamProfile(camera_id=camera.id, rtsp_url_encrypted=encrypted, transport="tcp")
         )
         await db_session.commit()
 
-        rows = await show_registered_cameras()
+        rows = await show_registered_cameras(settings=test_settings)
 
         row = next(r for r in rows if r["camera_id"] == str(camera.id))
         assert row["name"] == "test-cam-01"
@@ -58,13 +57,13 @@ class TestShowRegisteredCameras:
         assert row["transport"] == "tcp"
 
     async def test_camera_without_profile_shows_placeholder(
-        self, db_engine: AsyncEngine, db_session: AsyncSession
+        self, db_engine: AsyncEngine, db_session: AsyncSession, test_settings: Settings
     ) -> None:
         camera = Camera(name="no-profile-cam", status="DISCONNECTED")
         db_session.add(camera)
         await db_session.commit()
 
-        rows = await show_registered_cameras()
+        rows = await show_registered_cameras(settings=test_settings)
 
         row = next(r for r in rows if r["camera_id"] == str(camera.id))
         assert row["rtsp_host"] == "<no stream profile>"

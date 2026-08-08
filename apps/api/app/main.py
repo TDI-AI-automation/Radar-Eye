@@ -10,6 +10,17 @@ A factory (rather than a module-level ``app``) is used deliberately so that
 importing this module never triggers settings/engine creation as a side
 effect -- required environment variables only need to be present when
 create_app() is actually called.
+
+``create_app()`` is also the composition root for test/runtime isolation:
+``settings`` is an explicit, optional parameter, defaulting to the real
+``get_settings()`` only when omitted. Production entry points
+(``uvicorn ...create_app --factory``, ``run.py``, ``scripts/run_siv.py``)
+all call it with no argument -- identical behavior, identical resources.
+Tests inject their own ``Settings`` (pointed at a dedicated test
+database) instead -- see the root ``conftest.py``'s ``test_settings``
+fixture. Everything below the first line of this function is completely
+unaware of which caller it is; there is no "if testing" branch anywhere
+in this module.
 """
 
 from __future__ import annotations
@@ -25,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from apps.api.app.audit import AuditLogger
-from apps.api.app.config import get_settings
+from apps.api.app.config import Settings, get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
@@ -43,7 +54,7 @@ from apps.api.app.routers import (
 )
 from apps.api.app.threats import ActiveThreatCache
 from apps.api.app.websockets import ConnectionManager, WebSocketBridge, ws_router
-from shared.events.bus import InProcessEventBus
+from shared.events.zmq_bus import ZmqEventBus
 from shared.schemas.api import ApiError, ApiResponse
 
 logger = logging.getLogger(__name__)
@@ -70,8 +81,8 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=jsonable_encoder(body))
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
     configure_logging(settings.log_level)
 
     engine = create_engine(settings)
@@ -79,7 +90,7 @@ def create_app() -> FastAPI:
     health_collector = HealthCollector()
     audit_logger = AuditLogger()
     active_threat_cache = ActiveThreatCache()
-    event_bus = InProcessEventBus(source="api")
+    event_bus = ZmqEventBus(source="api")
     ws_connection_manager = ConnectionManager()
     ws_bridge = WebSocketBridge(event_bus, ws_connection_manager)
 
@@ -92,6 +103,7 @@ def create_app() -> FastAPI:
         await ws_bridge.start()
         yield
         await ws_bridge.stop()
+        await event_bus.stop()
         await engine.dispose()
         logger.info("radar-eye-api shutting down")
 

@@ -14,6 +14,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from apps.api.app.config import Settings
 from apps.api.app.models.camera import Camera, CameraStreamProfile
 from apps.api.app.security.encryption import get_credential_encryption_provider
 from apps.deepstream.app.env_yaml import MissingEnvironmentVariableError
@@ -38,11 +39,15 @@ def _write_camera_yaml(path: Path, **overrides) -> Path:
 @pytest.mark.asyncio
 class TestRegisterCamera:
     async def test_creates_camera_and_profile_when_none_exist(
-        self, db_engine: AsyncEngine, db_session: AsyncSession, tmp_path: Path
+        self,
+        db_engine: AsyncEngine,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        test_settings: Settings,
     ) -> None:
         camera_yaml = _write_camera_yaml(tmp_path)
 
-        await register_camera(camera_yaml)
+        await register_camera(camera_yaml, settings=test_settings)
 
         camera_result = await db_session.execute(select(Camera).where(Camera.name == "test-cam-01"))
         camera = camera_result.scalar_one()
@@ -54,20 +59,22 @@ class TestRegisterCamera:
         profile = profile_result.scalar_one()
         assert profile.transport == "tcp"
 
-        from apps.api.app.config import get_settings
-
-        encryption = get_credential_encryption_provider(get_settings())
+        encryption = get_credential_encryption_provider(test_settings)
         decrypted = encryption.decrypt(profile.rtsp_url_encrypted)
         assert decrypted == "rtsp://operator:s3cret@192.168.1.50:554/stream1"
 
     async def test_rerun_updates_existing_profile_instead_of_duplicating(
-        self, db_engine: AsyncEngine, db_session: AsyncSession, tmp_path: Path
+        self,
+        db_engine: AsyncEngine,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        test_settings: Settings,
     ) -> None:
         first_yaml = _write_camera_yaml(tmp_path)
-        await register_camera(first_yaml)
+        await register_camera(first_yaml, settings=test_settings)
 
         second_yaml = _write_camera_yaml(tmp_path, rtsp_url="rtsp://10.0.0.5:554/stream2")
-        await register_camera(second_yaml)
+        await register_camera(second_yaml, settings=test_settings)
 
         cameras = (await db_session.execute(select(Camera))).scalars().all()
         assert len(cameras) == 1
@@ -75,9 +82,7 @@ class TestRegisterCamera:
         profiles = (await db_session.execute(select(CameraStreamProfile))).scalars().all()
         assert len(profiles) == 1
 
-        from apps.api.app.config import get_settings
-
-        encryption = get_credential_encryption_provider(get_settings())
+        encryption = get_credential_encryption_provider(test_settings)
         decrypted = encryption.decrypt(profiles[0].rtsp_url_encrypted)
         assert decrypted == "rtsp://operator:s3cret@10.0.0.5:554/stream2"
 

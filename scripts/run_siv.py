@@ -30,6 +30,7 @@ from apps.api.app.health import HealthCollector
 from apps.api.app.logging_config import configure_logging
 from apps.api.app.security.encryption import get_credential_encryption_provider
 from apps.deepstream.app.config import (
+    get_live_stream_settings,
     get_logging_settings,
     get_models_settings,
     get_validation_settings,
@@ -58,6 +59,7 @@ async def _run() -> None:
     models_settings = get_models_settings()
     validation_settings = get_validation_settings()
     visualization_settings = get_visualization_settings()
+    live_stream_settings = get_live_stream_settings()
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(api_settings)
@@ -71,6 +73,7 @@ async def _run() -> None:
         models=models_settings,
         validation=validation_settings,
         visualization=visualization_settings,
+        live_stream=live_stream_settings,
         session_factory=session_factory,
         bus=bus,
         encryption=encryption,

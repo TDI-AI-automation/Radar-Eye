@@ -15,6 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.app.config import Settings
 from apps.api.app.main import create_app
 from apps.api.app.models.camera import Camera, CameraCalibration
 from apps.api.app.models.human_review import HumanReviewItem
@@ -53,15 +54,19 @@ async def _make_incident(session: AsyncSession, camera: Camera, **overrides) -> 
 
 @pytest.mark.asyncio
 class TestCamerasRouterReadOnly:
-    async def test_requires_authentication(self, db_engine, db_session) -> None:
-        app = create_app()
+    async def test_requires_authentication(
+        self, db_engine, db_session, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get("/cameras")
         assert response.status_code == 401
 
-    async def test_list_returns_seeded_cameras(self, db_engine, db_session, auth_header) -> None:
+    async def test_list_returns_seeded_cameras(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
         await _make_camera(db_session)
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get("/cameras", headers=auth_header)
         assert response.status_code == 200
@@ -71,9 +76,9 @@ class TestCamerasRouterReadOnly:
         assert body["data"][0]["name"] == "cam-1"
 
     async def test_get_by_id_returns_404_when_missing(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(
                 "/cameras/00000000-0000-0000-0000-000000000000", headers=auth_header
@@ -81,7 +86,9 @@ class TestCamerasRouterReadOnly:
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "not_found"
 
-    async def test_calibration_round_trips(self, db_engine, db_session, auth_header) -> None:
+    async def test_calibration_round_trips(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
         camera = await _make_camera(db_session)
         db_session.add(
             CameraCalibration(
@@ -93,7 +100,7 @@ class TestCamerasRouterReadOnly:
         )
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(f"/cameras/{camera.id}/calibration", headers=auth_header)
 
@@ -101,10 +108,10 @@ class TestCamerasRouterReadOnly:
         assert response.json()["data"]["calibrated_by"] == "installer-1"
 
     async def test_calibration_returns_404_when_none_recorded(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(f"/cameras/{camera.id}/calibration", headers=auth_header)
         assert response.status_code == 404
@@ -113,9 +120,9 @@ class TestCamerasRouterReadOnly:
 @pytest.mark.asyncio
 class TestThreatsRouterReadOnly:
     async def test_active_threats_is_honestly_empty_until_fed(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get("/threats/active", headers=auth_header)
         assert response.status_code == 200
@@ -124,11 +131,13 @@ class TestThreatsRouterReadOnly:
 
 @pytest.mark.asyncio
 class TestIncidentsRouterReadOnly:
-    async def test_list_and_get(self, db_engine, db_session, auth_header) -> None:
+    async def test_list_and_get(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
         camera = await _make_camera(db_session)
         incident = await _make_incident(db_session, camera)
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             list_response = await client.get("/incidents", headers=auth_header)
             get_response = await client.get(f"/incidents/{incident.id}", headers=auth_header)
@@ -139,13 +148,13 @@ class TestIncidentsRouterReadOnly:
         assert get_response.json()["data"]["threat_level"] == "HIGH"
 
     async def test_open_only_returns_active_statuses(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         await _make_incident(db_session, camera, track_id=1, status=IncidentStatus.ACTIVE)
         await _make_incident(db_session, camera, track_id=2, status=IncidentStatus.RESOLVED)
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get("/incidents/open", headers=auth_header)
 
@@ -153,7 +162,7 @@ class TestIncidentsRouterReadOnly:
         assert len(response.json()["data"]) == 1
 
     async def test_events_round_trip_and_404_for_missing_incident(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         incident = await _make_incident(db_session, camera)
@@ -166,7 +175,7 @@ class TestIncidentsRouterReadOnly:
         )
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             ok_response = await client.get(f"/incidents/{incident.id}/events", headers=auth_header)
             missing_response = await client.get(
@@ -179,7 +188,7 @@ class TestIncidentsRouterReadOnly:
         assert missing_response.status_code == 404
 
     async def test_evidence_combines_snapshots_and_recordings(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         incident = await _make_incident(db_session, camera)
@@ -203,7 +212,7 @@ class TestIncidentsRouterReadOnly:
         )
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(f"/incidents/{incident.id}/evidence", headers=auth_header)
 
@@ -214,12 +223,14 @@ class TestIncidentsRouterReadOnly:
 
 @pytest.mark.asyncio
 class TestReviewsRouterReadOnly:
-    async def test_list_and_get(self, db_engine, db_session, auth_header) -> None:
+    async def test_list_and_get(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
         camera = await _make_camera(db_session)
         db_session.add(HumanReviewItem(camera_id=camera.id, track_id=9, reason="uniform_unknown"))
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get("/reviews", headers=auth_header)
 
@@ -227,8 +238,10 @@ class TestReviewsRouterReadOnly:
         assert len(response.json()["data"]) == 1
         assert response.json()["data"][0]["status"] == "OPEN"
 
-    async def test_get_returns_404_when_missing(self, db_engine, db_session, auth_header) -> None:
-        app = create_app()
+    async def test_get_returns_404_when_missing(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(
                 "/reviews/00000000-0000-0000-0000-000000000000", headers=auth_header
@@ -238,7 +251,9 @@ class TestReviewsRouterReadOnly:
 
 @pytest.mark.asyncio
 class TestCalibrationRouterReadOnly:
-    async def test_cameras_and_results_and_detail(self, db_engine, db_session, auth_header) -> None:
+    async def test_cameras_and_results_and_detail(
+        self, db_engine, db_session, auth_header, test_settings: Settings
+    ) -> None:
         camera = await _make_camera(db_session)
         db_session.add(
             CameraCalibration(
@@ -249,7 +264,7 @@ class TestCalibrationRouterReadOnly:
         )
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             cameras_response = await client.get("/calibration/cameras", headers=auth_header)
             results_response = await client.get("/calibration/results", headers=auth_header)
@@ -266,7 +281,7 @@ class TestCalibrationRouterReadOnly:
 @pytest.mark.asyncio
 class TestEvidenceRouterReadOnly:
     async def test_evidence_resolves_across_both_tables(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         incident = await _make_incident(db_session, camera)
@@ -287,7 +302,7 @@ class TestEvidenceRouterReadOnly:
         db_session.add_all([snapshot, recording])
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             snap_response = await client.get(f"/evidence/{snapshot.id}", headers=auth_header)
             rec_response = await client.get(f"/evidence/{recording.id}", headers=auth_header)
@@ -300,7 +315,7 @@ class TestEvidenceRouterReadOnly:
         assert missing_response.status_code == 404
 
     async def test_download_returns_404_when_file_missing_on_disk(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         incident = await _make_incident(db_session, camera)
@@ -315,7 +330,7 @@ class TestEvidenceRouterReadOnly:
         db_session.add(recording)
         await db_session.commit()
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.get(f"/recordings/{recording.id}/download", headers=auth_header)
 
@@ -325,12 +340,12 @@ class TestEvidenceRouterReadOnly:
 @pytest.mark.asyncio
 class TestAnalyticsRouterReadOnly:
     async def test_all_four_endpoints_return_the_documented_shape(
-        self, db_engine, db_session, auth_header
+        self, db_engine, db_session, auth_header, test_settings: Settings
     ) -> None:
         camera = await _make_camera(db_session)
         await _make_incident(db_session, camera)
 
-        app = create_app()
+        app = create_app(settings=test_settings)
         async with await _client(app) as client:
             threats = await client.get("/analytics/threats", headers=auth_header)
             incidents = await client.get("/analytics/incidents", headers=auth_header)

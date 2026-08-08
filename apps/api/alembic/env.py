@@ -33,10 +33,16 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# The database URL always comes from application settings (env-only secrets
-# + configs/settings.yaml), never from a static value in this checked-in
-# alembic.ini -- see apps.api.app.config.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# The database URL comes from application settings (env-only secrets +
+# configs/settings.yaml), never from a static value in this checked-in
+# alembic.ini -- see apps.api.app.config. Only resolved here if a caller
+# hasn't already set one: a test (apps/api/tests/test_migrations.py)
+# builds this same Config object and calls
+# config.set_main_option("sqlalchemy.url", <test database url>) before
+# invoking alembic.command.upgrade/downgrade, so migrations run against
+# the test database with no monkeypatching of get_settings() at all.
+if config.get_main_option("sqlalchemy.url") is None:
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

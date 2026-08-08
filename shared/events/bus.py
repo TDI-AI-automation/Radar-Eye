@@ -67,6 +67,12 @@ class EventBus(ABC):
     async def unsubscribe(self, event_type: str, handler: EventHandler) -> None:
         """Stop delivering ``event_type`` events to ``handler``."""
 
+    async def stop(self) -> None:  # noqa: B027 -- deliberate no-op default, not abstract
+        """Release any resources this bus holds (sockets, background
+        tasks). No-op by default -- ``InProcessEventBus`` and
+        ``ZmqEventBus`` both override this; a future implementation with
+        nothing to release doesn't need to."""
+
 
 class _Subscriber:
     """A single subscriber's queue and background delivery task.

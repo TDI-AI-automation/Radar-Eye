@@ -3,11 +3,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from apps.api.app.config import Settings
 from apps.api.app.main import create_app
 
 
-def test_app_instantiates() -> None:
-    app = create_app()
+def test_app_instantiates(test_settings: Settings) -> None:
+    app = create_app(settings=test_settings)
 
     with TestClient(app):
         pass
@@ -15,8 +16,8 @@ def test_app_instantiates() -> None:
     assert isinstance(app, FastAPI)
 
 
-def test_default_docs_endpoints_are_enabled() -> None:
-    app = create_app()
+def test_default_docs_endpoints_are_enabled(test_settings: Settings) -> None:
+    app = create_app(settings=test_settings)
 
     with TestClient(app) as client:
         response = client.get("/openapi.json")
@@ -24,7 +25,7 @@ def test_default_docs_endpoints_are_enabled() -> None:
     assert response.status_code == 200
 
 
-def test_cors_preflight_allows_the_default_frontend_origin() -> None:
+def test_cors_preflight_allows_the_default_frontend_origin(test_settings: Settings) -> None:
     """CORSMiddleware must be registered and configured with
     settings.cors.allowed_origins -- regression coverage for a real
     incident where this middleware existed only as an uncommitted local
@@ -34,7 +35,7 @@ def test_cors_preflight_allows_the_default_frontend_origin() -> None:
     silently vanishing. Exercises the real preflight (OPTIONS) request a
     browser sends before POST /cameras, not just a GET, since that's the
     exact request shape the operator-reported regression involved."""
-    app = create_app()
+    app = create_app(settings=test_settings)
 
     with TestClient(app) as client:
         response = client.options(
@@ -51,11 +52,11 @@ def test_cors_preflight_allows_the_default_frontend_origin() -> None:
     assert response.headers["access-control-allow-credentials"] == "true"
 
 
-def test_cors_rejects_an_unlisted_origin() -> None:
+def test_cors_rejects_an_unlisted_origin(test_settings: Settings) -> None:
     """The flip side of the above -- CORS must not be wide open (a
     misconfigured `allow_origins=["*"]` would also make the preflight
     test above pass, silently hiding a real security regression)."""
-    app = create_app()
+    app = create_app(settings=test_settings)
 
     with TestClient(app) as client:
         response = client.options(

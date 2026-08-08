@@ -18,6 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.app.config import Settings
 from apps.api.app.main import create_app
 from apps.api.app.models.user import ROLE_OPERATOR, User
 from apps.api.app.security.auth import hash_password
@@ -25,7 +26,7 @@ from apps.api.app.security.auth import hash_password
 
 @pytest.mark.asyncio
 async def test_login_succeeds_for_correct_credentials(
-    db_engine: object, db_session: AsyncSession
+    db_engine: object, db_session: AsyncSession, test_settings: Settings
 ) -> None:
     db_session.add(
         User(
@@ -36,7 +37,7 @@ async def test_login_succeeds_for_correct_credentials(
     )
     await db_session.commit()
 
-    app = create_app()
+    app = create_app(settings=test_settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -55,14 +56,14 @@ async def test_login_succeeds_for_correct_credentials(
 
 @pytest.mark.asyncio
 async def test_login_fails_with_401_for_wrong_password(
-    db_engine: object, db_session: AsyncSession
+    db_engine: object, db_session: AsyncSession, test_settings: Settings
 ) -> None:
     db_session.add(
         User(username="dave", password_hash=hash_password("correct"), role=ROLE_OPERATOR)
     )
     await db_session.commit()
 
-    app = create_app()
+    app = create_app(settings=test_settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -76,14 +77,14 @@ async def test_login_fails_with_401_for_wrong_password(
 
 @pytest.mark.asyncio
 async def test_login_fails_with_401_for_unknown_username(
-    db_engine: object, db_session: AsyncSession
+    db_engine: object, db_session: AsyncSession, test_settings: Settings
 ) -> None:
     """Still needs the db_engine/db_session fixtures (unused directly) --
     an "unknown username" answer inherently requires a real DB round-trip
     to determine, and this repo's convention is that any DB-touching test
     skips (not fails) when PostgreSQL is unreachable, matching every other
     DB-dependent test in this suite."""
-    app = create_app()
+    app = create_app(settings=test_settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -95,11 +96,13 @@ async def test_login_fails_with_401_for_unknown_username(
 
 
 @pytest.mark.asyncio
-async def test_refresh_issues_a_new_token_pair(db_engine: object, db_session: AsyncSession) -> None:
+async def test_refresh_issues_a_new_token_pair(
+    db_engine: object, db_session: AsyncSession, test_settings: Settings
+) -> None:
     db_session.add(User(username="erin", password_hash=hash_password("s3cret"), role=ROLE_OPERATOR))
     await db_session.commit()
 
-    app = create_app()
+    app = create_app(settings=test_settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -118,14 +121,14 @@ async def test_refresh_issues_a_new_token_pair(db_engine: object, db_session: As
 
 @pytest.mark.asyncio
 async def test_refresh_rejects_an_access_token_used_as_a_refresh_token(
-    db_engine: object, db_session: AsyncSession
+    db_engine: object, db_session: AsyncSession, test_settings: Settings
 ) -> None:
     db_session.add(
         User(username="frank", password_hash=hash_password("s3cret"), role=ROLE_OPERATOR)
     )
     await db_session.commit()
 
-    app = create_app()
+    app = create_app(settings=test_settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:

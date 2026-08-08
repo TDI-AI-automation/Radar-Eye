@@ -35,7 +35,7 @@ from apps.deepstream.app.runtime import DeepStreamRuntime
 from apps.deepstream.app.siv.dashboard import Dashboard
 from apps.deepstream.app.siv.watchdog import Watchdog
 from apps.deepstream.app.stage_logging import configure_stage_logging, enable_maximum_observability
-from shared.events.bus import InProcessEventBus
+from shared.events.zmq_bus import ZmqEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ async def _run() -> None:
 
     engine = create_engine(api_settings)
     session_factory = create_session_factory(engine)
-    bus = InProcessEventBus(source="deepstream")
+    bus = ZmqEventBus(source="ai_runtime")
     health_collector = HealthCollector()
 
     loop = asyncio.get_running_loop()

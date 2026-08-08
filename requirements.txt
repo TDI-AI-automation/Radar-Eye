@@ -12,3 +12,4 @@ numpy>=1.26
 PyJWT>=2.8
 bcrypt>=4.0
 httpx>=0.24
+pyzmq>=25.0

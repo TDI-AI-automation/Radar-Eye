@@ -13,19 +13,29 @@ a plain, non-thread-safe ``asyncio.Queue.put()`` across that thread/loop
 boundary works reliably for this single-publish-per-test usage.
 
 No ``db_session``/``db_engine`` fixtures needed -- every published event
-and its translation is pure in-memory (``InProcessEventBus`` ->
-``WebSocketBridge`` -> ``ConnectionManager``), no database involved.
+and its translation is database-free.
+
+Since ADR-029 Phase 4, ``create_app()``'s event bus is ``ZmqEventBus``, not
+``InProcessEventBus`` -- delivery is no longer same-process/in-memory, it
+requires a real broker relaying between the app's own PUB and SUB sockets
+(``shared.events.broker``, see that module's docstring). ``_broker``
+(below) starts one real broker, once per test module, on the same fixed
+ports every ``ZmqEventBus`` already connects to by default -- exactly the
+production topology, not a mock.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 import uuid
+from collections.abc import Iterator
 
+import pytest
 from starlette.testclient import TestClient
 
-from apps.api.app.config import get_settings
+from apps.api.app.config import Settings, get_settings
 from apps.api.app.main import create_app
 from apps.api.app.models.user import ROLE_OPERATOR
 from apps.api.app.security.auth import create_token_pair
@@ -34,6 +44,7 @@ from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
 from shared.constants.uniform_classes import UniformClass
 from shared.constants.weapon_types import WeaponType
+from shared.events.broker import run_broker
 from shared.events.envelope import EventEnvelope
 from shared.events.payloads import (
     AlarmRequestedPayload,
@@ -48,6 +59,18 @@ from shared.events.payloads import (
 ACCEPTANCE_LATENCY_SECONDS = 2.0
 """docs/FRONTEND_BACKEND_CONTRACTS.md / RM-12_ARCHITECTURE.md §3.5's alert
 latency acceptance criterion."""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _broker() -> Iterator[None]:
+    """Every test in this module needs a real broker relaying its app's
+    own ZmqEventBus publish/subscribe traffic -- see this module's
+    docstring. A daemon thread is enough: it never outlives the test
+    process, and this module never asserts anything about the broker's
+    own lifecycle."""
+    thread = threading.Thread(target=run_broker, daemon=True)
+    thread.start()
+    yield
 
 
 def _token() -> str:
@@ -65,8 +88,8 @@ def _publish(app, event: EventEnvelope) -> float:
 
 
 class TestWebSocketAuth:
-    def test_missing_token_is_rejected(self, _default_env: None) -> None:
-        app = create_app()
+    def test_missing_token_is_rejected(self, _default_env: None, test_settings: Settings) -> None:
+        app = create_app(settings=test_settings)
         with TestClient(app) as client:
             try:
                 with client.websocket_connect("/ws/threats"):
@@ -74,8 +97,8 @@ class TestWebSocketAuth:
             except Exception:  # noqa: BLE001 -- WebSocketDisconnect, by design
                 pass
 
-    def test_invalid_token_is_rejected(self, _default_env: None) -> None:
-        app = create_app()
+    def test_invalid_token_is_rejected(self, _default_env: None, test_settings: Settings) -> None:
+        app = create_app(settings=test_settings)
         with TestClient(app) as client:
             try:
                 with client.websocket_connect("/ws/threats?token=not-a-real-token"):
@@ -85,8 +108,10 @@ class TestWebSocketAuth:
 
 
 class TestThreatsChannel:
-    def test_threat_assessment_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_threat_assessment_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         camera_id = uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/threats?token={_token()}") as ws:
@@ -120,8 +145,10 @@ class TestThreatsChannel:
 
 
 class TestIncidentsChannel:
-    def test_incident_created_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_incident_created_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         incident_id, camera_id = uuid.uuid4(), uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/incidents?token={_token()}") as ws:
@@ -149,8 +176,10 @@ class TestIncidentsChannel:
             "status": "NEW",
         }
 
-    def test_incident_updated_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_incident_updated_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         incident_id = uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/incidents?token={_token()}") as ws:
@@ -176,8 +205,10 @@ class TestIncidentsChannel:
 
 
 class TestReviewsChannel:
-    def test_human_review_item_created_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_human_review_item_created_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         review_item_id, camera_id = uuid.uuid4(), uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/reviews?token={_token()}") as ws:
@@ -206,8 +237,10 @@ class TestReviewsChannel:
 
 
 class TestAlarmsChannel:
-    def test_alarm_requested_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_alarm_requested_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         incident_id, camera_id = uuid.uuid4(), uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/alarms?token={_token()}") as ws:
@@ -235,8 +268,10 @@ class TestAlarmsChannel:
 
 
 class TestCameraHealthChannel:
-    def test_camera_disconnected_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_camera_disconnected_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         camera_id = uuid.uuid4()
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/camera-health?token={_token()}") as ws:
@@ -254,8 +289,10 @@ class TestCameraHealthChannel:
 
         assert message == {"camera_id": str(camera_id), "reason": "RTSP timeout"}
 
-    def test_system_event_arrives_translated(self, _default_env: None) -> None:
-        app = create_app()
+    def test_system_event_arrives_translated(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         with TestClient(app) as client:
             with client.websocket_connect(f"/ws/camera-health?token={_token()}") as ws:
                 _publish(

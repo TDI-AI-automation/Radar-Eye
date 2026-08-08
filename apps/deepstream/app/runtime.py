@@ -496,6 +496,7 @@ class DeepStreamRuntime:
             self._heartbeat.stop()
         self._pipeline.stop()
         self._bridge.stop()
+        await self._bus.stop()
 
     def _on_inference_buffer(
         self,

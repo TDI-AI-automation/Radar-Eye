@@ -64,6 +64,13 @@ LIVE_STREAM_PORT = 8590
 # this build-alongside-then-cutover period; apps.api's WebRTC proxy has
 # not yet been repointed at this new service.
 LIVE_STREAMING_PORT = 8591
+# Must match shared/events/config.py's EVENT_BUS_PUBLISH_PORT/
+# EVENT_BUS_SUBSCRIBE_PORT -- the production EventBus's ZMQ XSUB/XPUB
+# broker (ADR-029 Phase 4). Every publisher/subscriber connects to these
+# two fixed ports; run.py has no app-code import to read them from,
+# matching every other constant on this page.
+EVENT_BUS_PUBLISH_PORT = 5901
+EVENT_BUS_SUBSCRIBE_PORT = 5902
 
 _RESET = "\033[0m"
 _GREEN = "\033[32m"
@@ -625,6 +632,39 @@ class Orchestrator:
         env = self._base_env()
 
         # ------------------------------------------------------------------
+        # Production EventBus broker (ADR-029 Phase 4) -- a ZMQ XSUB/XPUB
+        # forwarder every other process's ZmqEventBus connects to. Pure
+        # transport, no business logic; started first / stopped last,
+        # since every other process (including Camera Ingestion below)
+        # may construct an EventBus. ZMQ sockets tolerate connecting
+        # before their peer is up, so strict ordering isn't required for
+        # correctness -- this is for launcher readability only.
+        # ------------------------------------------------------------------
+        if _is_own_service_on_port(EVENT_BUS_PUBLISH_PORT):
+            print(
+                _fail(
+                    f"Event Bus broker already running (port {EVENT_BUS_PUBLISH_PORT} is "
+                    "already bound by a shared.events.broker process) -- stop it first if "
+                    "you want to restart"
+                )
+            )
+            return False
+
+        event_bus = ManagedService(
+            name="event_bus",
+            command=[str(VENV_PYTHON), "-m", "shared.events.broker"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-event-bus running"),
+        )
+        self.services.append(event_bus)
+        print(_c("\nStarting Event Bus broker...", _BOLD))
+        event_bus.start(env)
+        if not event_bus.wait_until_healthy(timeout=15.0):
+            self._report_startup_failure(event_bus)
+            return False
+        print(_pass("Event Bus broker healthy"))
+
+        # ------------------------------------------------------------------
         # Camera Ingestion Service (ADR-028, Media Architecture Reset) --
         # standalone in this phase, wired to zero consumers, but started
         # first / stopped last (see shutdown()'s reversed(self.services))
@@ -735,6 +775,30 @@ class Orchestrator:
             self._validation_toggle.enable()
 
         # ------------------------------------------------------------------
+        # Incident Service (ADR-029 Phase 4) -- a new, independent process
+        # subscribing to ObservationEvent on the Event Bus broker above and
+        # publishing IncidentCreatedEvent/IncidentUpdatedEvent. Needs the
+        # Backend API's DB/migrations ready. Started before DeepStream
+        # Runtime (AI Runtime, the ObservationEvent publisher) so its
+        # subscription has a head start before publishing begins --
+        # ZmqEventBus's own startup settle delay is the real guarantee,
+        # this ordering is just further head start.
+        # ------------------------------------------------------------------
+        incident_service = ManagedService(
+            name="incident_service",
+            command=[str(VENV_PYTHON), "-m", "services.incident_service.main"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-incident-service running"),
+        )
+        self.services.append(incident_service)
+        print(_c("\nStarting Incident Service...", _BOLD))
+        incident_service.start(env)
+        if not incident_service.wait_until_healthy(timeout=30.0):
+            self._report_startup_failure(incident_service)
+            return False
+        print(_pass("Incident Service healthy"))
+
+        # ------------------------------------------------------------------
         # DeepStream Runtime -- always started fresh, never adopted (unlike
         # the API/Frontend above): a running instance owns live GStreamer
         # pipeline/GPU state that can't be safely "verified healthy" from
@@ -817,6 +881,24 @@ class Orchestrator:
     }
 
     def monitor(self) -> None:
+        """Supervises every managed service for the life of the run.
+
+        Intentional all-or-nothing fault policy: if any one managed
+        service exits unexpectedly, this loop calls shutdown() and tears
+        down the entire stack rather than leaving the rest running
+        (confirmed directly -- killing Incident Service under this
+        supervisor cascaded a full shutdown of every other service, not a
+        bug). This is a property of `run.py`'s own local dev/validation
+        harness, not of the underlying architecture: subsystems remain
+        independent OS processes coupled only through the EventBus, and
+        killing one directly (bypassing this supervisor -- e.g. running
+        each `python -m ...` command by hand) leaves every other service
+        running and functional. The all-or-nothing policy exists because
+        this harness's job is to give an operator one clear signal during
+        local development/SIV validation ("something died, stop and look")
+        rather than risk them working against a silently partial stack.
+        Left unchanged deliberately -- not a defect to fix.
+        """
         check = _c("✓", _GREEN)
         print()
         print(_c("=" * 36, _BOLD))
