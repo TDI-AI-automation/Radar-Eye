@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import timezone
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -40,6 +40,8 @@ from shared.events import (
     IncidentCreatedPayload,
     IncidentUpdatedEvent,
     IncidentUpdatedPayload,
+    ObservationEvent,
+    ObservationEventPayload,
     SnapshotCreatedEvent,
     SnapshotCreatedPayload,
     SystemEvent,
@@ -47,6 +49,7 @@ from shared.events import (
     ThreatAssessmentEvent,
     ThreatAssessmentPayload,
 )
+from shared.events.payloads import BoundingBoxPayload, ObservationDetection
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,7 +61,29 @@ _REVIEW_ID = uuid.uuid4()
 _SNAPSHOT_ID = uuid.uuid4()
 _RECORDING_ID = uuid.uuid4()
 _CALIBRATION_ID = uuid.uuid4()
+_OBSERVATION_ID = uuid.uuid4()
+_DETECTION_ID = uuid.uuid4()
 _TRACK_ID = 42
+
+
+def _make_observation_payload() -> ObservationEventPayload:
+    return ObservationEventPayload(
+        observation_id=_OBSERVATION_ID,
+        camera_id=_CAMERA_ID,
+        frame_num=123,
+        frame_timestamp=datetime.now(timezone.utc),
+        detections=[
+            ObservationDetection(
+                detection_id=_DETECTION_ID,
+                track_id=_TRACK_ID,
+                class_id=1,
+                label="person",
+                confidence=0.95,
+                bbox=BoundingBoxPayload(left=1.0, top=2.0, width=3.0, height=4.0),
+                secondary_label="civilian",
+            )
+        ],
+    )
 
 
 def _make_threat_payload() -> ThreatAssessmentPayload:
@@ -140,6 +165,33 @@ def _round_trip(event: EventEnvelope) -> EventEnvelope:  # type: ignore[type-arg
     json_str = event.model_dump_json()
     data = json.loads(json_str)
     return type(event).model_validate(data)
+
+
+class TestObservationRoundTrip:
+    def test_round_trip(self) -> None:
+        payload = _make_observation_payload()
+        event = ObservationEvent(
+            event_type="ObservationEvent",
+            source="deepstream",
+            payload=payload,
+        )
+        restored = _round_trip(event)
+        assert restored.payload.observation_id == _OBSERVATION_ID
+        assert restored.payload.camera_id == _CAMERA_ID
+        assert restored.payload.frame_num == 123
+        assert len(restored.payload.detections) == 1
+        detection = restored.payload.detections[0]
+        assert detection.detection_id == _DETECTION_ID
+        assert detection.track_id == _TRACK_ID
+        assert detection.label == "person"
+        assert detection.secondary_label == "civilian"
+        assert detection.bbox.left == 1.0
+        assert detection.extensions is None
+
+    def test_payload_is_frozen(self) -> None:
+        payload = _make_observation_payload()
+        with pytest.raises((ValidationError, TypeError)):
+            payload.frame_num = 999  # type: ignore[misc]
 
 
 class TestThreatAssessmentRoundTrip:
@@ -329,6 +381,7 @@ class TestContractCompleteness:
     """Every event type in EVENT_CONTRACTS.md must have a named alias."""
 
     EXPECTED_EVENT_TYPES = {
+        "ObservationEvent",
         "ThreatAssessmentEvent",
         "HumanReviewItemCreatedEvent",
         "IncidentCreatedEvent",
@@ -345,6 +398,6 @@ class TestContractCompleteness:
         import shared.events as events_module
 
         for name in self.EXPECTED_EVENT_TYPES:
-            assert hasattr(events_module, name), (
-                f"Missing event type: {name} — not exported from shared.events"
-            )
+            assert hasattr(
+                events_module, name
+            ), f"Missing event type: {name} — not exported from shared.events"

@@ -10,7 +10,8 @@ Fields use the canonical shared enums from ``shared.constants`` wherever a
 field value is constrained to a known set.  Free-form string fields (e.g.
 ``reason``, ``message``) remain plain ``str``.
 
-Events defined here (10 total, matching EVENT_CONTRACTS.md):
+Events defined here (11 total, matching EVENT_CONTRACTS.md):
+  - ObservationEventPayload
   - ThreatAssessmentPayload
   - HumanReviewItemCreatedPayload
   - IncidentCreatedPayload
@@ -26,6 +27,7 @@ Events defined here (10 total, matching EVENT_CONTRACTS.md):
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -41,6 +43,115 @@ class _FrozenPayload(BaseModel):
     """Base class for all event payloads — frozen (immutable)."""
 
     model_config = ConfigDict(frozen=True)
+
+
+# ---------------------------------------------------------------------------
+# ObservationEvent
+# Producer: AI Runtime
+# Consumers: any subsystem (ADR-029 — AI Runtime is unaware of its consumers)
+# ---------------------------------------------------------------------------
+
+
+class ObservationExtension(_FrozenPayload):
+    """Common base for every ObservationDetection extension type.
+
+    Empty today (no shared fields) — exists so each extension type below
+    is part of one polymorphic family from the start, rather than an
+    unrelated standalone model, ahead of a second extension type actually
+    shipping.
+    """
+
+
+class PoseExtension(ObservationExtension):
+    """Reserved for a future pose-estimation model. No fields yet."""
+
+
+class OcrExtension(ObservationExtension):
+    """Reserved for a future OCR/LPR model. No fields yet."""
+
+
+class SegmentationExtension(ObservationExtension):
+    """Reserved for a future segmentation model. No fields yet."""
+
+
+class EmbeddingExtension(ObservationExtension):
+    """Reserved for a future ReID/face-embedding model. No fields yet."""
+
+
+class ObservationExtensions(_FrozenPayload):
+    """Namespaced, typed extension point for ObservationDetection.
+
+    Extensible, not schema-less: a new CV capability (pose, OCR,
+    segmentation, embeddings, ...) is added as a new named, typed field
+    here — never as an arbitrary key in an untyped dict. All-`None` by
+    default; nothing populates any of these in Phase 3 (no pose/OCR/
+    segmentation/embedding model exists yet).
+    """
+
+    pose: PoseExtension | None = None
+    ocr: OcrExtension | None = None
+    segmentation: SegmentationExtension | None = None
+    embedding: EmbeddingExtension | None = None
+
+
+class BoundingBoxPayload(_FrozenPayload):
+    """Payload mirror of
+    ``apps.deepstream.app.ai_runtime.observations.BoundingBox``."""
+
+    left: float
+    top: float
+    width: float
+    height: float
+
+
+class ObservationDetection(_FrozenPayload):
+    """One detected object within one ObservationEvent.
+
+    ``detection_id`` identifies this detection within this one
+    ObservationEvent only — it is not a tracking identifier and must
+    never be reused across observations. ``track_id`` is temporal
+    identity across frames/events; ``detection_id`` is event identity
+    within one. Both are needed; they answer different questions.
+    """
+
+    detection_id: uuid.UUID
+    track_id: int | None
+    class_id: int
+    label: str
+    confidence: float
+    bbox: BoundingBoxPayload
+    secondary_label: str | None = None
+    extensions: ObservationExtensions | None = None
+
+
+class ObservationEventPayload(_FrozenPayload):
+    """Payload for ObservationEvent.
+
+    The canonical output contract of AI Runtime — observations only,
+    never a decision. Contains only directly observable facts produced
+    by computer vision; never inferred, interpreted, or policy-derived
+    state (threat level, incident level, alarm decision, authorization
+    result, rule violation, etc.) — those belong exclusively to
+    downstream services.
+
+    ``observation_id`` is generated exactly once by AI Runtime,
+    immediately after metadata extraction and before this payload is
+    constructed (never regenerated if the event is rebuilt) — the
+    stable identifier every downstream event (IncidentEvent,
+    AlertEvent, EvidenceEvent, RecordingEvent, AuditEvent, etc.)
+    references instead of inventing its own, since ``frame_num`` alone
+    can reset after a reconnect and frames can be dropped.
+
+    Append-only for the lifetime of the product: existing fields are
+    never repurposed (e.g. ``label`` must never silently shift meaning)
+    — new semantics arrive as additive fields or a new schema version.
+    """
+
+    observation_id: uuid.UUID
+    camera_id: uuid.UUID
+    frame_num: int
+    frame_timestamp: datetime
+    detections: list[ObservationDetection]
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +302,22 @@ class CameraDisconnectedPayload(_FrozenPayload):
     camera_id: uuid.UUID
     reason: str
     """Human-readable disconnection cause (e.g. "RTSP timeout")."""
+
+
+# ---------------------------------------------------------------------------
+# CameraRegisteredEvent
+# Producer: Camera Registry (RM-12)
+# Consumers: DeepStream (Camera Runtime -- future: reacts to new/changed
+#   cameras instead of only loading the roster once at startup, RM-12
+#   §6 "Dynamic source management"), Frontend (WS)
+# ---------------------------------------------------------------------------
+
+
+class CameraRegisteredPayload(_FrozenPayload):
+    """Payload for CameraRegisteredEvent."""
+
+    camera_id: uuid.UUID
+    name: str
 
 
 # ---------------------------------------------------------------------------

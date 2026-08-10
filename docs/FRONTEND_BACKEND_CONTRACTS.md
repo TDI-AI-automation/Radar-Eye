@@ -57,6 +57,51 @@ Purpose:
 
 Real-time operational monitoring.
 
+## WebRTC
+
+POST /cameras/{camera_id}/webrtc/offer
+
+Request:
+
+{
+  "sdp": "...",
+  "type": "offer"
+}
+
+Response:
+
+{
+  "sdp": "...",
+  "type": "answer"
+}
+
+Purpose:
+
+Live video delivery. The browser sends one SDP offer per
+`RTCPeerConnection`; this route returns the SDP answer. Once
+negotiated, media flows directly between the browser and whichever
+process owns Live Streaming — never through this route, and never
+through the API service at all.
+
+Backend ownership (ADR-028):
+
+This route proxies the offer/answer exchange to the **Live Streaming
+Service** (an independent process — see `docs/DEEPSTREAM_PIPELINE_SPEC.md`
+Stage 1.5), loopback-only, never network-exposed directly. The frontend
+has no awareness of, and no dependency on, which backend process
+answers this route — `WebRtcVideoProvider`'s contract is exactly the
+request/response shape above, nothing more.
+
+Channels:
+
+Two independent products exist behind this same route shape, selected
+by which camera/channel the operator is viewing — "Live View" (the
+camera's original stream, always available, never delayed by AI) and
+"AI Streaming" (DeepStream's annotated output, available once AI is
+enabled and DeepStream has finished initializing for that camera). The
+browser never sees "raw," "annotated," or "AI" in this contract; it
+only ever requests video for a camera and receives it.
+
 ---
 
 # Incident Center
@@ -107,9 +152,15 @@ Operational situational awareness.
 
 GET /cameras
 
+GET /cameras/brands
+
+POST /cameras
+
 GET /cameras/{camera_id}
 
 PATCH /cameras/{camera_id}
+
+DELETE /cameras/{camera_id}
 
 GET /cameras/{camera_id}/health
 
@@ -117,7 +168,49 @@ GET /cameras/{camera_id}/calibration
 
 Purpose:
 
-Camera administration.
+Camera administration -- full operator workflow (register, edit, delete),
+no curl/direct API calls required.
+
+GET /cameras/brands lists every supported camera brand
+(HIKVISION/DAHUA/UNIVIEW/AXIS/HANWHA) plus each one's default RTSP port
+and stream path -- the Add/Edit Camera form's only source of these
+defaults (apps.api.app.services.rtsp_url_generator).
+
+POST /cameras registers a new camera (Camera Registry, RM-12) -- creates
+both the camera record and its stream profile; Camera Runtime picks it
+up and connects automatically, with no intermediate lifecycle state to
+promote through. The operator supplies brand + IP + credentials +
+port/stream (port/stream optional, defaulting per brand), never a raw
+RTSP URL -- the backend generates it and stores only the generated,
+encrypted URL.
+model (hardware model number, e.g. "DS-2CD2143G0-I") is accepted and
+stored alongside brand but is purely descriptive -- it plays no part in
+RTSP URL generation.
+
+PATCH /cameras/{camera_id} additionally accepts brand/model/ip_address/
+port/username/password/transport/stream_path -- any of brand/ip_address/
+port/username/password/transport/stream_path present regenerates and
+re-encrypts the RTSP URL, merged with the camera's existing connection
+info for whichever fields are omitted (e.g. changing only the IP keeps
+the existing password). password is write-only and never appears in any
+response or audit log entry.
+
+DELETE /cameras/{camera_id} removes a camera, its own setup data (stream
+profile, calibration history), and, per explicit product decision
+(2026-08-10, overriding this document's/CLAUDE.md's original Evidence
+Preservation default), its evidence history too: incidents (with their
+events/snapshots/recordings) and human review items. Deletion is
+unconditional -- an operator who deletes a camera gets it gone,
+including its history; 409 is no longer a normal response (a defensive
+fallback only, for any reference the service doesn't yet know to clean
+up). Camera Runtime removes the corresponding pipeline source and its
+entire runtime state automatically
+(DesiredStateSynchronizer already reconciles toward "camera no longer in
+Desired State" -- no separate signal needed). There are exactly two
+operator controls for a camera: Connect/Disconnect, implicit through
+registration/deletion, and AI Enable/Disable via PATCH
+/cameras/{camera_id}'s `ai_enabled` field -- no intermediate lifecycle
+state exists.
 
 ---
 
@@ -169,11 +262,23 @@ PATCH /config
 
 GET /users
 
-PATCH /users
+PATCH /users/{user_id}
 
 Purpose:
 
 System administration.
+
+Notes:
+
+`PATCH /users` (no identifier) was a documentation error -- corrected to
+`PATCH /users/{user_id}`, matching every other mutating route in this
+contract (each takes a path identifier; there is no collection-level PATCH
+anywhere else in this document). Scoped to updating one user's `role`
+only -- `username`/`password_hash` are not exposed through this route.
+
+`GET`/`PATCH /config` are not yet implemented (docs/OPEN_QUESTIONS.md
+Q-014) -- no persistence model for system configuration is defined in
+`docs/DATABASE_SCHEMA.md` or `docs/DOMAIN_MODEL.md` yet.
 
 ---
 
@@ -284,6 +389,18 @@ HumanReviewItemCreatedEvent
 
 ---
 
+## Alert Events (ADR-029, new)
+
+WebSocket:
+
+/ws/alerts
+
+Event:
+
+AlertRaisedEvent
+
+---
+
 ## Alarm Events
 
 WebSocket:
@@ -293,6 +410,10 @@ WebSocket:
 Event:
 
 AlarmRequestedEvent
+
+Note (ADR-029):
+
+Producer is now Alert Service, not Threat Engine (see `docs/EVENT_CONTRACTS.md`) — this channel reflects Hardware Action Service's trigger requests, not a direct Threat Engine output.
 
 ---
 

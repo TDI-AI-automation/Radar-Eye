@@ -1,5 +1,7 @@
 # Radar Eye Event Catalog
 
+Note (ADR-029): this catalog is an early, broader conceptual inventory and is not payload-authoritative — `docs/EVENT_CONTRACTS.md` is the authoritative source for events actually wired through the bus. E-006 (`AlertCreated`, producer "Alert Service") and E-008 (`AlarmTriggered`) below anticipated exactly the split ADR-029 now formalizes: Alert Service (Phase 6) owns alert generation/dedup/escalation/notification (`AlertRaisedEvent`), and Hardware Action Service (Phase 7) owns physical actuation (`AlarmRequestedEvent`).
+
 ## E-001
 
 Event:

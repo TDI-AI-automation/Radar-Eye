@@ -10,7 +10,15 @@ Define persistent data storage for Radar Eye.
 
 ## Description
 
-Registered camera sources.
+Registered camera sources. Two independent state groups (RM-12 Camera
+Runtime Ownership Refinement): Desired state (`ai_enabled`,
+`recording_enabled`) is written exclusively by Camera Registry (the API
+service); Observed state (`status` and the fps/latency/last_seen/
+reconnect/error fields below) is written exclusively by Camera Runtime
+(`apps.deepstream`), persisted directly since the two run as separate
+processes and don't share memory. There is no intermediate lifecycle
+state machine — a registered camera always wants an active source, and
+deletion is the only way a camera stops being desired.
 
 ### Fields
 
@@ -18,6 +26,13 @@ id (UUID)
 name
 location
 status
+ai_enabled
+recording_enabled
+fps
+latency_ms
+last_seen_at
+reconnect_count
+last_stream_error
 created_at
 updated_at
 
@@ -27,7 +42,9 @@ updated_at
 
 ## Description
 
-Camera connection configuration.
+Camera connection configuration. `rtsp_url_encrypted` is generated
+server-side (never operator-entered) from brand + ip_address + port +
+stream_path + username + password.
 
 ### Fields
 
@@ -35,6 +52,13 @@ id (UUID)
 camera_id (FK)
 rtsp_url_encrypted
 transport
+brand
+model
+ip_address
+port
+stream_path
+username
+password_encrypted
 created_at
 updated_at
 
@@ -244,6 +268,36 @@ created_at
 
 ---
 
+# audit_log
+
+## Description
+
+User action audit history (ADR-008). Distinct from ``incident_events``
+(incident-lifecycle history, scoped to a single incident) and
+``system_events`` (operational/runtime events, not tied to a user action).
+``audit_log`` records who did what: every operator/admin-initiated
+mutation across the system, independent of whether it relates to an
+incident at all (e.g. a camera update, a config change, a user-management
+action).
+
+### Fields
+
+id (UUID)
+
+actor_user_id (FK -> users.id, nullable for system-generated actions)
+
+action
+
+resource_type
+
+resource_id
+
+details (JSONB)
+
+timestamp
+
+---
+
 # Relationships
 
 camera
@@ -256,6 +310,9 @@ incident
 ├── incident_events
 ├── snapshots
 └── recordings
+
+user
+└── audit_log
 
 ---
 
@@ -292,6 +349,7 @@ Store:
 - Event Clips
 - System Events
 - Users
+- Audit Log
 
 ---
 

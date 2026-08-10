@@ -1,0 +1,58 @@
+# RM-11.SIV -- external model configuration (Decision C).
+#
+# The real PGIE (weapon detection) and SGIE (uniform classification) models
+# are NOT part of this repository -- see docs/MODEL_REGISTRY.md. Swapping
+# either model requires editing ONLY this file; no Python change is needed.
+# Paths below are examples -- point them at wherever the real model files
+# actually live on this machine (typically /mnt/models or /opt/radar-eye/models
+# on the Jetson target). ModelConfigResolver validates every path at pipeline
+# build time and fails fast, naming exactly which key is invalid, if a file
+# is missing -- it never silently falls back to a placeholder.
+#
+# Set enabled: false to fall back to the RM-11 Phase 1/2 placeholder configs
+# (apps/deepstream/configs/pgie_placeholder.txt / sgie_placeholder.txt) --
+# useful for hardware verification without the real models present.
+#
+# Enabled 2026-08-09 for end-to-end Incident Service verification, real
+# model files provided in this repo's own models/ directory. This does
+# NOT mean either model is production approved -- see MODEL_REGISTRY.md's
+# Rule ("No model is production approved until benchmarked"); enabling
+# here is for functional verification only.
+
+pgie:
+  enabled: true
+  model_file: /home/dev/Documents/Army/Radar-Eye/models/yolo26m_weapon.onnx
+  engine_file: /home/dev/Documents/Army/Radar-Eye/models/yolo26m_weapon.onnx_b1_gpu0_fp16.engine
+  labels: /home/dev/Documents/Army/Radar-Eye/models/labels.txt
+  batch_size: 1
+  precision: fp16
+  interval: 0
+  confidence_threshold: 0.25
+  gpu_id: 0
+  unique_id: 1
+  nms_iou_threshold: 0.5
+  topk: 300
+  cluster_mode: 4
+  network_type: 0
+  maintain_aspect_ratio: true
+  symmetric_padding: true
+  custom_lib_path: /home/dev/Documents/Army/Radar-Eye/apps/deepstream/native/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
+  parse_bbox_func_name: NvDsInferParseYolo
+
+sgie:
+  enabled: true
+  model_file: /home/dev/Documents/Army/Radar-Eye/models/vit_binary.onnx
+  engine_file: /home/dev/Documents/Army/Radar-Eye/models/vit_binary.onnx_b8_gpu0_fp16.engine
+  labels: /home/dev/Documents/Army/Radar-Eye/models/labels_vit.txt
+  batch_size: 8
+  precision: fp16
+  interval: 0
+  confidence_threshold: 0.51
+  gpu_id: 0
+  unique_id: 2
+  nms_iou_threshold: 0.5
+  network_type: 1
+  maintain_aspect_ratio: false
+  operate_on_class_ids: "3"
+  input_object_min_width: 32
+  input_object_min_height: 64

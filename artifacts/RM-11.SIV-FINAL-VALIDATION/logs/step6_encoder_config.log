@@ -1,0 +1,49 @@
+112-        caps_nv12.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"))
+113-
+114:        encoder = self._make(Gst, "nvv4l2h264enc", "viz-encoder")
+115-        encoder.set_property("bitrate", self._settings.output_bitrate)
+116-        # iframeinterval: default is large enough that a client joining
+117-        # mid-stream can wait a long time for its first real keyframe,
+118-        # decoding only P-frames against a reference it never received in
+119-        # the meantime -- the classic "solid green/gray until the first
+120-        # IDR arrives" artifact (confirmed via RM-11.SIV Phase 5 hardware
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 0 
+  idrinterval         : Encoding IDR Frame occurance frequency
+                        flags: readable, writable, changeable only in NULL or READY state
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 256 
+  iframeinterval      : Encoding Intra Frame occurance frequency
+                        flags: readable, writable, changeable only in NULL or READY state
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 4294967295 
+  initqp              : Set unsigned integer values for initqp,
+--
+                        Unsigned Integer. Range: 1 - 7 Default: 1 
+  profile             : Set profile for v4l2 encode
+                        flags: readable, writable, changeable only in NULL or READY state
+                        Enum "GstV4l2VideoEncProfileType" Default: 0, "Baseline"
+                           (0): Baseline         - GST_V4L2_H264_VIDENC_BASELINE_PROFILE
+
+=== Full nvv4l2h264enc property list on this machine (gst-inspect-1.0) ===
+aq, bitrate, capture-io-mode, constqp, control-rate, copy-meta, cq, device, device-fd,
+device-name, extra-controls, force-idr, force-intra, gpu-id, idrinterval, iframeinterval,
+initqp, intra-refresh, maxbitrate, output-io-mode, preset-id, profile, qos, qp-range,
+temporalaq, tuning-info-id, vbvbufsize, vbvinit
+
+FINDING A: no "insert-sps-pps" property exists on this NVIDIA nvv4l2h264enc build at all.
+That property name belongs to other GStreamer H.264 encoders (e.g. x264enc), not NVIDIA's
+hardware V4L2 encoder element. It cannot be set here because it does not exist on this element.
+
+FINDING B: idrinterval (default 256 frames, ~10.4s at 24.7fps) is a DISTINCT property from
+iframeinterval (which our code sets to output_fps=30, i.e. ~1.2s). Our code sets iframeinterval
+only, not idrinterval. Empirically (Step 3, prior validation round) a fresh real RTSP client join
+decoded correctly within the test window, which is direct evidence this combination is
+functionally sufficient for GStreamer-based clients that accept in-band SPS/PPS -- but idrinterval
+was not independently verified as aligned to iframeinterval.
+
+=== Actual configured values (apps/deepstream/app/visualization/pipeline_builder.py) ===
+bitrate:         output_bitrate (configs/visualization.yaml, default 4_000_000) -- explicit
+iframeinterval:  output_fps (configs/visualization.yaml, default 30) -- explicit, our earlier fix
+idrinterval:     NOT SET -- library default (256 frames)
+profile:         NOT SET -- library default (0, Baseline) -- matches observed stream caps
+                 (profile=constrained-baseline, confirmed in the prior validation round's
+                 fakesink caps negotiation)
+insert-sps-pps:  PROPERTY DOES NOT EXIST on this element -- not applicable

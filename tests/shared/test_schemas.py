@@ -16,7 +16,14 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from shared.constants import DistanceZone, IncidentStatus, IncidentType, ThreatLevel, UniformClass, WeaponType
+from shared.constants import (
+    DistanceZone,
+    IncidentStatus,
+    IncidentType,
+    ThreatLevel,
+    UniformClass,
+    WeaponType,
+)
 from shared.schemas import (
     ActiveThreatSchema,
     AlarmSchema,
@@ -138,6 +145,9 @@ class TestIncidentSchemas:
             incident_type=IncidentType.THREAT,
             threat_level=ThreatLevel.HIGH,
             status=IncidentStatus.ACTIVE,
+            weapon_type="RANGED_LETHAL",
+            uniform="CIVILIAN",
+            zone="zone_1",
             created_at=_NOW,
             updated_at=_NOW,
         )
@@ -151,6 +161,7 @@ class TestIncidentSchemas:
             camera_id=_CAMERA_ID,
             threat_level=ThreatLevel.MEDIUM,
             status=IncidentStatus.NEW,
+            weapon_type="NON_LETHAL",
         )
         assert summary.status == IncidentStatus.NEW
 
@@ -184,6 +195,7 @@ class TestHumanReviewSchema:
             camera_id=_CAMERA_ID,
             track_id=9,
             reason="uniform_unknown",
+            created_at=_NOW,
         )
         restored = _round_trip(schema)
         assert restored.status == "OPEN"
@@ -196,6 +208,7 @@ class TestHumanReviewSchema:
             camera_id=_CAMERA_ID,
             track_id=1,
             reason="uniform_unknown",
+            created_at=_NOW,
         )
         assert schema.status == "OPEN"
 
@@ -211,12 +224,16 @@ class TestCameraSchemas:
             camera_id=_CAMERA_ID,
             name="North Gate",
             status="CONNECTED",
+            ai_enabled=True,
+            recording_enabled=False,
             created_at=_NOW,
             updated_at=_NOW,
         )
         restored = _round_trip(schema)
         assert restored.name == "North Gate"
         assert restored.status == "CONNECTED"
+        assert restored.ai_enabled is True
+        assert restored.recording_enabled is False
 
     def test_camera_health_connected(self) -> None:
         health = CameraHealthSchema(
@@ -241,6 +258,8 @@ class TestCameraSchemas:
                 camera_id=_CAMERA_ID,
                 name="X",
                 status="BROKEN",  # type: ignore[arg-type]
+                ai_enabled=False,
+                recording_enabled=False,
                 created_at=_NOW,
                 updated_at=_NOW,
             )

@@ -1,0 +1,44 @@
+=== ss -ltnp | grep 8554 ===
+LISTEN 0      5                          0.0.0.0:8554       0.0.0.0:*    users:(("python",pid=76046,fd=20))                                       
+exit code: 0
+
+=== netstat -ltnp | grep 8554 (fallback) ===
+exit code: 1
+
+=== full ss -ltnp for context (all listening ports) ===
+State  Recv-Q Send-Q               Local Address:Port  Peer Address:PortProcess                                                                   
+LISTEN 0      4096                     127.0.0.1:35841      0.0.0.0:*    users:(("language_server",pid=6835,fd=18))                               
+LISTEN 0      4096                 127.0.0.53%lo:53         0.0.0.0:*                                                                             
+LISTEN 0      4096                 100.72.16.115:47037      0.0.0.0:*                                                                             
+LISTEN 0      151                      127.0.0.1:3306       0.0.0.0:*                                                                             
+LISTEN 0      70                       127.0.0.1:33060      0.0.0.0:*                                                                             
+LISTEN 0      128                      127.0.0.1:631        0.0.0.0:*                                                                             
+LISTEN 0      10                         0.0.0.0:7070       0.0.0.0:*                                                                             
+LISTEN 0      10                         0.0.0.0:55870      0.0.0.0:*                                                                             
+LISTEN 0      4096                     127.0.0.1:39169      0.0.0.0:*    users:(("language_server",pid=7484,fd=9))                                
+LISTEN 0      511                      127.0.0.1:39007      0.0.0.0:*    users:(("antigravity-ide",pid=7210,fd=64))                               
+LISTEN 0      128                      127.0.0.1:7001       0.0.0.0:*    users:(("nxnode.bin",pid=3320,fd=26))                                    
+LISTEN 0      4096                     127.0.0.1:39777      0.0.0.0:*                                                                             
+LISTEN 0      10                       127.0.0.1:40101      0.0.0.0:*    users:(("language_server",pid=6835,fd=69),("antigravity",pid=6682,fd=69))
+LISTEN 0      100                        0.0.0.0:4000       0.0.0.0:*                                                                             
+LISTEN 0      100                      127.0.0.1:21814      0.0.0.0:*                                                                             
+LISTEN 0      4096                     127.0.0.1:38265      0.0.0.0:*    users:(("language_server",pid=7484,fd=8))                                
+LISTEN 0      511                      127.0.0.1:43655      0.0.0.0:*    users:(("antigravity-ide",pid=7060,fd=81))                               
+LISTEN 0      4096                     127.0.0.1:44067      0.0.0.0:*    users:(("language_server",pid=7182,fd=18))                               
+LISTEN 0      511                      127.0.0.1:44229      0.0.0.0:*    users:(("antigravity-ide",pid=7060,fd=77))                               
+LISTEN 0      100                      127.0.0.1:12001      0.0.0.0:*    users:(("nxnode.bin",pid=3320,fd=20))                                    
+LISTEN 0      100                      127.0.0.1:25001      0.0.0.0:*    users:(("nxrunner.bin",pid=3344,fd=14))                                  
+LISTEN 0      4096                     127.0.0.1:41185      0.0.0.0:*    users:(("language_server",pid=6835,fd=22))                               
+LISTEN 0      4096                     127.0.0.1:41947      0.0.0.0:*    users:(("language_server",pid=7484,fd=27))                               
+LISTEN 0      64                       127.0.0.1:26078      0.0.0.0:*                                                                             
+LISTEN 0      511                      127.0.0.1:42944      0.0.0.0:*    users:(("antigravity-ide",pid=7210,fd=49))                               
+LISTEN 0      4096                     127.0.0.1:42953      0.0.0.0:*    users:(("language_server",pid=7182,fd=21))                               
+LISTEN 0      5                          0.0.0.0:8554       0.0.0.0:*    users:(("python",pid=76046,fd=20))                                       
+LISTEN 0      511                      127.0.0.1:30452      0.0.0.0:*    users:(("code",pid=11310,fd=54))                                         
+LISTEN 0      4096                             *:5432             *:*                                                                             
+LISTEN 0      128                          [::1]:7001          [::]:*    users:(("nxnode.bin",pid=3320,fd=25))                                    
+LISTEN 0      10                            [::]:7070          [::]:*                                                                             
+LISTEN 0      10                            [::]:55870         [::]:*                                                                             
+LISTEN 0      128                          [::1]:631           [::]:*                                                                             
+LISTEN 0      4096   [fd7a:115c:a1e0::bc33:1073]:45068         [::]:*                                                                             
+LISTEN 0      100                           [::]:4000          [::]:*                                                                             

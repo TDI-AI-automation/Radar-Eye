@@ -109,6 +109,10 @@ Phase 1 implementation:
 
 Specific siren and relay hardware models remain unknown.
 
+Ownership resolved by ADR-029:
+
+UI/SMS/Email/WhatsApp are owned by Alert Service (Phase 6); GPIO Relay/Audio Siren (and floodlight/PTZ) are owned by Hardware Action Service (Phase 7), consuming Alert Service's `AlertRaisedEvent`. This resolves *which service* owns each channel — the specific hardware models remain the still-open part of this question.
+
 ---
 
 ## Q-006
@@ -135,11 +139,14 @@ What frontend live-streaming protocol is required?
 
 Status:
 
-OPEN
+CLOSED
 
-Owner:
+Answer:
 
-Client
+WebRTC. Implemented and hardware-validated (Live Monitoring's Live View
+channel). See ADR-028 and `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5
+for the owning service and `docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live
+Monitoring / WebRTC section for the request/response contract.
 
 ---
 
@@ -257,3 +264,79 @@ Distance estimation method has been selected:
 - Ground Plane Projection
 
 Required accuracy tolerance remains undefined.
+
+---
+
+## Q-014
+
+Question:
+
+What is the persistence model for system configuration (`GET`/`PATCH /config`,
+docs/FRONTEND_BACKEND_CONTRACTS.md's Settings section)?
+
+Status:
+
+OPEN
+
+Owner:
+
+Engineering
+
+Notes:
+
+ADR-008 lists "configuration" as one of four persisted categories (alongside
+incidents, evidence metadata, and audit history), but neither
+`docs/DATABASE_SCHEMA.md` nor `docs/DOMAIN_MODEL.md` defines its shape --
+unlike audit history, which had a `docs/DOMAIN_MODEL.md` "Audit Log" entity
+to anchor a schema on (see `audit_log`, added during RM-12 Phase 2), there
+is no equivalent "Config"/"SystemConfig" conceptual entity anywhere.
+
+Discovered during RM-12 Phase 4 (`docs/RM-12_IMPLEMENTATION_PLAN.md`):
+`GET`/`PATCH /config` were explicitly descoped from RM-12 rather than
+guessed at, per the Principal Engineer's explicit instruction --
+implementing them would require inventing a configuration persistence
+model (ownership, validation, storage semantics, versioning, rollback)
+rather than implementing already-approved architecture. A future
+Configuration Management milestone must resolve this design question
+before `GET`/`PATCH /config` can be implemented. No placeholder route, no
+YAML write-back, and no new table were added in the meantime.
+
+---
+
+## Q-015
+
+Question:
+
+What does the `/ws/tracking` WebSocket channel actually carry
+(docs/FRONTEND_BACKEND_CONTRACTS.md's Tactical Map section)?
+
+Status:
+
+OPEN
+
+Owner:
+
+Engineering
+
+Notes:
+
+Unlike every other `/ws/*` channel, `/ws/tracking` has no named event model
+anywhere -- `docs/FRONTEND_BACKEND_CONTRACTS.md`'s "Frontend Event Models"
+section defines a shape for every other channel's event(s) but has no
+"Tracking" entry, and none of the 10 existing `EventEnvelope` payloads in
+`shared/events/payloads.py` carries per-track position data.
+
+Discovered during RM-12 Phase 5 (`docs/RM-12_IMPLEMENTATION_PLAN.md`,
+which itself flagged this channel as needing a clarifying question before
+implementation, unlike the plan's other five channels).
+`docs/RM-12_IMPLEMENTATION_PLAN.md`'s Phase 5. Explicitly descoped from
+RM-12 per the Principal Engineer's instruction, rather than inventing a
+payload/publisher/schema unilaterally. A future Tracking Streaming
+milestone must define: the event schema, the payload contract, the
+publication frequency, publisher ownership (presumably DeepStream's
+Runtime Adapter), the frontend consumption model, lifecycle semantics, and
+how this interacts with `docs/DATABASE_SCHEMA.md`'s Explicit
+Non-Persistence Rules (tracking history must never be stored -- this would
+be the first bus-transported data that is neither a debounced state-change
+event like every other channel nor persisted anywhere). No placeholder
+event type, payload, or route was added in the meantime.

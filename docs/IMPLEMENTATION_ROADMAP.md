@@ -12,6 +12,8 @@ This document does **not** govern:
 
 Milestones (`RM-XX`) are a planning and sequencing concept only. They are never Git branch names.
 
+This table's RM-01 through RM-15 sequence is the original, now-complete implementation roadmap. The **Media Architecture Reset** (`ADR-028`, extended by `ADR-029`) is a subsequent, post-hoc architecture correction with its own independent, locked Phase-numbered sequence (Phase 1 Camera Ingestion, Phase 2 Live Streaming, Phase 3 AI Runtime scope-lock, Phase 4 Production EventBus, Phase 5 Incident Service, Phase 6 Alert Service, Phase 7 Hardware Action Service, Phase 8 Evidence Service, Phase 9+ Recording/Archive/Playback/Search/Export) — tracked in `docs/IMPLEMENTATION_STATUS.md`'s Subsystem Status table and Changelog, not renumbered into or added to this RM-XX table. Per ADR-029, this sequence does not change again unless implementation reveals a fundamental architectural issue, in which case ADR-029 is amended first, before code changes.
+
 ---
 
 ## Milestone Sequence
@@ -96,10 +98,18 @@ FastAPI app factory, settings loading (YAML + environment-only secrets), structu
 **Testing:** event-filter unit tests; hardware-in-the-loop test once alarm hardware exists.
 
 ### RM-11 — DeepStream AI Pipeline
-**Deliverables:** `apps/deepstream` — RTSP ingestion with reconnect handling, PGIE (YOLO26M/TensorRT), NvDCF tracker, SGIE (ViT/TensorRT, binary+threshold), in-process calls into RM-06 and RM-05, decision events onto RM-04's bus.
+**Deliverables:** `apps/deepstream` — RTSP ingestion with reconnect handling, PGIE (YOLO26M/TensorRT), NvDCF tracker, SGIE (ViT/TensorRT, binary+threshold), in-process calls into RM-06 and RM-05, decision events onto RM-04's bus. **Note (ADR-029, 2026-08-05):** the "in-process calls into RM-06 and RM-05" part of this deliverable is superseded — `apps/deepstream` now publishes `ObservationEvent` only; those calls move to Incident Service. This entry describes what RM-11 originally built and is left as historical record, not current target scope; see `docs/IMPLEMENTATION_STATUS.md`'s AI Runtime row.
 **Acceptance:** 20 cameras concurrently on one Jetson; detector ≥90% precision/recall, ≤5 false positives/hour/camera; 2h soak with no memory growth.
 **Testing:** per-component benchmark before full integration; physical cable-pull reconnect test.
 **Risk:** highest-complexity milestone in the project — no prior benchmark data exists for 20-camera single-Jetson throughput. An early partial-capacity spike is recommended before committing to the full integration timeline.
+
+#### RM-11.SIV — System Integration Validation (addendum, not a renumbered milestone)
+**Deliverables:** validates the complete RM-11 Phase 0–2 pipeline against ONE real RTSP camera and the real PGIE/SGIE models, end to end. External model configuration (`configs/models.yaml`, replacing the Phase 1/2 placeholder-config mechanism), a bootstrap script for onboarding a camera into the existing DB-backed `CameraRegistry` path (`scripts/siv_register_camera.py`, never a parallel loading path), per-subsystem stage loggers plus an operator-facing audit logger, a full frame-execution trace (`pipeline_trace.py`, off by default), a unified `HeartbeatRegistry` shared by a validation watchdog (visibility only, never recovery) and a console dashboard, PGIE/SGIE fps and event/threat/alarm/incident throughput metrics, and an automatic `siv_report.json` per run.
+**Acceptance:** every checklist item in `docs/SIV_VALIDATION_REPORT.md` reaches PASS with a real camera and real models; until then, the mechanics are hardware-verified with a placeholder camera/models (same methodology as RM-11 Phase 1/2).
+**Testing:** SDK-free unit tests for every new component (config resolution, heartbeat registry, watchdog, dashboard, tracer, report generator); DB-backed tests for the bootstrap script and the full calibration→alarm heartbeat chain (skip without reachable PostgreSQL); real-hardware verification via a local RTSP test source, same methodology as RM-11 Phase 1/2.
+**Not RM-11 Phase 3** (multi-camera scaling) — this validates the single-camera pipeline that already exists; Phase 3 requires its own design review.
+**Finding:** this milestone's own hardware run caught a pre-existing RM-11 Phase 0 defect — `nvstreammux` had no `batched-push-timeout` set, so with fewer active sources than `batch-size` the pipeline never left PAUSED and zero frames ever flowed. Fixed (see `docs/IMPLEMENTATION_STATUS.md`); this is exactly the class of failure System Integration Validation exists to catch.
+**Baseline artifact:** `siv_reports/siv_report_latest.json` from each run becomes the reference point for RM-11 Phase 3's 1→2→4→8→10→20-camera scaling comparisons.
 
 ### RM-12 — API Service (REST + WebSocket)
 **Deliverables:** every endpoint/channel in `FRONTEND_BACKEND_CONTRACTS.md`; auth + audit (both inside `apps/api`, per the accepted Auth/Audit/Monitoring decision); bridges the event bus to WebSocket.
@@ -128,3 +138,4 @@ FastAPI app factory, settings loading (YAML + environment-only secrets), structu
 | Date | Change |
 |---|---|
 | 2026-07-19 | Initial version. Consolidates the roadmap agreed during planning, reordered per approved guidance (RM-06 moved earlier; Developer Infrastructure inserted after RM-02; RM-10 assigned to `feature/incident-service` rather than a new subsystem). Supersedes the RM-numbered table previously embedded in `IMPLEMENTATION_STATUS.md`. |
+| 2026-07-23 | Added RM-11.SIV (System Integration Validation) as an addendum under RM-11 -- an explicitly-approved milestone, not a renumbering of RM-12+ and not RM-11 Phase 3. Validates the existing RM-11 Phase 0-2 pipeline against a real camera and real models. |

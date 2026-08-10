@@ -30,10 +30,12 @@ from shared.events.payloads import (
     AlarmRequestedPayload,
     CalibrationUpdatedPayload,
     CameraDisconnectedPayload,
+    CameraRegisteredPayload,
     ClipCreatedPayload,
     HumanReviewItemCreatedPayload,
     IncidentCreatedPayload,
     IncidentUpdatedPayload,
+    ObservationEventPayload,
     SnapshotCreatedPayload,
     SystemEventPayload,
     ThreatAssessmentPayload,
@@ -43,6 +45,7 @@ from shared.events.payloads import (
 # Public event type aliases
 # ---------------------------------------------------------------------------
 
+ObservationEvent = EventEnvelope[ObservationEventPayload]
 ThreatAssessmentEvent = EventEnvelope[ThreatAssessmentPayload]
 HumanReviewItemCreatedEvent = EventEnvelope[HumanReviewItemCreatedPayload]
 IncidentCreatedEvent = EventEnvelope[IncidentCreatedPayload]
@@ -51,6 +54,7 @@ AlarmRequestedEvent = EventEnvelope[AlarmRequestedPayload]
 SnapshotCreatedEvent = EventEnvelope[SnapshotCreatedPayload]
 ClipCreatedEvent = EventEnvelope[ClipCreatedPayload]
 CameraDisconnectedEvent = EventEnvelope[CameraDisconnectedPayload]
+CameraRegisteredEvent = EventEnvelope[CameraRegisteredPayload]
 CalibrationUpdatedEvent = EventEnvelope[CalibrationUpdatedPayload]
 SystemEvent = EventEnvelope[SystemEventPayload]
 
@@ -58,10 +62,12 @@ __all__ = [
     "AlarmRequestedEvent",
     "CalibrationUpdatedEvent",
     "CameraDisconnectedEvent",
+    "CameraRegisteredEvent",
     "ClipCreatedEvent",
     "HumanReviewItemCreatedEvent",
     "IncidentCreatedEvent",
     "IncidentUpdatedEvent",
+    "ObservationEvent",
     "SnapshotCreatedEvent",
     "SystemEvent",
     "ThreatAssessmentEvent",

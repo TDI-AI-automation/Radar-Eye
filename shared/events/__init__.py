@@ -15,6 +15,7 @@ Typical import patterns::
     from shared.events import EventEnvelope
 """
 
+from shared.events.bus import EventBus, EventHandler, InProcessEventBus
 from shared.events.envelope import EventEnvelope
 from shared.events.payloads import (
     AlarmRequestedPayload,
@@ -24,6 +25,7 @@ from shared.events.payloads import (
     HumanReviewItemCreatedPayload,
     IncidentCreatedPayload,
     IncidentUpdatedPayload,
+    ObservationEventPayload,
     SnapshotCreatedPayload,
     SystemEventPayload,
     ThreatAssessmentPayload,
@@ -36,6 +38,7 @@ from shared.events.types import (
     HumanReviewItemCreatedEvent,
     IncidentCreatedEvent,
     IncidentUpdatedEvent,
+    ObservationEvent,
     SnapshotCreatedEvent,
     SystemEvent,
     ThreatAssessmentEvent,
@@ -44,6 +47,10 @@ from shared.events.types import (
 __all__ = [
     # Envelope
     "EventEnvelope",
+    # Bus
+    "EventBus",
+    "EventHandler",
+    "InProcessEventBus",
     # Payloads
     "AlarmRequestedPayload",
     "CalibrationUpdatedPayload",
@@ -52,6 +59,7 @@ __all__ = [
     "HumanReviewItemCreatedPayload",
     "IncidentCreatedPayload",
     "IncidentUpdatedPayload",
+    "ObservationEventPayload",
     "SnapshotCreatedPayload",
     "SystemEventPayload",
     "ThreatAssessmentPayload",
@@ -63,6 +71,7 @@ __all__ = [
     "HumanReviewItemCreatedEvent",
     "IncidentCreatedEvent",
     "IncidentUpdatedEvent",
+    "ObservationEvent",
     "SnapshotCreatedEvent",
     "SystemEvent",
     "ThreatAssessmentEvent",
