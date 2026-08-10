@@ -23,10 +23,13 @@ from apps.api.app.repositories.camera import (
     CameraRepository,
     CameraStreamProfileRepository,
 )
+from apps.api.app.repositories.human_review import HumanReviewRepository
+from apps.api.app.repositories.incident import IncidentEventRepository, IncidentRepository
 from apps.api.app.repositories.media import (
     CameraMediaEndpointRepository,
     CameraSubsystemHealthRepository,
 )
+from apps.api.app.repositories.recording import RecordingRepository, SnapshotRepository
 from apps.api.app.security.encryption import CredentialEncryptionProvider
 from apps.api.app.services.rtsp_url_generator import (
     default_port_for_brand,
@@ -57,6 +60,11 @@ class CameraRegistryService:
         self._calibrations = CameraCalibrationRepository(session)
         self._media_endpoints = CameraMediaEndpointRepository(session)
         self._subsystem_health = CameraSubsystemHealthRepository(session)
+        self._incidents = IncidentRepository(session)
+        self._incident_events = IncidentEventRepository(session)
+        self._snapshots = SnapshotRepository(session)
+        self._recordings = RecordingRepository(session)
+        self._reviews = HumanReviewRepository(session)
         self._encryption = encryption
         self._bus = bus
 
@@ -199,30 +207,36 @@ class CameraRegistryService:
         return profile
 
     async def delete(self, camera: Camera) -> None:
-        """Removes a camera and its own setup data (stream profile,
-        calibration history, ADR-028 media-distribution bookkeeping) in one
-        transaction. Does not touch incidents, human review items, or
-        recordings referencing this camera -- those are evidence (CLAUDE.md's
-        Evidence Preservation principle), never cascade-deleted; if any
-        exist, the database's own foreign key constraint raises
-        IntegrityError, which the router translates into a clear 409 rather
-        than silently destroying history.
+        """Removes a camera and everything referencing it -- setup data
+        (stream profile, calibration history, ADR-028 media-distribution
+        bookkeeping) and, per explicit product decision (2026-08-10,
+        overriding CLAUDE.md's original Evidence Preservation default),
+        evidence too: incidents (with their events/snapshots/recordings)
+        and human review items. Deletion is unconditional now -- an
+        operator who wants a camera gone gets it gone, including its
+        history; nothing raises 409 for this anymore.
 
-        ``camera_media_endpoints``/``camera_subsystem_health`` (ADR-028) are
-        not evidence either -- ephemeral cross-process runtime bookkeeping
-        (which endpoint is currently published, which subsystem last
-        reported healthy), re-created automatically the moment a camera is
-        re-registered. Left uncleaned, these rows' own foreign key
-        constraint would raise IntegrityError here too, and the router's
-        catch-all would misreport that as blocking evidence exactly the
-        same as a real one -- so they're deleted here, before the camera
-        row, same as stream profile/calibration history above.
+        ``camera_media_endpoints``/``camera_subsystem_health`` (ADR-028)
+        are ephemeral cross-process runtime bookkeeping (which endpoint is
+        currently published, which subsystem last reported healthy),
+        re-created automatically the moment a camera is re-registered --
+        deleted here regardless, same reasoning as before.
 
         Camera Runtime picks this up for free: DesiredStateSynchronizer
         already removes a source whose camera_id no longer appears in
         Desired State at all (synchronization.py), which is exactly what
         deleting the row here produces -- no DeepStream-side change
         needed."""
+        for incident in await self._incidents.list_by_camera(camera.id):
+            for event in await self._incident_events.list_by_incident(incident.id):
+                await self._incident_events.delete(event)
+            for snapshot in await self._snapshots.list_by_incident(incident.id):
+                await self._snapshots.delete(snapshot)
+            for recording in await self._recordings.list_by_incident(incident.id):
+                await self._recordings.delete(recording)
+            await self._incidents.delete(incident)
+        for review in await self._reviews.list_by_camera(camera.id):
+            await self._reviews.delete(review)
         profile = await self._profiles.get_by_camera_id(camera.id)
         if profile is not None:
             await self._profiles.delete(profile)

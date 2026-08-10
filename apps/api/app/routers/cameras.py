@@ -296,11 +296,15 @@ async def delete_camera(
     try:
         await service.delete(camera)
     except IntegrityError as exc:
+        # service.delete() now clears every known referencing table
+        # (incidents/events/snapshots/recordings/review items) itself, so
+        # this should never fire in normal operation -- a defensive net
+        # for any table not yet accounted for there, not an intentional
+        # evidence-preservation gate anymore (2026-08-10 product decision).
         await session.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Cannot delete a camera with existing incidents, review items, or recordings -- "
-            "that history must be resolved or exported first.",
+            "Cannot delete this camera: an unexpected reference to it still exists.",
         ) from exc
 
     await audit_logger.record(

@@ -23,6 +23,14 @@ class IncidentRepository(Repository[Incident]):
         )
         return result.scalar_one_or_none()
 
+    async def list_by_camera(self, camera_id: uuid.UUID) -> Sequence[Incident]:
+        """Every incident for a camera, any status -- backs camera deletion's
+        evidence cascade (``CameraRegistryService.delete()``)."""
+        result = await self._session.execute(
+            select(Incident).where(Incident.camera_id == camera_id)
+        )
+        return result.scalars().all()
+
     async def list_open(self) -> Sequence[Incident]:
         """Incidents in any of ``ACTIVE_INCIDENT_STATUSES`` -- backs
         ``GET /incidents/open`` (Live Monitoring / Tactical Map)."""

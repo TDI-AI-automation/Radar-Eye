@@ -33,6 +33,8 @@ from apps.api.app.models.incident import Incident
 from apps.api.app.models.user import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, User
 from apps.api.app.repositories.audit_log import AuditLogRepository
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
+from apps.api.app.repositories.human_review import HumanReviewRepository
+from apps.api.app.repositories.incident import IncidentRepository
 from apps.api.app.repositories.media import (
     CameraMediaEndpointRepository,
     CameraSubsystemHealthRepository,
@@ -499,23 +501,32 @@ class TestCamerasDelete:
                 await CameraSubsystemHealthRepository(fresh_session).list_by_camera(camera.id) == []
             )
 
-    async def test_rejects_deleting_a_camera_with_an_incident(
+    async def test_deletes_a_camera_with_an_incident_and_a_review_item(
         self, db_engine, db_session, test_settings: Settings
     ) -> None:
-        """Evidence Preservation (CLAUDE.md) -- deleting a camera must
-        never cascade-delete incident history; the database's own foreign
-        key constraint is the enforcement mechanism, this route just
-        translates the resulting IntegrityError into a clear 409."""
+        """2026-08-10 product decision overriding CLAUDE.md's original
+        Evidence Preservation default (explicit owner instruction: "remove
+        all this kind of restrictions, user must have the right to delete
+        everything they want") -- deleting a camera now cascade-deletes its
+        incident and human-review history instead of being blocked by the
+        database's foreign key constraint."""
         camera = await _make_camera(db_session)
-        await _make_incident(db_session, camera)
+        incident = await _make_incident(db_session, camera)
+        review = await _make_review(db_session, camera)
         admin = await _make_user(db_session, ROLE_ADMIN)
         app = create_app(settings=test_settings)
         async with await _client(app) as client:
             response = await client.delete(
                 f"/cameras/{camera.id}", headers=_auth_header(admin, ROLE_ADMIN)
             )
-        assert response.status_code == 409
-        assert await CameraRepository(db_session).get(camera.id) is not None
+        assert response.status_code == 200
+
+        from apps.api.app.db import create_session_factory
+
+        async with create_session_factory(db_engine)() as fresh_session:
+            assert await CameraRepository(fresh_session).get(camera.id) is None
+            assert await IncidentRepository(fresh_session).get(incident.id) is None
+            assert await HumanReviewRepository(fresh_session).get(review.id) is None
 
 
 @pytest.mark.asyncio
