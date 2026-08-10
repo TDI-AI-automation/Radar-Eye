@@ -42,5 +42,5 @@ frame_trace:
 # process startup; flip this back to false and restart for normal
 # production operation.
 production_validation_mode:
-  enabled: false
+  enabled: true
   dashboard_interval_seconds: 2.0

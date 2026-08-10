@@ -25,6 +25,7 @@ export class HumanReviewItem {
     readonly trackId: number,
     readonly reason: string,
     readonly status: ReviewStatus,
+    readonly createdAt: Date,
   ) {}
 
   canResolve(): boolean {

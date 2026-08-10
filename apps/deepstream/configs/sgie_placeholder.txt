@@ -15,16 +15,26 @@
 # per MODEL_REGISTRY.md; this file must be replaced once that model is
 # approved. apps/deepstream/app/threat_runtime_adapter.py deliberately
 # never maps this classifier's output to UniformClass for this reason.
+#
+# tlt-encoded-model/model-engine-file/int8-calib-file/labelfile-path all
+# point at this repo's own models/ directory (gitignored, see .gitignore),
+# not the DeepStream SDK's install tree under /opt/nvidia/deepstream -- see
+# pgie_placeholder.txt's matching note; same root cause (root:root 755,
+# unwritable by this process; nvinfer derives its save path from
+# tlt-encoded-model's own directory, so the model file itself had to move,
+# not just model-engine-file), same fix. model-engine-file's name (no
+# "_rm11_placeholder" suffix) matches nvinfer's own auto-derived save
+# filename exactly -- see pgie_placeholder.txt's matching note.
 ####################################################################################################
 
 [property]
 gpu-id=0
 net-scale-factor=1
 tlt-model-key=tlt_encode
-tlt-encoded-model=/opt/nvidia/deepstream/deepstream/samples/models/Secondary_VehicleTypes/resnet18_vehicletypenet.etlt
-model-engine-file=/opt/nvidia/deepstream/deepstream/samples/models/Secondary_VehicleTypes/resnet18_vehicletypenet.etlt_b16_gpu0_int8_rm11_placeholder.engine
-int8-calib-file=/opt/nvidia/deepstream/deepstream/samples/models/Secondary_VehicleTypes/cal_trt.bin
-labelfile-path=/opt/nvidia/deepstream/deepstream/samples/models/Secondary_VehicleTypes/labels.txt
+tlt-encoded-model=/home/dev/Documents/Army/Radar-Eye/models/resnet18_vehicletypenet.etlt
+model-engine-file=/home/dev/Documents/Army/Radar-Eye/models/resnet18_vehicletypenet.etlt_b16_gpu0_int8.engine
+int8-calib-file=/home/dev/Documents/Army/Radar-Eye/models/sgie_cal_trt.bin
+labelfile-path=/home/dev/Documents/Army/Radar-Eye/models/sgie_labels.txt
 force-implicit-batch-dim=1
 batch-size=16
 model-color-format=1

@@ -23,7 +23,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from apps.api.app.config import get_settings
+from apps.api.app.config import Settings, get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.models.camera import Camera, CameraStreamProfile
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
@@ -37,14 +37,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAMERA_YAML = REPO_ROOT / "configs" / "camera.yaml"
 
 
-async def register_camera(camera_yaml_path: Path) -> None:
+async def register_camera(camera_yaml_path: Path, settings: Settings | None = None) -> None:
     raw = load_yaml_with_env_substitution(camera_yaml_path)
     require_keys(raw)
     camera_slug = raw["camera_id"]
     rtsp_url = build_rtsp_url(raw)
     transport = raw.get("transport", "tcp")
 
-    settings = get_settings()
+    settings = settings or get_settings()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(settings)

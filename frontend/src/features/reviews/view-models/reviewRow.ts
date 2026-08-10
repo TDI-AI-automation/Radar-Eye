@@ -8,13 +8,13 @@ export interface ReviewRowViewModel {
   reason: string;
   status: HumanReviewItem["status"];
   canResolve: boolean;
+  createdAt: Date;
 }
 
-/** HumanReviewSchema has no created_at/timestamp field at all (unlike
- * Incident/Camera/Recording) -- the queue cannot be sorted or aged
- * chronologically; this is a real backend-capability gap, not an
- * oversight here (tracked in the Phase 3 backend-gaps list). Rows are
- * shown in whatever order GET /reviews returns. */
+/** HumanReviewSchema now carries created_at (previously absent -- the
+ * queue used to be unsortable/unaged, tracked as a Phase 3 backend-gap;
+ * fixed alongside ADR-029 Phase 5's classification wiring, since that's
+ * what starts actually populating this queue from live detections). */
 export function buildReviewRowViewModel(
   item: HumanReviewItem,
   cameraName: string | undefined,
@@ -27,5 +27,11 @@ export function buildReviewRowViewModel(
     reason: item.reason,
     status: item.status,
     canResolve: item.canResolve(),
+    createdAt: item.createdAt,
   };
+}
+
+/** Oldest-first -- an operator queue triages what's been waiting longest. */
+export function sortReviewRowsByCreatedAt(rows: ReviewRowViewModel[]): ReviewRowViewModel[] {
+  return [...rows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }

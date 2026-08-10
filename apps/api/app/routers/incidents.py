@@ -59,6 +59,9 @@ def _to_incident_schema(incident: Incident) -> IncidentSchema:
         incident_type=incident.incident_type,
         threat_level=incident.threat_level,
         status=incident.status,
+        weapon_type=incident.threat_summary.get("weapon"),
+        uniform=incident.threat_summary.get("uniform"),
+        zone=incident.threat_summary.get("zone"),
         created_at=incident.created_at,
         updated_at=incident.updated_at,
     )
@@ -70,6 +73,7 @@ def _to_summary_schema(incident: Incident) -> IncidentSummarySchema:
         camera_id=incident.camera_id,
         threat_level=incident.threat_level,
         status=incident.status,
+        weapon_type=incident.threat_summary.get("weapon"),
     )
 
 

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from apps.api.app.config import Settings
 from apps.api.app.health import HealthCollector
 from apps.api.app.main import create_app
 from apps.api.app.models.camera import Camera
@@ -128,7 +129,7 @@ def test_system_health_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_rest_endpoints(db_session) -> None:
+async def test_health_rest_endpoints(db_session, test_settings: Settings) -> None:
     """Test REST API responses match FRONTEND_BACKEND_CONTRACTS.md's documented
     System Health paths exactly (no version prefix -- see the RM-09
     architectural review, Repository Integration Audit).
@@ -138,7 +139,7 @@ async def test_health_rest_endpoints(db_session) -> None:
     created here rather than pre-populating HealthCollector's in-memory
     camera-heartbeat dict directly, since apps.api and apps.deepstream are
     separate processes and that dict is never fed by anything real."""
-    app = create_app()
+    app = create_app(settings=test_settings)
     camera = await CameraRepository(db_session).add(
         Camera(
             name="cam-1",

@@ -12,29 +12,47 @@
 # Set enabled: false to fall back to the RM-11 Phase 1/2 placeholder configs
 # (apps/deepstream/configs/pgie_placeholder.txt / sgie_placeholder.txt) --
 # useful for hardware verification without the real models present.
+#
+# Enabled 2026-08-09 for end-to-end Incident Service verification, real
+# model files provided in this repo's own models/ directory. This does
+# NOT mean either model is production approved -- see MODEL_REGISTRY.md's
+# Rule ("No model is production approved until benchmarked"); enabling
+# here is for functional verification only.
 
 pgie:
-  enabled: false
-  model_file: /mnt/models/yolo26m_weapon.onnx
-  engine_file: /mnt/models/yolo26m_weapon_fp16.engine
-  labels: /mnt/models/weapon_labels.txt
+  enabled: true
+  model_file: /home/dev/Documents/Army/Radar-Eye/models/yolo26m_weapon.onnx
+  engine_file: /home/dev/Documents/Army/Radar-Eye/models/yolo26m_weapon.onnx_b1_gpu0_fp16.engine
+  labels: /home/dev/Documents/Army/Radar-Eye/models/labels.txt
   batch_size: 1
   precision: fp16
   interval: 0
-  confidence_threshold: 0.5
+  confidence_threshold: 0.25
   gpu_id: 0
   unique_id: 1
   nms_iou_threshold: 0.5
+  topk: 300
+  cluster_mode: 4
+  network_type: 0
+  maintain_aspect_ratio: true
+  symmetric_padding: true
+  custom_lib_path: /home/dev/Documents/Army/Radar-Eye/apps/deepstream/native/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
+  parse_bbox_func_name: NvDsInferParseYolo
 
 sgie:
-  enabled: false
-  model_file: /mnt/models/vit_binary.onnx
-  engine_file: /mnt/models/vit_binary_fp16.engine
-  labels: /mnt/models/uniform_labels.txt
-  batch_size: 1
+  enabled: true
+  model_file: /home/dev/Documents/Army/Radar-Eye/models/vit_binary.onnx
+  engine_file: /home/dev/Documents/Army/Radar-Eye/models/vit_binary.onnx_b8_gpu0_fp16.engine
+  labels: /home/dev/Documents/Army/Radar-Eye/models/labels_vit.txt
+  batch_size: 8
   precision: fp16
   interval: 0
-  confidence_threshold: 0.5
+  confidence_threshold: 0.51
   gpu_id: 0
   unique_id: 2
   nms_iou_threshold: 0.5
+  network_type: 1
+  maintain_aspect_ratio: false
+  operate_on_class_ids: "3"
+  input_object_min_width: 32
+  input_object_min_height: 64

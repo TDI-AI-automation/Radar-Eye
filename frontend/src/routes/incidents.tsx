@@ -31,17 +31,18 @@ export const Route = createFileRoute("/incidents")({
 });
 
 /**
- * IncidentSummarySchema/IncidentSchema carry no weapon type, no assigned
- * operator, no confidence, no escalation field, no free-text location --
- * the prototype's "object"/"operator"/"confidence"/"escalation"/"location"
- * fields are dropped, not fabricated. "Resolved 24h"/"Avg. Response" had
- * no backing aggregate either (no time-windowed analytics endpoint
- * exists) -- replaced with real, all-time status counts. "Assign"/
- * "Export" actions have no backend support (Export is Evidence's job,
- * a separate future feature) and are replaced with real Acknowledge/
- * Resolve actions backed by PATCH /incidents/{id}, gated by both
- * Incident.canAcknowledge()/.canClose() (state fact) and
- * usePermission("operator") (authorization), per
+ * IncidentSummarySchema/IncidentSchema carry no assigned operator, no
+ * confidence, no escalation field, no free-text location -- the
+ * prototype's "operator"/"confidence"/"escalation"/"location" fields are
+ * dropped, not fabricated. Weapon type ("object") is now real (ADR-029
+ * Phase 5's classification wiring) and shown alongside threat level.
+ * "Resolved 24h"/"Avg. Response" had no backing aggregate either (no
+ * time-windowed analytics endpoint exists) -- replaced with real,
+ * all-time status counts. "Assign"/"Export" actions have no backend
+ * support (Export is Evidence's job, a separate future feature) and are
+ * replaced with real Acknowledge/Resolve actions backed by
+ * PATCH /incidents/{id}, gated by both Incident.canAcknowledge()/.canClose()
+ * (state fact) and usePermission("operator") (authorization), per
  * docs/FRONTEND_ARCHITECTURE.md §12.
  */
 function Incidents() {
@@ -111,7 +112,14 @@ function Incidents() {
                     </div>
                     <ThreatLevelBadge level={r.threatLevel} />
                   </div>
-                  <div className="mt-2 font-mono text-[10px] text-muted-foreground">{r.status}</div>
+                  <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+                    <span>{r.status}</span>
+                    {r.weaponType && (
+                      <span className="rounded border border-border px-1.5 py-0.5 uppercase tracking-widest">
+                        {r.weaponType}
+                      </span>
+                    )}
+                  </div>
                 </button>
               ))}
             </div>
@@ -157,6 +165,9 @@ function IncidentDetail({ incidentId }: { incidentId: string }) {
             <Field label="Type" value={incident.incidentType} />
             <Field label="Status" value={incident.status} />
             <Field label="Threat Level" value={incident.threatLevel} />
+            <Field label="Weapon Type" value={incident.weaponType ?? "—"} />
+            <Field label="Uniform" value={incident.uniform ?? "—"} />
+            <Field label="Zone" value={incident.zone ?? "—"} />
             <Field label="Created" value={incident.createdAt.toLocaleString()} />
             <Field label="Updated" value={incident.updatedAt.toLocaleString()} />
           </div>

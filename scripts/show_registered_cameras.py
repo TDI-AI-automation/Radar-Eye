@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit, urlunsplit
 
-from apps.api.app.config import get_settings
+from apps.api.app.config import Settings, get_settings
 from apps.api.app.db import create_engine, create_session_factory
 from apps.api.app.repositories.camera import CameraRepository, CameraStreamProfileRepository
 from apps.api.app.security.encryption import get_credential_encryption_provider
@@ -36,8 +36,8 @@ def _mask_rtsp_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
-async def show_registered_cameras() -> list[dict]:
-    settings = get_settings()
+async def show_registered_cameras(settings: Settings | None = None) -> list[dict]:
+    settings = settings or get_settings()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     encryption = get_credential_encryption_provider(settings)

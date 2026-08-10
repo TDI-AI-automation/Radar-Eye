@@ -62,6 +62,7 @@ def _to_review_schema(item: HumanReviewItem) -> HumanReviewSchema:
         track_id=item.track_id,
         reason=item.reason,
         status=item.status,  # type: ignore[arg-type]
+        created_at=item.created_at,
     )
 
 

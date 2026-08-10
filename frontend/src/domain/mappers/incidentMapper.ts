@@ -13,11 +13,20 @@ export function toIncidentDomain(dto: IncidentDto): Incident {
     dto.incident_type,
     dto.threat_level,
     dto.status,
+    dto.weapon_type,
+    dto.uniform,
+    dto.zone,
     new Date(dto.created_at),
     new Date(dto.updated_at),
   );
 }
 
 export function toIncidentSummaryDomain(dto: IncidentSummaryDto): IncidentSummary {
-  return new IncidentSummary(dto.incident_id, dto.camera_id, dto.threat_level, dto.status);
+  return new IncidentSummary(
+    dto.incident_id,
+    dto.camera_id,
+    dto.threat_level,
+    dto.status,
+    dto.weapon_type,
+  );
 }

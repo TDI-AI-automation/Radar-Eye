@@ -4,6 +4,20 @@ Acceptance criterion (docs/IMPLEMENTATION_ROADMAP.md, RM-03): migrations are
 reversible. Per the RM-03 design review, migration tests run against a real
 PostgreSQL -- never SQLite, since production semantics (JSONB, partial
 unique indices, custom ENUM types) differ.
+
+Runs against the guarded test database (``test_database_url`` fixture,
+root conftest.py) -- never ``get_settings()``. This file used to call
+``get_settings()`` directly and run raw ``DROP TABLE ... CASCADE`` plus
+``alembic downgrade base`` against whatever it returned -- the real
+development database, since ``get_settings()`` never resolves to the test
+database on its own. That ran against real application data for real,
+more than once.
+
+No monkeypatching: ``alembic/env.py`` only calls ``get_settings()`` if
+nothing already set ``sqlalchemy.url`` on its ``Config`` object, so
+``_alembic_config()`` below sets that URL directly before any
+``alembic.command`` call -- the same mechanism a real deployment's own
+``alembic.ini``/CLI invocation would use, not a test-only branch.
 """
 
 from __future__ import annotations
@@ -15,9 +29,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from apps.api.app.config import REPO_ROOT, get_settings
-from apps.api.app.db import create_engine
+from apps.api.app.config import REPO_ROOT
 
 _ALEMBIC_INI = REPO_ROOT / "apps" / "api" / "alembic.ini"
 
@@ -38,14 +52,16 @@ _EXPECTED_TABLES = {
 }
 
 
-def _alembic_config() -> Config:
-    return Config(str(_ALEMBIC_INI))
+def _alembic_config(database_url: str) -> Config:
+    config = Config(str(_ALEMBIC_INI))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
 
 
-async def _reset_schema(settings) -> None:
+async def _reset_schema(database_url: str) -> None:
     """Drop every table/type this migration owns, so each test starts clean
     regardless of what other test files left behind."""
-    engine = create_engine(settings)
+    engine = create_async_engine(database_url, future=True)
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -59,8 +75,8 @@ async def _reset_schema(settings) -> None:
     await engine.dispose()
 
 
-async def _list_tables(settings) -> set[str]:
-    engine = create_engine(settings)
+async def _list_tables(database_url: str) -> set[str]:
+    engine = create_async_engine(database_url, future=True)
     async with engine.connect() as conn:
         names = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names())
     await engine.dispose()
@@ -68,39 +84,42 @@ async def _list_tables(settings) -> set[str]:
 
 
 @pytest.fixture
-def clean_postgres(_default_env: None) -> Iterator[None]:
-    """Skip if PostgreSQL is unreachable; otherwise guarantee a clean schema
-    before and after the test (docs/... testing strategy -- CI always has a
-    real PostgreSQL service; local/agent-driven dev without Docker skips)."""
-    settings = get_settings()
+def clean_postgres(test_database_url: str) -> Iterator[None]:
+    """Skip if the test PostgreSQL database is unreachable; otherwise
+    guarantee a clean schema before and after the test."""
     try:
-        asyncio.run(_reset_schema(settings))
+        asyncio.run(_reset_schema(test_database_url))
     except Exception as exc:  # noqa: BLE001 -- any connectivity failure means "skip"
-        pytest.skip(f"PostgreSQL is not reachable, skipping migration test: {exc}")
+        pytest.skip(f"Test PostgreSQL database is not reachable, skipping migration test: {exc}")
 
     yield
 
-    asyncio.run(_reset_schema(settings))
+    asyncio.run(_reset_schema(test_database_url))
 
 
 class TestMigrations:
-    def test_upgrade_creates_all_tables(self, clean_postgres: None) -> None:
-        command.upgrade(_alembic_config(), "head")
+    def test_upgrade_creates_all_tables(self, clean_postgres: None, test_database_url: str) -> None:
+        command.upgrade(_alembic_config(test_database_url), "head")
 
-        tables = asyncio.run(_list_tables(get_settings()))
+        tables = asyncio.run(_list_tables(test_database_url))
 
         assert _EXPECTED_TABLES.issubset(tables)
 
-    def test_downgrade_removes_all_tables(self, clean_postgres: None) -> None:
-        command.upgrade(_alembic_config(), "head")
-        command.downgrade(_alembic_config(), "base")
+    def test_downgrade_removes_all_tables(
+        self, clean_postgres: None, test_database_url: str
+    ) -> None:
+        cfg = _alembic_config(test_database_url)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "base")
 
-        tables = asyncio.run(_list_tables(get_settings()))
+        tables = asyncio.run(_list_tables(test_database_url))
 
         assert _EXPECTED_TABLES.isdisjoint(tables)
 
-    def test_migration_is_reversible_across_multiple_cycles(self, clean_postgres: None) -> None:
-        cfg = _alembic_config()
+    def test_migration_is_reversible_across_multiple_cycles(
+        self, clean_postgres: None, test_database_url: str
+    ) -> None:
+        cfg = _alembic_config(test_database_url)
 
         for _ in range(3):
             command.upgrade(cfg, "head")
@@ -108,5 +127,5 @@ class TestMigrations:
 
         # No exception across three full up/down cycles is the acceptance
         # criterion itself; confirm the final state is clean.
-        tables = asyncio.run(_list_tables(get_settings()))
+        tables = asyncio.run(_list_tables(test_database_url))
         assert _EXPECTED_TABLES.isdisjoint(tables)

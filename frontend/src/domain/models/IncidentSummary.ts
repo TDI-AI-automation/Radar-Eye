@@ -2,7 +2,10 @@
  * List-context companion to `Incident` (./Incident.ts). Mirrors
  * shared/schemas/incident.py::IncidentSummarySchema exactly -- the shape
  * `GET /incidents` and `GET /incidents/open` actually return (incident_id,
- * camera_id, threat_level, status; no track_id/incident_type/timestamps).
+ * camera_id, threat_level, status, weapon_type; no track_id/incident_type/
+ * uniform/zone/timestamps -- weapon_type is the one `threat_summary` field
+ * included here too, since that's what an operator needs to triage the
+ * list at a glance).
  *
  * This is a distinct type, not `Incident` with optional fields: fabricating
  * placeholder trackId/incidentType/timestamps to satisfy Incident's
@@ -25,6 +28,7 @@ export class IncidentSummary {
     readonly cameraId: string,
     readonly threatLevel: ThreatLevel,
     readonly status: IncidentStatus,
+    readonly weaponType: string | null,
   ) {}
 
   canAcknowledge(): boolean {

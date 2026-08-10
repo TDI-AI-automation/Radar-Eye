@@ -16,16 +16,42 @@
 # approved. Do not map this model's 4 traffic classes to WeaponType --
 # apps/deepstream/app/runtime_adapter.py deliberately keeps detection
 # class_id/label as raw passthrough values for this reason.
+#
+# tlt-encoded-model/model-engine-file/int8-calib-file/labelfile-path all
+# point at this repo's own models/ directory (gitignored, see .gitignore),
+# not the DeepStream SDK's install tree under /opt/nvidia/deepstream -- that
+# tree is root:root 755 and this process does not run as root, so nvinfer
+# could never write its built engine back there (confirmed directly:
+# NvDsInferContextImpl::buildModel() logs "failed to serialize cuda engine
+# to file ... open error"). Without a persisted engine, nvinfer silently
+# falls back to a full TensorRT rebuild on every single process start --
+# ~70s of PGIE+SGIE engine building that is otherwise indistinguishable
+# from a genuinely stalled pipeline. Moving the model file itself here (not
+# just model-engine-file) matters: nvinfer derives its actual save path
+# from tlt-encoded-model's own directory when a fresh build happens,
+# confirmed directly -- pointing only model-engine-file elsewhere still
+# logged "Serialize engine failed" against the old /opt path. Once written
+# here, the first run still pays the one-time build cost, but every
+# subsequent start deserializes the cached engine in ~1s.
+#
+# model-engine-file's name below (no "_rm11_placeholder" suffix) must match
+# nvinfer's own auto-derived save filename exactly -- confirmed directly
+# that a fresh build ignores this property for the *save* path, deriving
+# "<tlt-encoded-model basename>_b<batch-size>_gpu<gpu-id>_<precision>.engine"
+# from tlt-encoded-model's own directory instead. model-engine-file is only
+# consulted for the initial deserialize attempt; a mismatched name here
+# would silently defeat caching (fresh rebuild every start) while still
+# looking correctly configured.
 ####################################################################################################
 
 [property]
 gpu-id=0
 net-scale-factor=0.00392156862745098
 tlt-model-key=tlt_encode
-tlt-encoded-model=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet.etlt
-model-engine-file=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet.etlt_b1_gpu0_int8_rm11_placeholder.engine
-labelfile-path=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/labels.txt
-int8-calib-file=/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/cal_trt.bin
+tlt-encoded-model=/home/dev/Documents/Army/Radar-Eye/models/resnet18_trafficcamnet.etlt
+model-engine-file=/home/dev/Documents/Army/Radar-Eye/models/resnet18_trafficcamnet.etlt_b1_gpu0_int8.engine
+labelfile-path=/home/dev/Documents/Army/Radar-Eye/models/pgie_labels.txt
+int8-calib-file=/home/dev/Documents/Army/Radar-Eye/models/pgie_cal_trt.bin
 batch-size=1
 process-mode=1
 model-color-format=0

@@ -12,6 +12,7 @@ Rules).  These schemas surface the queue to operators.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -35,6 +36,10 @@ class HumanReviewSchema(BaseModel):
     reason: str
     """Why this item was queued (e.g. "uniform_unknown")."""
     status: ReviewStatus = "OPEN"
+    created_at: datetime
+    """When this item was queued -- lets the Reviews screen sort the queue
+    chronologically (previously absent; the DB row always had this, it
+    was simply never serialized here)."""
 
 
 RESOLUTION_STATUSES: tuple[ReviewStatus, ...] = (

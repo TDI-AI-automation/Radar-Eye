@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, status
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel
 
+from apps.api.app.config import Settings
 from apps.api.app.main import create_app
 
 
@@ -34,8 +35,10 @@ def _add_throwaway_routes(app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
-async def test_http_exception_produces_the_documented_error_shape(_default_env: None) -> None:
-    app = create_app()
+async def test_http_exception_produces_the_documented_error_shape(
+    _default_env: None, test_settings: Settings
+) -> None:
+    app = create_app(settings=test_settings)
     _add_throwaway_routes(app)
 
     async with AsyncClient(
@@ -51,8 +54,10 @@ async def test_http_exception_produces_the_documented_error_shape(_default_env: 
 
 
 @pytest.mark.asyncio
-async def test_401_maps_to_the_unauthorized_error_code(_default_env: None) -> None:
-    app = create_app()
+async def test_401_maps_to_the_unauthorized_error_code(
+    _default_env: None, test_settings: Settings
+) -> None:
+    app = create_app(settings=test_settings)
     _add_throwaway_routes(app)
 
     async with AsyncClient(
@@ -67,8 +72,10 @@ async def test_401_maps_to_the_unauthorized_error_code(_default_env: None) -> No
 
 
 @pytest.mark.asyncio
-async def test_validation_error_produces_the_documented_error_shape(_default_env: None) -> None:
-    app = create_app()
+async def test_validation_error_produces_the_documented_error_shape(
+    _default_env: None, test_settings: Settings
+) -> None:
+    app = create_app(settings=test_settings)
     _add_throwaway_routes(app)
 
     async with AsyncClient(
@@ -84,10 +91,12 @@ async def test_validation_error_produces_the_documented_error_shape(_default_env
 
 
 @pytest.mark.asyncio
-async def test_existing_success_responses_are_unaffected(_default_env: None) -> None:
+async def test_existing_success_responses_are_unaffected(
+    _default_env: None, test_settings: Settings
+) -> None:
     """The additive `error` field must default to null on every existing
     success response -- health.py's routes are untouched by this phase."""
-    app = create_app()
+    app = create_app(settings=test_settings)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

@@ -10,5 +10,6 @@ export function toHumanReviewItemDomain(dto: HumanReviewDto): HumanReviewItem {
     dto.track_id,
     dto.reason,
     dto.status,
+    new Date(dto.created_at),
   );
 }

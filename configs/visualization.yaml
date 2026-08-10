@@ -11,7 +11,7 @@
 
 version: 1
 
-enabled: false
+enabled: true
 stream_output_enabled: true
 rtsp_output_enabled: true
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from apps.api.app.config import Settings
 from apps.api.app.main import create_app
 
 
@@ -104,8 +105,8 @@ DESCOPED_WS_CHANNELS: set[str] = {"/ws/tracking"}  # docs/OPEN_QUESTIONS.md Q-01
 
 
 @pytest.fixture
-def _openapi_paths(_default_env: None) -> dict[str, set[str]]:
-    app = create_app()
+def _openapi_paths(_default_env: None, test_settings: Settings) -> dict[str, set[str]]:
+    app = create_app(settings=test_settings)
     schema = app.openapi()
     return {path: set(methods.keys()) for path, methods in schema["paths"].items()}
 
@@ -155,14 +156,18 @@ class TestRestContractCoverage:
 
 
 class TestWebSocketContractCoverage:
-    def test_every_implemented_channel_is_registered(self, _default_env: None) -> None:
-        app = create_app()
+    def test_every_implemented_channel_is_registered(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         registered_paths = _all_route_paths(app)
         missing = IMPLEMENTED_WS_CHANNELS - registered_paths
         assert missing == set()
 
-    def test_descoped_channels_are_not_accidentally_implemented(self, _default_env: None) -> None:
-        app = create_app()
+    def test_descoped_channels_are_not_accidentally_implemented(
+        self, _default_env: None, test_settings: Settings
+    ) -> None:
+        app = create_app(settings=test_settings)
         registered_paths = _all_route_paths(app)
         present = DESCOPED_WS_CHANNELS & registered_paths
         assert present == set(), (
