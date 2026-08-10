@@ -30,6 +30,15 @@ class IncidentSchema(BaseModel):
     incident_type: IncidentType
     threat_level: ThreatLevel
     status: IncidentStatus
+    weapon_type: str | None
+    """From the incident's ``threat_summary`` (services/incident_service --
+    the weapon type observed when this incident was created). ``None`` for
+    an incident created without a preceding ``ThreatAssessmentEvent``
+    (e.g. a synthetic/manual escalation) rather than a fabricated value."""
+    uniform: str | None
+    """Same source as ``weapon_type`` -- the classified uniform."""
+    zone: str | None
+    """Same source as ``weapon_type`` -- the calibrated distance zone."""
     created_at: datetime
     updated_at: datetime
 
@@ -37,13 +46,17 @@ class IncidentSchema(BaseModel):
 class IncidentSummarySchema(BaseModel):
     """Lightweight incident summary for list responses (``GET /incidents``).
 
-    Omits timestamps to reduce payload size in list views.
+    Omits timestamps to reduce payload size in list views. Includes
+    ``weapon_type`` (unlike the other ``threat_summary`` fields) since
+    that's exactly what an operator needs to triage the list at a glance,
+    per THREAT_ENGINE_SPEC.md's auditability requirement.
     """
 
     incident_id: uuid.UUID
     camera_id: uuid.UUID
     threat_level: ThreatLevel
     status: IncidentStatus
+    weapon_type: str | None
 
 
 class IncidentCreatedSchema(BaseModel):

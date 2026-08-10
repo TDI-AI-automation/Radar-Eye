@@ -5,7 +5,7 @@ models/*.onnx
 models/*.engine
 models/*.etlt
 models/*.bin
-models/*labels.txt
+models/*labels*.txt
 
 # Python
 __pycache__/

@@ -371,6 +371,17 @@ class CameraWebRtcBranch:
 
         encoder = self._make(Gst, "nvv4l2h264enc", f"live-annotated-encoder-{self._camera_id}")
         encoder.set_property("bitrate", self._settings.output_bitrate)
+        # iframeinterval: default is large enough that a WebRTC viewer
+        # connecting mid-stream can wait a long time for its first real
+        # keyframe, decoding only P-frames against a reference it never
+        # received -- the classic "solid black/green until the first IDR
+        # arrives" artifact (same root cause already diagnosed and fixed
+        # for the visualization pipeline's encoder, RM-11.SIV Phase 5 --
+        # see apps/deepstream/app/visualization/pipeline_builder.py --
+        # never applied here). One keyframe per second matches this
+        # payloader's own config-interval=-1 (in-band SPS/PPS every
+        # keyframe, set below).
+        encoder.set_property("iframeinterval", self._visualization_settings.output_fps)
         # Match the camera's own real profile (Main; hardware-confirmed,
         # see docs/DEEPSTREAM_PIPELINE_SPEC.md's tee-placement
         # investigation) rather than nvv4l2h264enc's default

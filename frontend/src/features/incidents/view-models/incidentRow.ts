@@ -6,16 +6,19 @@ export interface IncidentRowViewModel {
   cameraName: string;
   threatLevel: IncidentSummary["threatLevel"];
   status: IncidentSummary["status"];
+  weaponType: string | null;
 }
 
 /**
- * IncidentSummarySchema (GET /incidents, GET /incidents/open) carries only
- * incident_id/camera_id/threat_level/status -- no weapon type, no
- * assigned-operator, no location, no timestamp. The prototype's incident
- * card showed all four (as "object"/"operator"/"location"/"time"); none
- * of those fields exist on the backend's Incident entity at all, so they
- * are not carried forward (docs/FRONTEND_ARCHITECTURE.md's Phase 2
- * checkpoint records this). Camera *name* is real, joined here from
+ * IncidentSummarySchema (GET /incidents, GET /incidents/open) carries
+ * incident_id/camera_id/threat_level/status/weapon_type -- no assigned-
+ * operator, no location, no timestamp. The prototype's incident card
+ * showed all four (as "object"/"operator"/"location"/"time"); weapon type
+ * ("object") is now real (ADR-029 Phase 5's classification wiring);
+ * operator/location/timestamp still don't exist on the backend's Incident
+ * entity, so they remain dropped, not fabricated
+ * (docs/FRONTEND_ARCHITECTURE.md's Phase 2 checkpoint records the
+ * original decision). Camera *name* is real, joined here from
  * GET /cameras the same way Analytics joins camera names onto incident
  * counts (queries/useCameras.ts).
  */
@@ -29,6 +32,7 @@ export function buildIncidentRowViewModel(
     cameraName: cameraName ?? incident.cameraId,
     threatLevel: incident.threatLevel,
     status: incident.status,
+    weaponType: incident.weaponType,
   };
 }
 

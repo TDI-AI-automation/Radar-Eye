@@ -47,12 +47,16 @@ Known Facts:
   output verified to reproduce a real, independently hand-authored working
   `nvinfer` config); it does not confirm detection accuracy -- see Rule
   below.
-- Classes now KNOWN: 5-class detector output --
-  `fire, metal, non_metal, person, ranged_metal` (this project's own
-  label taxonomy, not literally `shared/constants/weapon_types.py`'s
-  `WeaponType` values -- a real `weapon_mapper` mapping decision, e.g.
-  `ranged_metal` -> `RANGED_LETHAL`, remains outstanding and belongs to
-  THREAT_ENGINE_SPEC.md's authority, not invented here).
+- Classes now KNOWN: 5-class detector output -- **corrected 2026-08-09**,
+  confirmed against the real, provided `models/labels.txt`:
+  `fire, melee_lethal, non_lethal, person, ranged_lethal`. This already
+  matches THREAT_ENGINE_SPEC.md's own `WeaponType` taxonomy directly (no
+  material-based intermediate mapping) -- the earlier entry here
+  (`fire, metal, non_metal, person, ranged_metal`) was an unconfirmed
+  guess, not read from an actual label file, and was wrong.
+  `services/incident_service/classification.py`'s `WEAPON_LABEL_TO_TYPE`
+  maps these 1:1 to `WeaponType.FIRE`/`MELEE_LETHAL`/`NON_LETHAL`/
+  `RANGED_LETHAL`.
 
 Unknowns:
 

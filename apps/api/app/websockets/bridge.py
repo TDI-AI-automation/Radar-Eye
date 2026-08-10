@@ -79,7 +79,11 @@ def _translate_incident_updated(event: EventEnvelope) -> dict:
 def _translate_review_created(event: EventEnvelope) -> dict:
     p = event.payload
     return HumanReviewSchema(
-        review_item_id=p.review_item_id, camera_id=p.camera_id, track_id=p.track_id, reason=p.reason
+        review_item_id=p.review_item_id,
+        camera_id=p.camera_id,
+        track_id=p.track_id,
+        reason=p.reason,
+        created_at=event.timestamp,
     ).model_dump(mode="json")
 
 

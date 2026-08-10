@@ -6,6 +6,7 @@ import { Shield, Users, ArrowUpCircle, XCircle, MapPin } from "lucide-react";
 import { useReviews, useResolveReview } from "@/features/reviews/hooks/useReviews";
 import {
   buildReviewRowViewModel,
+  sortReviewRowsByCreatedAt,
   type ReviewRowViewModel,
 } from "@/features/reviews/view-models/reviewRow";
 import { useCameras } from "@/queries/useCameras";
@@ -47,9 +48,8 @@ const ACTION_LABEL: Record<Action, string> = {
  * selection, M/C/E/X arm the four resolution actions on the selected
  * item, and a second press of the same key within 3s confirms it
  * (armed-then-confirm, not a modal -- a modal would defeat the point of
- * a keyboard-driven queue). HumanReviewSchema has no timestamp field, so
- * there is no chronological sort here -- see the Phase 3 backend-gaps
- * list.
+ * a keyboard-driven queue). Sorted oldest-first (sortReviewRowsByCreatedAt)
+ * now that HumanReviewSchema carries created_at.
  */
 function Reviews() {
   const [filter, setFilter] = useState<StatusFilter>("OPEN");
@@ -69,9 +69,10 @@ function Reviews() {
 
   const rows = useMemo<ReviewRowViewModel[]>(() => {
     const items = reviewsQuery.data ?? [];
-    return items
+    const built = items
       .filter((i) => filter === "ALL" || i.status === "OPEN")
       .map((i) => buildReviewRowViewModel(i, cameraNameById.get(i.cameraId)));
+    return sortReviewRowsByCreatedAt(built);
   }, [reviewsQuery.data, cameraNameById, filter]);
 
   const openCount = (reviewsQuery.data ?? []).filter((i) => i.status === "OPEN").length;
@@ -262,6 +263,9 @@ function ReviewCard({
             </span>
           </div>
           <div className="mt-1 font-mono text-[10px] text-muted-foreground">{row.reason}</div>
+          <div className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+            {row.createdAt.toLocaleString()}
+          </div>
         </div>
         <span
           className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest ${

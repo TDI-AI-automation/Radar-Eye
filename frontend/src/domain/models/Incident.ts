@@ -35,6 +35,9 @@ export class Incident {
     readonly incidentType: string,
     readonly threatLevel: ThreatLevel,
     readonly status: IncidentStatus,
+    readonly weaponType: string | null,
+    readonly uniform: string | null,
+    readonly zone: string | null,
     readonly createdAt: Date,
     readonly updatedAt: Date,
   ) {}

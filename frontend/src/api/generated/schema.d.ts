@@ -1454,6 +1454,11 @@ export interface components {
        * @enum {string}
        */
       status: "OPEN" | "CONFIRMED_MILITARY" | "CONFIRMED_CIVILIAN" | "ESCALATED" | "DISMISSED";
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
     };
     /**
      * IncidentAnalyticsSchema
@@ -1519,6 +1524,12 @@ export interface components {
       incident_type: components["schemas"]["IncidentType"];
       threat_level: components["schemas"]["ThreatLevel"];
       status: components["schemas"]["IncidentStatus"];
+      /** Weapon Type */
+      weapon_type: string | null;
+      /** Uniform */
+      uniform: string | null;
+      /** Zone */
+      zone: string | null;
       /**
        * Created At
        * Format: date-time
@@ -1543,7 +1554,10 @@ export interface components {
      * IncidentSummarySchema
      * @description Lightweight incident summary for list responses (``GET /incidents``).
      *
-     *     Omits timestamps to reduce payload size in list views.
+     *     Omits timestamps to reduce payload size in list views. Includes
+     *     ``weapon_type`` (unlike the other ``threat_summary`` fields) since
+     *     that's exactly what an operator needs to triage the list at a glance,
+     *     per THREAT_ENGINE_SPEC.md's auditability requirement.
      */
     IncidentSummarySchema: {
       /**
@@ -1558,6 +1572,8 @@ export interface components {
       camera_id: string;
       threat_level: components["schemas"]["ThreatLevel"];
       status: components["schemas"]["IncidentStatus"];
+      /** Weapon Type */
+      weapon_type: string | null;
     };
     /**
      * IncidentTransitionRequestSchema

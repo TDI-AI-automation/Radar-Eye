@@ -1,10 +1,10 @@
 """Tests for services.incident_service.main -- the Incident Service
 process's own internal ObservationEvent/CalibrationUpdatedEvent handling
-logic (ADR-029 Phase 4). No DB fixtures: CalibrationService/IncidentService
-are monkeypatched out, since this module's own job is only to wire them
-together correctly, not to re-test their already-covered business logic
-(services/calibration, services/incident_service.service each have their
-own test suites).
+logic (ADR-029 Phase 4/5). No DB fixtures: CalibrationService/IncidentService/
+HumanReviewRepository are monkeypatched out, since this module's own job is
+only to wire them together correctly, not to re-test their already-covered
+business logic (services/calibration, services/incident_service.service,
+services/incident_service.alarm each have their own test suites).
 """
 
 from __future__ import annotations
@@ -20,12 +20,16 @@ from services.incident_service import main as incident_main
 from services.threat_engine.types import EscalationSignal, EscalationSignalType
 from shared.constants.distance_zones import DistanceZone
 from shared.constants.threat_levels import ThreatLevel
+from shared.constants.uniform_classes import UniformClass
+from shared.constants.weapon_types import WeaponType
 from shared.events.payloads import (
     BoundingBoxPayload,
+    HumanReviewItemCreatedPayload,
     ObservationDetection,
     ObservationEventPayload,
+    ThreatAssessmentPayload,
 )
-from shared.events.types import ObservationEvent
+from shared.events.types import HumanReviewItemCreatedEvent, ObservationEvent, ThreatAssessmentEvent
 
 
 def _make_detection(*, track_id: int | None) -> ObservationDetection:
@@ -49,6 +53,35 @@ def _make_observation_event(detections: list[ObservationDetection]) -> Observati
             frame_num=1,
             frame_timestamp=datetime.now(timezone.utc),
             detections=detections,
+        ),
+    )
+
+
+def _make_threat_assessment_event(camera_id: uuid.UUID, track_id: int) -> ThreatAssessmentEvent:
+    return ThreatAssessmentEvent(
+        event_type="ThreatAssessmentEvent",
+        source="threat_engine",
+        payload=ThreatAssessmentPayload(
+            camera_id=camera_id,
+            track_id=track_id,
+            weapon_type=WeaponType.NONE,
+            uniform=UniformClass.UNKNOWN,
+            zone=DistanceZone.ZONE_1,
+            threat_level=ThreatLevel.HUMAN_REVIEW,
+            rule_id="unknown_uniform",
+        ),
+    )
+
+
+def _make_human_review_event(camera_id: uuid.UUID, track_id: int) -> HumanReviewItemCreatedEvent:
+    return HumanReviewItemCreatedEvent(
+        event_type="HumanReviewItemCreatedEvent",
+        source="threat_engine",
+        payload=HumanReviewItemCreatedPayload(
+            camera_id=camera_id,
+            track_id=track_id,
+            reason="uniform_unknown",
+            review_item_id=uuid.uuid4(),
         ),
     )
 
@@ -80,10 +113,10 @@ def _make_session_factory():
 
 @pytest.fixture
 def patched_services(monkeypatch: pytest.MonkeyPatch):
-    """Replaces CalibrationService/IncidentService (imported by name into
-    services.incident_service.main) with fakes, and returns the fake
-    IncidentService *instance* constructor sees, so tests can assert on
-    handle_escalation calls."""
+    """Replaces CalibrationService/IncidentService/HumanReviewRepository
+    (imported by name into services.incident_service.main) with fakes, and
+    returns the fake instance constructors see, so tests can assert on
+    their calls."""
     calibration_instance = MagicMock()
     calibration_instance.estimate = AsyncMock(
         return_value=DistanceEstimate(distance_meters=12.0, zone=DistanceZone.ZONE_1)
@@ -92,16 +125,46 @@ def patched_services(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(incident_main, "CalibrationService", calibration_cls)
 
     incident_instance = MagicMock()
-    incident_instance.handle_escalation = AsyncMock()
+    incident_instance.handle_escalation = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
+    incident_instance.on_threat_assessment = AsyncMock()
     incident_cls = MagicMock(return_value=incident_instance)
     monkeypatch.setattr(incident_main, "IncidentService", incident_cls)
+
+    review_repo_instance = MagicMock()
+    review_repo_instance.get_open_for_track = AsyncMock(return_value=None)
+    review_repo_instance.add = AsyncMock()
+    review_repo_cls = MagicMock(return_value=review_repo_instance)
+    monkeypatch.setattr(incident_main, "HumanReviewRepository", review_repo_cls)
 
     return calibration_cls, calibration_instance, incident_cls, incident_instance
 
 
+@pytest.fixture
+def review_repo(patched_services) -> MagicMock:
+    """The fake HumanReviewRepository *instance* patched_services wired up
+    -- a separate fixture (rather than a 5th patched_services return value)
+    so every existing patched_services-only test is unaffected."""
+    return incident_main.HumanReviewRepository.return_value  # type: ignore[attr-defined]
+
+
+@pytest.fixture
+def alarm_service() -> MagicMock:
+    service = MagicMock()
+    service.trigger = AsyncMock()
+    return service
+
+
+@pytest.fixture
+def last_published_assessment() -> dict:
+    """Fresh per-test dedup cache -- see _handle_observation's own
+    docstring for why this exists (only gates the bus-publish side
+    effect, not ThreatEngine's own per-frame re-emission)."""
+    return {}
+
+
 @pytest.mark.asyncio
 async def test_untracked_detection_never_reaches_calibration_or_threat_engine(
-    patched_services,
+    patched_services, alarm_service, last_published_assessment
 ) -> None:
     _calibration_cls, calibration_instance, _incident_cls, incident_instance = patched_services
     session_factory, sessions = _make_session_factory()
@@ -109,7 +172,12 @@ async def test_untracked_detection_never_reaches_calibration_or_threat_engine(
 
     event = _make_observation_event([_make_detection(track_id=None)])
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
 
     calibration_instance.estimate.assert_not_called()
@@ -119,7 +187,9 @@ async def test_untracked_detection_never_reaches_calibration_or_threat_engine(
 
 
 @pytest.mark.asyncio
-async def test_calibration_miss_skips_detection_but_continues_the_event(patched_services) -> None:
+async def test_calibration_miss_skips_detection_but_continues_the_event(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
     _calibration_cls, calibration_instance, _incident_cls, incident_instance = patched_services
     calibration_instance.estimate = AsyncMock(
         side_effect=CalibrationNotFoundError("no calibration")
@@ -129,7 +199,12 @@ async def test_calibration_miss_skips_detection_but_continues_the_event(patched_
 
     event = _make_observation_event([_make_detection(track_id=7)])
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
 
     threat_engine.ingest.assert_not_called()
@@ -137,23 +212,17 @@ async def test_calibration_miss_skips_detection_but_continues_the_event(patched_
     sessions[0].commit.assert_awaited_once()  # continues, doesn't abort/rollback the event
 
 
-@pytest.mark.parametrize(
-    "signal_type", [EscalationSignalType.INCIDENT_ELIGIBLE, EscalationSignalType.ALARM_ELIGIBLE]
-)
 @pytest.mark.asyncio
-async def test_every_escalation_signal_type_routes_uniformly_to_handle_escalation(
-    patched_services, signal_type: EscalationSignalType
+async def test_incident_eligible_never_triggers_an_alarm(
+    patched_services, alarm_service, last_published_assessment
 ) -> None:
-    """Never inspects signal.signal_type -- INCIDENT_ELIGIBLE and
-    ALARM_ELIGIBLE (and any future type) are forwarded identically. No
-    AlarmService import/call exists anywhere in this module at all."""
     _calibration_cls, _calibration_instance, _incident_cls, incident_instance = patched_services
     session_factory, sessions = _make_session_factory()
     camera_id = uuid.uuid4()
     signal = EscalationSignal(
         camera_id=camera_id,
         track_id=7,
-        signal_type=signal_type,
+        signal_type=EscalationSignalType.INCIDENT_ELIGIBLE,
         threat_level=ThreatLevel.HIGH,
         reason="sustained_high_threat",
     )
@@ -162,7 +231,12 @@ async def test_every_escalation_signal_type_routes_uniformly_to_handle_escalatio
 
     event = _make_observation_event([_make_detection(track_id=7)])
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
 
     incident_instance.handle_escalation.assert_awaited_once()
@@ -171,40 +245,233 @@ async def test_every_escalation_signal_type_routes_uniformly_to_handle_escalatio
     assert kwargs["track_id"] == 7
     assert kwargs["threat_level"] == ThreatLevel.HIGH
     assert kwargs["reason"] == "sustained_high_threat"
+    alarm_service.trigger.assert_not_called()
     sessions[0].commit.assert_awaited_once()
-    assert "AlarmService" not in dir(incident_main)
 
 
 @pytest.mark.asyncio
-async def test_non_escalation_results_are_discarded_not_published(patched_services) -> None:
+async def test_alarm_eligible_triggers_an_alarm_with_the_new_incident_id(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
     _calibration_cls, _calibration_instance, _incident_cls, incident_instance = patched_services
+    incident_id = uuid.uuid4()
+    incident_instance.handle_escalation = AsyncMock(return_value=MagicMock(id=incident_id))
     session_factory, sessions = _make_session_factory()
+    camera_id = uuid.uuid4()
+    signal = EscalationSignal(
+        camera_id=camera_id,
+        track_id=7,
+        signal_type=EscalationSignalType.ALARM_ELIGIBLE,
+        threat_level=ThreatLevel.HIGH,
+        reason="sustained_high_threat",
+    )
     threat_engine = MagicMock()
-    threat_engine.ingest = MagicMock(return_value=[MagicMock(name="ThreatAssessmentEvent-like")])
-    bus = MagicMock()
+    threat_engine.ingest = MagicMock(return_value=[signal])
 
     event = _make_observation_event([_make_detection(track_id=7)])
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=bus
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
 
-    incident_instance.handle_escalation.assert_not_called()
-    bus.publish.assert_not_called()
+    alarm_service.trigger.assert_awaited_once()
+    kwargs = alarm_service.trigger.await_args.kwargs
+    assert kwargs["camera_id"] == camera_id
+    assert kwargs["track_id"] == 7
+    assert kwargs["incident_id"] == incident_id
+    assert kwargs["threat_level"] == ThreatLevel.HIGH
+    assert kwargs["reason"] == "sustained_high_threat"
     sessions[0].commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_each_call_opens_and_commits_its_own_independent_session(patched_services) -> None:
+async def test_threat_assessment_event_updates_metadata_then_publishes(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
+    _calibration_cls, _calibration_instance, _incident_cls, incident_instance = patched_services
+    session_factory, sessions = _make_session_factory()
+    camera_id = uuid.uuid4()
+    assessment = _make_threat_assessment_event(camera_id, 7)
+    threat_engine = MagicMock()
+    threat_engine.ingest = MagicMock(return_value=[assessment])
+    bus = MagicMock()
+    bus.publish = AsyncMock()
+
+    event = _make_observation_event([_make_detection(track_id=7)])
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+
+    incident_instance.on_threat_assessment.assert_awaited_once_with(assessment)
+    bus.publish.assert_awaited_once_with(assessment)
+    sessions[0].commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_repeated_identical_assessment_publishes_only_once(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
+    """Real hardware surfaced this directly: ThreatEngine re-emits a
+    ThreatAssessmentEvent every frame a track is classified (by design,
+    ADR-021), but publishing every one of those to the bus flooded
+    /ws/threats at full frame rate for a continuously-tracked person,
+    which flooded the frontend's /threats/active refetches in turn. Only
+    a *changed* assessment for a track should reach the bus."""
+    _calibration_cls, _calibration_instance, _incident_cls, incident_instance = patched_services
+    session_factory, sessions = _make_session_factory()
+    camera_id = uuid.uuid4()
+    unchanged = _make_threat_assessment_event(camera_id, 7)
+    threat_engine = MagicMock()
+    threat_engine.ingest = MagicMock(return_value=[unchanged])
+    bus = MagicMock()
+    bus.publish = AsyncMock()
+    event = _make_observation_event([_make_detection(track_id=7)])
+
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+
+    incident_instance.on_threat_assessment.assert_awaited()
+    assert incident_instance.on_threat_assessment.await_count == 2  # every frame, unconditionally
+    bus.publish.assert_awaited_once_with(unchanged)  # only the first, unchanged repeat skipped
+
+    changed = ThreatAssessmentEvent(
+        event_type="ThreatAssessmentEvent",
+        source="threat_engine",
+        payload=ThreatAssessmentPayload(
+            camera_id=camera_id,
+            track_id=7,
+            weapon_type=WeaponType.NONE,
+            uniform=UniformClass.CIVILIAN,  # changed from UNKNOWN
+            zone=DistanceZone.ZONE_1,
+            threat_level=ThreatLevel.OBSERVE,
+            rule_id="no_weapon_observe",
+        ),
+    )
+    threat_engine.ingest = MagicMock(return_value=[changed])
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+
+    assert bus.publish.await_count == 2
+    bus.publish.assert_awaited_with(changed)
+
+
+@pytest.mark.asyncio
+async def test_human_review_item_created_event_persists_and_publishes(
+    review_repo, alarm_service, last_published_assessment
+) -> None:
+    session_factory, sessions = _make_session_factory()
+    camera_id = uuid.uuid4()
+    review_event = _make_human_review_event(camera_id, 7)
+    threat_engine = MagicMock()
+    threat_engine.ingest = MagicMock(return_value=[review_event])
+    bus = MagicMock()
+    bus.publish = AsyncMock()
+
+    event = _make_observation_event([_make_detection(track_id=7)])
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+
+    review_repo.get_open_for_track.assert_awaited_once_with(camera_id, 7)
+    review_repo.add.assert_awaited_once()
+    created_item = review_repo.add.await_args.args[0]
+    assert created_item.camera_id == camera_id
+    assert created_item.track_id == 7
+    assert created_item.reason == "uniform_unknown"
+    assert created_item.status == "OPEN"
+    bus.publish.assert_awaited_once_with(review_event)
+    sessions[0].commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_human_review_item_skipped_when_already_open(
+    review_repo, alarm_service, last_published_assessment
+) -> None:
+    """ThreatEngine's own review_signaled dedup can still miss across a
+    process restart -- the pre-check backstop must skip creating a
+    duplicate row, but still publish the event."""
+    review_repo.get_open_for_track = AsyncMock(return_value=MagicMock())
+    session_factory, sessions = _make_session_factory()
+    camera_id = uuid.uuid4()
+    review_event = _make_human_review_event(camera_id, 7)
+    threat_engine = MagicMock()
+    threat_engine.ingest = MagicMock(return_value=[review_event])
+    bus = MagicMock()
+    bus.publish = AsyncMock()
+
+    event = _make_observation_event([_make_detection(track_id=7)])
+    await incident_main._handle_observation(
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=bus,
+    )
+
+    review_repo.add.assert_not_called()
+    bus.publish.assert_awaited_once_with(review_event)
+    sessions[0].commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_each_call_opens_and_commits_its_own_independent_session(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
     session_factory, sessions = _make_session_factory()
     threat_engine = MagicMock()
     threat_engine.ingest = MagicMock(return_value=[])
 
     event = _make_observation_event([_make_detection(track_id=1)])
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
     await incident_main._handle_observation(
-        event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+        event,
+        session_factory=session_factory,
+        threat_engine=threat_engine,
+        alarm_service=alarm_service,
+        last_published_assessment=last_published_assessment,
+        bus=MagicMock(),
     )
 
     assert len(sessions) == 2
@@ -214,7 +481,9 @@ async def test_each_call_opens_and_commits_its_own_independent_session(patched_s
 
 
 @pytest.mark.asyncio
-async def test_mid_event_exception_rolls_back_and_propagates(patched_services) -> None:
+async def test_mid_event_exception_rolls_back_and_propagates(
+    patched_services, alarm_service, last_published_assessment
+) -> None:
     _calibration_cls, calibration_instance, _incident_cls, _incident_instance = patched_services
     calibration_instance.estimate = AsyncMock(side_effect=RuntimeError("unexpected failure"))
     session_factory, sessions = _make_session_factory()
@@ -223,7 +492,12 @@ async def test_mid_event_exception_rolls_back_and_propagates(patched_services) -
     event = _make_observation_event([_make_detection(track_id=7)])
     with pytest.raises(RuntimeError, match="unexpected failure"):
         await incident_main._handle_observation(
-            event, session_factory=session_factory, threat_engine=threat_engine, bus=MagicMock()
+            event,
+            session_factory=session_factory,
+            threat_engine=threat_engine,
+            alarm_service=alarm_service,
+            last_published_assessment=last_published_assessment,
+            bus=MagicMock(),
         )
 
     sessions[0].rollback.assert_awaited_once()

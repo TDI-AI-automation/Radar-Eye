@@ -219,6 +219,43 @@ class TestHumanReviewRepository:
         with pytest.raises(IntegrityError):
             await HumanReviewRepository(db_session).add(item)
 
+    async def test_get_open_for_track_finds_the_open_item(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        item = await HumanReviewRepository(db_session).add(
+            HumanReviewItem(camera_id=camera.id, track_id=9, reason="uniform_unknown")
+        )
+
+        found = await HumanReviewRepository(db_session).get_open_for_track(camera.id, 9)
+
+        assert found is not None
+        assert found.id == item.id
+
+    async def test_get_open_for_track_ignores_resolved_items(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        await HumanReviewRepository(db_session).add(
+            HumanReviewItem(
+                camera_id=camera.id,
+                track_id=9,
+                reason="uniform_unknown",
+                status="CONFIRMED_MILITARY",
+            )
+        )
+
+        found = await HumanReviewRepository(db_session).get_open_for_track(camera.id, 9)
+
+        assert found is None
+
+    async def test_second_open_item_for_same_track_is_rejected(self, db_session) -> None:
+        camera = await _make_camera(db_session)
+        await HumanReviewRepository(db_session).add(
+            HumanReviewItem(camera_id=camera.id, track_id=9, reason="uniform_unknown")
+        )
+
+        with pytest.raises(IntegrityError):
+            await HumanReviewRepository(db_session).add(
+                HumanReviewItem(camera_id=camera.id, track_id=9, reason="uniform_unknown")
+            )
+
 
 @pytest.mark.asyncio
 class TestRecordingAndSnapshotRepositories:

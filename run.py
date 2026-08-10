@@ -830,7 +830,7 @@ class Orchestrator:
         self.services.append(deepstream)
         print(_c("\nStarting DeepStream Runtime...", _BOLD))
         deepstream.start(env)
-        if not deepstream.wait_until_healthy(timeout=90.0):
+        if not deepstream.wait_until_healthy(timeout=600.0):
             self._report_startup_failure(deepstream)
             return False
         print(_pass("DeepStream Runtime healthy"))
