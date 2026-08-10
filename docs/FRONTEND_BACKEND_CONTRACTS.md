@@ -195,12 +195,16 @@ info for whichever fields are omitted (e.g. changing only the IP keeps
 the existing password). password is write-only and never appears in any
 response or audit log entry.
 
-DELETE /cameras/{camera_id} removes a camera and its own setup data
-(stream profile, calibration history). Returns 409 if the camera has
-existing incidents, review items, or recordings -- that history is never
-cascade-deleted (Evidence Preservation); that history must be resolved
-or exported first. Camera Runtime removes the corresponding pipeline
-source and its entire runtime state automatically
+DELETE /cameras/{camera_id} removes a camera, its own setup data (stream
+profile, calibration history), and, per explicit product decision
+(2026-08-10, overriding this document's/CLAUDE.md's original Evidence
+Preservation default), its evidence history too: incidents (with their
+events/snapshots/recordings) and human review items. Deletion is
+unconditional -- an operator who deletes a camera gets it gone,
+including its history; 409 is no longer a normal response (a defensive
+fallback only, for any reference the service doesn't yet know to clean
+up). Camera Runtime removes the corresponding pipeline source and its
+entire runtime state automatically
 (DesiredStateSynchronizer already reconciles toward "camera no longer in
 Desired State" -- no separate signal needed). There are exactly two
 operator controls for a camera: Connect/Disconnect, implicit through

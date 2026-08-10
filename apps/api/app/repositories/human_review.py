@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 
@@ -10,6 +11,14 @@ from apps.api.app.repositories.base import Repository
 
 class HumanReviewRepository(Repository[HumanReviewItem]):
     model = HumanReviewItem
+
+    async def list_by_camera(self, camera_id: uuid.UUID) -> Sequence[HumanReviewItem]:
+        """Every review item for a camera, any status -- backs camera
+        deletion's evidence cascade (``CameraRegistryService.delete()``)."""
+        result = await self._session.execute(
+            select(HumanReviewItem).where(HumanReviewItem.camera_id == camera_id)
+        )
+        return result.scalars().all()
 
     async def get_open_for_track(
         self, camera_id: uuid.UUID, track_id: int

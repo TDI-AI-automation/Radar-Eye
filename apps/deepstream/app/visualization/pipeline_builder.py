@@ -135,6 +135,12 @@ class VisualizationPipelineBuilder:
         udpsink.set_property("port", self.udp_port)
         udpsink.set_property("sync", False)
         udpsink.set_property("async", False)
+        # buffer-size: default (0 -> OS default, ~208KB on this reference
+        # machine) is smaller than a single IDR frame's RTP packet burst at
+        # this bitrate. See stream_server.py's matching udpsrc buffer-size
+        # for the receive-side half of this fix and the root-cause
+        # measurement it's based on.
+        udpsink.set_property("buffer-size", 2_097_152)
 
         self._elements = [
             queue,
