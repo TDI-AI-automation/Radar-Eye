@@ -420,6 +420,8 @@ optional short-lived ticket branches
 
 **Merge strategy** — Developer → ticket branch (optional) → subsystem branch → Principal Engineer review → testing → merge into `develop` (regular merge commit, never squash) → integration testing on `develop`. `develop` never receives a direct commit outside of these subsystem merges. Repeat across all subsystems until end-to-end validation and a production readiness review are complete, then merge `develop` → `main` for a production release.
 
+**Owner override** — the project owner may explicitly instruct skipping the Principal Engineer review step for a specific merge into `develop`; when they do, merge on their direct instruction (regular merge commit, never squash — that part of the strategy still applies) rather than blocking on review. Record each such override where it happens (commit message and/or IMPLEMENTATION_STATUS.md), since it's an exception being exercised, not a standing change to the process. First exercised 2026-08-10: `feature/media-architecture-reset` → `develop` (commit `72af011`).
+
 **Production Release Gate** — `develop` must not be merged into `main` until ALL of the following are complete: every roadmap milestone implemented; DeepStream pipeline, AI pipeline, API, frontend, database, event bus, incident pipeline, recording, alarm pipeline, and calibration all integrated; Developer Infrastructure and Testing subsystems complete; end-to-end integration tests passing; system acceptance testing complete; architecture review passed; production deployment validated. Only then may `develop` be merged into `main`.
 
 ---
