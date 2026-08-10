@@ -227,6 +227,7 @@ class TestReviewsChannel:
                 )
                 message = ws.receive_json()
 
+        assert message.pop("created_at")
         assert message == {
             "review_item_id": str(review_item_id),
             "camera_id": str(camera_id),
