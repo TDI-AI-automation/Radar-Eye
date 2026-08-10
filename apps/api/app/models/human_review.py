@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import get_args
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,18 @@ class HumanReviewItem(Base):
         CheckConstraint(
             f"status IN ({', '.join(repr(v) for v in _REVIEW_STATUS_VALUES)})",
             name="ck_human_review_items_status",
+        ),
+        # Mirrors Incident's ux_incidents_active_camera_track -- at most one
+        # OPEN review item per (camera_id, track_id) at a time. Declared here
+        # (not just in the c5d6e7f8a9b0 migration) so Base.metadata.create_all()
+        # (this repo's test-DB setup, see root conftest.py) also creates it --
+        # a migration-only partial index is invisible to that path.
+        Index(
+            "ux_human_review_items_open_camera_track",
+            "camera_id",
+            "track_id",
+            unique=True,
+            postgresql_where=text("status = 'OPEN'"),
         ),
     )
 

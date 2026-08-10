@@ -145,6 +145,9 @@ class TestIncidentSchemas:
             incident_type=IncidentType.THREAT,
             threat_level=ThreatLevel.HIGH,
             status=IncidentStatus.ACTIVE,
+            weapon_type="RANGED_LETHAL",
+            uniform="CIVILIAN",
+            zone="zone_1",
             created_at=_NOW,
             updated_at=_NOW,
         )
@@ -158,6 +161,7 @@ class TestIncidentSchemas:
             camera_id=_CAMERA_ID,
             threat_level=ThreatLevel.MEDIUM,
             status=IncidentStatus.NEW,
+            weapon_type="NON_LETHAL",
         )
         assert summary.status == IncidentStatus.NEW
 
@@ -191,6 +195,7 @@ class TestHumanReviewSchema:
             camera_id=_CAMERA_ID,
             track_id=9,
             reason="uniform_unknown",
+            created_at=_NOW,
         )
         restored = _round_trip(schema)
         assert restored.status == "OPEN"
@@ -203,6 +208,7 @@ class TestHumanReviewSchema:
             camera_id=_CAMERA_ID,
             track_id=1,
             reason="uniform_unknown",
+            created_at=_NOW,
         )
         assert schema.status == "OPEN"
 
