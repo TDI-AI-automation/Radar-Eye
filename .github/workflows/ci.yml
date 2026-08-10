@@ -35,8 +35,26 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install PyGObject/GStreamer system dependencies
+        # apps/deepstream's media_publisher tests import gi.repository.Gst
+        # (apps/deepstream/app/media_publisher/base.py's _import_gst()).
+        # On the real Jetson/DeepStream target this comes from the JetPack
+        # SDK image, not pip (see that module's own comment) -- so it's
+        # deliberately absent from requirements*.txt. actions/setup-python
+        # provisions an isolated interpreter with no access to any
+        # system-wide python3-gi, so PyGObject must be built from source
+        # here against these dev headers/typelibs instead.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev \
+            gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+            libgstreamer1.0-dev gstreamer1.0-plugins-base
+
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: |
+          pip install -r requirements-dev.txt
+          pip install pygobject
 
       - name: Ruff
         run: ruff check .
