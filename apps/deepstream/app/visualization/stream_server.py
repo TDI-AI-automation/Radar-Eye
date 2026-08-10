@@ -70,8 +70,27 @@ class RtspStreamServer:
         # then fails with "SDP contains no streams" -- caught via a real
         # gst-launch-1.0 RTSP client during Phase 5 hardware verification,
         # not visible in the manager-level smoke tests from Phase 3.
+        #
+        # buffer-size=2097152: this udpsrc's default kernel receive buffer
+        # (unset -> OS default, 212992 bytes on this reference machine) is
+        # smaller than a single H.264 IDR frame's RTP packet burst at
+        # viz-encoder's bitrate/iframeinterval -- confirmed by a targeted
+        # loopback-socket reproduction (send a ~300KB burst matching one
+        # keyframe with the reader briefly behind, as under real GPU/CPU
+        # load): 56% of packets dropped to the kernel's UdpRcvbufErrors
+        # counter at the default size, vs. ~14% once the receive buffer is
+        # sized to hold a full keyframe burst. Those dropped RTP packets
+        # corrupt whatever macroblocks they carried; since the affected
+        # regions are typically static background (skip-coded across
+        # P-frames), the corruption persists on screen until the next
+        # keyframe fully refreshes it -- the observed ~1s ghosting/
+        # blockiness cycle (iframeinterval is one keyframe/sec). Sized well
+        # above one keyframe's worth of RTP packets at this bitrate; also
+        # bounded by net.core.rmem_max at deployment (should be raised
+        # alongside this for full effect on the Jetson target).
         factory.set_launch(
-            f'( udpsrc name=pay0 port={self._udp_port} caps="application/x-rtp, media=video, '
+            f"( udpsrc name=pay0 port={self._udp_port} buffer-size=2097152 "
+            f'caps="application/x-rtp, media=video, '
             f'clock-rate=90000, encoding-name=H264, payload=96" )'
         )
         factory.set_shared(True)

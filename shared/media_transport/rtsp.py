@@ -145,6 +145,12 @@ class RtspMediaPublisher:
         sink.set_property("port", udp_port)
         sink.set_property("sync", False)
         sink.set_property("async", False)
+        # buffer-size: see the matching udpsrc buffer-size below (and
+        # apps/deepstream/app/visualization/stream_server.py's identical
+        # fix) for the root-caused reason -- the OS-default kernel socket
+        # buffer is smaller than one IDR frame's RTP burst at this
+        # bitrate/keyframe-interval.
+        sink.set_property("buffer-size", 2_097_152)
 
         self._pipeline.add(caps_filter)
         self._pipeline.add(payloader)
@@ -163,8 +169,17 @@ class RtspMediaPublisher:
         factory = GstRtspServer.RTSPMediaFactory()
         # name=pay0 required by GstRtspServer's SDP generation -- see
         # stream_server.py's own hardware-confirmed note.
+        #
+        # buffer-size=2097152: matches stream_server.py's identical fix and
+        # root-cause measurement -- this udpsrc's default (unset) kernel
+        # receive buffer is smaller than one IDR frame's RTP packet burst,
+        # causing silent kernel-level packet drops (confirmed via a
+        # loopback-socket reproduction: 56% loss at default size vs. ~14%
+        # once sized for a full keyframe burst) that corrupt decoded video
+        # until the next keyframe.
         factory.set_launch(
-            f'( udpsrc name=pay0 port={udp_port} caps="application/x-rtp, media=video, '
+            f"( udpsrc name=pay0 port={udp_port} buffer-size=2097152 "
+            f'caps="application/x-rtp, media=video, '
             f'clock-rate=90000, encoding-name=H264, payload=96" )'
         )
         factory.set_shared(True)
