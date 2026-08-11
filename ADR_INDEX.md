@@ -206,6 +206,10 @@ Reason:
 
 Centralized access control and simplified frontend integration.
 
+Amended by ADR-030:
+
+"Backend-controlled video delivery" is reconciled with the single AI-annotated-only WebRTC mechanism: the backend (DeepStream) is the sole producer and controller of what the browser receives. No amendment to the WebSocket-metadata half of this strategy.
+
 ---
 
 # ADR-012
@@ -747,6 +751,10 @@ Reason:
 
 Live video delivery must never be coupled to AI subsystem initialization time or AI subsystem failure. The previous architecture made this impossible to guarantee by construction, not just by configuration.
 
+Amended by ADR-030:
+
+The process-separation and dual-channel (Live View + AI Streaming) decision for *video delivery* is superseded. Camera Ingestion's one-upstream-connection-per-camera ownership, and the operational constraint requiring it, are unchanged and remain in force.
+
 ---
 
 # ADR-029
@@ -800,3 +808,47 @@ Applying ADR-028's own decoupling principle end-to-end: every subsystem below Ca
 Process Note:
 
 If Phase 3 implementation reveals that this ADR is incorrect or incomplete, stop immediately and amend this ADR first, before writing or changing code. Code is never the source of truth for architecture -- this document is (per `CLAUDE.md`'s Architecture Rules priority order).
+
+---
+
+# ADR-030
+
+Decision:
+
+AI-Annotated-Only Video Output -- reversal of ADR-028's process separation and dual-channel design for video delivery.
+
+Status:
+
+ACCEPTED
+
+Amends:
+
+ADR-011 (Frontend Video Delivery Strategy) -- reconciles "backend-controlled video delivery" with the single AI-annotated-only mechanism below; the WebSocket-metadata half is unchanged.
+
+Supersedes:
+
+ADR-028's decision that Live Streaming (WebRTC delivery to the browser) is a separate process from DeepStream, and that two independent channels ("Live View" raw, "AI Streaming" annotated) exist per camera. `DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5's two-channel model and its "AI Runtime never runs WebRTC/webrtcbin" statement.
+
+Not superseded:
+
+ADR-028's Camera Ingestion decision -- one real upstream RTSP connection per camera, owned by an independent Camera Ingestion Service, republished locally for subsystems to consume. This was driven by a hardware constraint (the physical camera's low concurrent-RTSP-session tolerance) that is unrelated to whether raw video ever reaches a browser, and remains in force unchanged. `Camera Ingestion -> AI Runtime -> ObservationEvent -> EventBus`, ADR-027's anti-corruption layer, ADR-029's phase sequence, and Incident Service are all unaffected by this ADR.
+
+Context:
+
+ADR-028 fixed a measured production defect: `nvinfer` (PGIE/SGIE) synchronous TensorRT engine deserialization blocked `rtspsrc`/depay inside the same `Gst.Pipeline`'s serial `set_state()` walk (9.18s stall). Camera Ingestion, extracted as its own service, fixed that defect and remains correct. ADR-028 additionally decided, on top of that fix, that video *delivery to the browser* should also become a second independent process with two channels (raw and AI-annotated). In practice this produced two coexisting WebRTC implementations, a live raw/annotated input-selector, and a raw "Live View" channel and service (`apps/live_stream`) that was never wired to any real consumer.
+
+Problem:
+
+Radar Eye is an AI surveillance system, not a generic camera-viewing system. There is no product-level requirement for raw, non-AI video in the browser, independent of or in place of AI-annotated video. Maintaining a raw channel, a second process, and a live A/B video switch for a product capability that does not exist is unnecessary architectural surface, not a safeguard.
+
+Decision:
+
+DeepStream (`apps/deepstream`) is the sole owner and producer of the browser-facing video output. The pipeline is: Camera Ingestion (unchanged) -> DeepStream (NVDEC decode -> `nvstreammux` -> PGIE -> NvDCF tracker -> SGIE -> metadata extraction -> OSD annotation -> H.264 encode) -> `webrtcbin`, delivered through the existing, unchanged `apps.api` proxy contract (`POST /cameras/{camera_id}/webrtc/offer`) to the browser. Only one representation of video exists per camera: AI-annotated. There is no raw/non-AI browser-facing video path, no live AI-on/AI-off video switch, and no second Live Streaming process. `apps/live_stream` is removed. The existing, hardware-proven `webrtcbin` transport mechanics (fresh transport triple per browser connection; `iframeinterval` set on the encoder) are kept unchanged -- this ADR reverses process/channel placement, not the transport technology.
+
+Consequences:
+
+If DeepStream is unavailable, Radar Eye's surveillance video is unavailable. This trade-off is explicitly accepted: an operator with no AI running has no meaningful surveillance product regardless of whether unannotated pixels are visible, so preserving a raw fallback "just in case" provides no real capability and is not worth the process/channel complexity it costs. `webrtcbin` (a GStreamer element) being owned by the one process that already owns GStreamer is also more consistent with ADR-027's anti-corruption-layer intent than splitting GStreamer-adjacent code across two processes.
+
+Reason:
+
+Radar Eye's product scope is AI-annotated video, not generic live camera streaming. Architecture should reflect the product it serves rather than preserve generality for a capability that was never a requirement.

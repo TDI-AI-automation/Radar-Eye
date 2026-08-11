@@ -53,17 +53,10 @@ FRONTEND_DEFAULT_PORT = 8080
 # be verified independently.
 INGESTION_PORT = 8600
 # Must match configs/live_stream.yaml's `port:` -- DeepStream Runtime's Live
-# Monitoring signaling server binds this fixed TCP port on every start
-# (added by Stage C; run.py has no app-code import to read it from the
-# config file directly, matching every other constant on this page).
+# Monitoring signaling server binds this fixed TCP port on every start.
+# DeepStream owns browser video delivery directly (ADR-030); there is no
+# second, independent Live Streaming Service/port.
 LIVE_STREAM_PORT = 8590
-# Must match configs/live_streaming.yaml's `signaling_port:` -- the new,
-# independent Live Streaming Service (ADR-028, Phase 2). Deliberately a
-# different port from LIVE_STREAM_PORT above: that one still belongs to
-# the old, unmigrated apps.deepstream.app.live_stream package during
-# this build-alongside-then-cutover period; apps.api's WebRTC proxy has
-# not yet been repointed at this new service.
-LIVE_STREAMING_PORT = 8591
 # Must match shared/events/config.py's EVENT_BUS_PUBLISH_PORT/
 # EVENT_BUS_SUBSCRIBE_PORT -- the production EventBus's ZMQ XSUB/XPUB
 # broker (ADR-029 Phase 4). Every publisher/subscriber connects to these
@@ -324,8 +317,6 @@ def _own_service_sigs(port: int) -> tuple[str, ...]:
         return ("apps.deepstream",)
     if port == INGESTION_PORT:
         return ("apps.ingestion",)
-    if port == LIVE_STREAMING_PORT:
-        return ("apps.live_stream",)
     return ("bun", "vite", "node")
 
 
@@ -406,7 +397,6 @@ def run_prerequisite_checks() -> list[Check]:
         _check_port(FRONTEND_DEFAULT_PORT, "Frontend"),
         _check_port(LIVE_STREAM_PORT, "Live Monitoring signaling"),
         _check_port(INGESTION_PORT, "Camera Ingestion media distribution"),
-        _check_port(LIVE_STREAMING_PORT, "Live Streaming Service signaling"),
     ]
 
 
@@ -698,41 +688,6 @@ class Orchestrator:
         print(_pass("Camera Ingestion Service healthy"))
 
         # ------------------------------------------------------------------
-        # Live Streaming Service (ADR-028, Phase 2) -- a new, independent
-        # process, subscribing only to Camera Ingestion's published
-        # endpoints. Started right after Camera Ingestion for launcher
-        # readability only -- neither subsystem's own startup actually
-        # blocks on the other (each runs its own independent reconnect/
-        # poll loop against its upstream). Not yet the target of
-        # apps.api's WebRTC proxy; see configs/live_streaming.yaml.
-        # Always started fresh, never adopted -- same reasoning as
-        # Camera Ingestion/DeepStream (owns live GStreamer/WebRTC state).
-        # ------------------------------------------------------------------
-        if _is_own_service_on_port(LIVE_STREAMING_PORT):
-            print(
-                _fail(
-                    f"Live Streaming Service already running (port {LIVE_STREAMING_PORT} -- "
-                    "signaling -- is already bound by an apps.live_stream process) -- "
-                    "stop it first if you want to restart"
-                )
-            )
-            return False
-
-        live_streaming = ManagedService(
-            name="live_streaming",
-            command=[str(VENV_PYTHON), "-m", "apps.live_stream.app.main"],
-            cwd=REPO_ROOT,
-            ready_pattern=re.compile(r"radar-eye-live-streaming running"),
-        )
-        self.services.append(live_streaming)
-        print(_c("\nStarting Live Streaming Service...", _BOLD))
-        live_streaming.start(env)
-        if not live_streaming.wait_until_healthy(timeout=30.0):
-            self._report_startup_failure(live_streaming)
-            return False
-        print(_pass("Live Streaming Service healthy"))
-
-        # ------------------------------------------------------------------
         # Backend API
         # ------------------------------------------------------------------
         if _is_own_service_on_port(API_PORT):
@@ -874,7 +829,6 @@ class Orchestrator:
 
     _DISPLAY_NAMES = {
         "ingestion": "Camera Ingestion Service",
-        "live_streaming": "Live Streaming Service",
         "api": "Backend API",
         "deepstream": "DeepStream Runtime",
         "frontend": "Frontend",

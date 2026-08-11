@@ -14,16 +14,27 @@ This document is the authoritative specification for all DeepStream processing s
 DeepStream.** DeepStream is one of several independent consumers of a
 camera's encoded stream, not its owner. Everything below Stage 1 that
 used to be described as "the DeepStream pipeline" is DeepStream's own
-internal AI pipeline only — Camera Ingestion, Live Streaming, and
-Recording are separate processes/services, each independently
-subscribing to Stage 1's output.
+internal AI pipeline only — Camera Ingestion and Recording are separate
+processes/services, each independently subscribing to Stage 1's output.
+
+**AI-Annotated-Only Video Output (ADR-030): DeepStream owns browser
+video delivery.** ADR-028 additionally placed browser video delivery in
+a second, independent Live Streaming Service with two channels (raw
+"Live View" and AI-annotated "AI Streaming"). ADR-030 reverses that:
+there is no raw/non-AI browser-facing video path and no separate Live
+Streaming process. DeepStream is the sole producer of the one video
+representation the browser ever receives — AI-annotated, encoded, and
+delivered directly over WebRTC (`webrtcbin`) through the existing,
+unchanged `apps.api` proxy contract. If DeepStream is unavailable,
+browser video is unavailable; this is an accepted trade-off, not a gap
+(see ADR-030's Consequences).
 
 **Pipeline Decomposition (ADR-029): DeepStream is a pure CV engine.**
 Everything downstream of metadata extraction — Distance Estimation,
 Threat Engine evaluation, Incident lifecycle, Alerting, hardware
 actuation, and evidence capture — is also not part of DeepStream.
 DeepStream's own AI pipeline (Stages 2–5.5 below) ends at metadata
-extraction and AI Streaming output; it never calls into Calibration,
+extraction and AI video output; it never calls into Calibration,
 Threat Engine, Incident Service, Alert Service, or Hardware Action
 Service in-process. Those run as independent processes, triggered only
 by the metadata event DeepStream publishes (Stage 5.6).
@@ -38,18 +49,15 @@ Stage 1: Camera Ingestion Service (rtspsrc → depay → h264parse)
 Encoded Split — every subsystem below subscribes independently,
                  to a locally re-published copy, never to the camera
                  directly (see Stage 1's own section for why)
-    ├── Stage 1.5: Live Streaming Service
-    │       ↓
-    │   WebRTC → Browser (Live View channel)
-    │
     ├── DeepStream / AI Runtime (Stages 2-5.6: pure CV engine, ADR-029)
     │       ↓
     │   NVDEC → StreamMux → Primary GIE → NvDCF Tracker →
     │   Secondary GIE → Metadata Extraction (RuntimeAdapter, ADR-027)
     │       │
-    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → re-published
-    │       │       locally as "AI Streaming" → picked up by Stage
-    │       │       1.5's second, independent WebRTC channel
+    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → WebRTC
+    │       │       (webrtcbin) → apps.api proxy → Browser (ADR-030;
+    │       │       the sole video representation the browser ever
+    │       │       receives — no raw/non-AI channel exists)
     │       │
     │       └── Stage 5.6: ObservationEvent → published on the Event
     │               Bus (Stage 10) — DeepStream's last step; it does
@@ -76,9 +84,8 @@ Encoded Split — every subsystem below subscribes independently,
     ├── Stage 8.7: Evidence Service (Phase 8) — consumes Stage 5.6's
     │       ObservationEvent directly (not gated on Incident Service);
     │       when a full frame is needed, requests/captures it from
-    │       Stage 1.5's AI Streaming output (never from DeepStream
-    │       directly — DeepStream gains no JPEG/image-writing
-    │       responsibility) → SnapshotCreatedEvent
+    │       Stage 5.5's diagnostic RTSP output (DeepStream gains no
+    │       JPEG/image-writing responsibility) → SnapshotCreatedEvent
     │
     └── Stage 9+: Recording / Archive / Playback / Search / Export —
             POSTPONED per ADR-029, resumes after Phase 8. Design
@@ -89,28 +96,30 @@ Encoded Split — every subsystem below subscribes independently,
 
 DeepStream's fork (downstream of Secondary GIE, downstream of the only
 metadata-extraction pass, `RuntimeAdapter`) is unchanged in shape — the
-AI Streaming branch never re-runs inference, never re-parses
-`NvDsBatchMeta`, and cannot affect the Inference Path. What changed is
-everything *above* DeepStream: it no longer owns the camera connection,
-Live Streaming is never inside its process, and its own encoded output
-is one of several independent local publishers, not a direct WebRTC
-peer connection. What ADR-029 changes is everything *below*
-DeepStream's metadata extraction: Distance Estimation, Threat Engine,
-Incident Service, Alert Service, and Hardware Action Service are no
-longer in-process calls made from inside DeepStream (superseding the
-RM-11 Phase 2 `ThreatEngineRuntimeAdapter` design) — they are separate
-processes reacting to Stage 5.6's published `ObservationEvent`.
+AI video-output branch never re-runs inference, never re-parses
+`NvDsBatchMeta`, and cannot affect the Inference Path. What changed
+relative to ADR-028 is: it no longer owns the camera connection (Camera
+Ingestion still does — unchanged), but per ADR-030 it now *does* own
+browser video delivery directly, terminating `webrtcbin` itself rather
+than re-publishing for a separate Live Streaming process to pick up.
+What ADR-029 changes is everything *below* DeepStream's metadata
+extraction: Distance Estimation, Threat Engine, Incident Service, Alert
+Service, and Hardware Action Service are no longer in-process calls
+made from inside DeepStream (superseding the RM-11 Phase 2
+`ThreatEngineRuntimeAdapter` design) — they are separate processes
+reacting to Stage 5.6's published `ObservationEvent`.
 
 **Governing principle: every media representation exists exactly
 once.** The camera's original encoded H.264 exists once (Stage 1).
 DeepStream's decoded NVMM frame exists once, inside DeepStream only.
-DeepStream's OSD-annotated encoded frame exists once (Stage 5.5). Every
+DeepStream's OSD-annotated encoded frame exists once per consumer
+purpose (Stage 5.5: one encode for the browser WebRTC output, one for
+the diagnostic RTSP output — see Stage 5.5's Output section). Every
 subsystem consumes one of those existing representations by
 subscribing to it; no subsystem creates another copy of a
 representation that already exists simply because it's convenient.
-This is what keeps GPU/CPU/network cost bounded as Live Streaming,
-Recording, and future analytics all attach to the same small set of
-canonical streams.
+This is what keeps GPU/CPU/network cost bounded as Recording and future
+analytics attach to the same small set of canonical streams.
 
 **Governing principle (ADR-029): every business decision is owned by
 exactly one service.** Detection/tracking/classification is decided
@@ -189,44 +198,9 @@ Requirements:
 
 ---
 
-# Stage 1.5: Live Streaming Service
-
-Owner:
-
-**Live Streaming Service** — an independent process. Never DeepStream
-(ADR-028).
-
-Purpose:
-
-Deliver encoded H.264 to the operator's browser over WebRTC. Two
-independent channels per camera, each a plain local RTSP subscriber:
-
-- **Live View**: subscribes to Stage 1's republished output directly.
-  No NVDEC, no inference, no TensorRT, no CUDA preprocessing, no
-  dependency on AI state or DeepStream being alive at all. Lowest
-  latency, never delayed by AI initialization or AI failure.
-- **AI Streaming**: subscribes to DeepStream's own republished,
-  OSD-annotated output (Stage 5.5). Independent of the Live View
-  channel — losing this channel (e.g. DeepStream down) never affects
-  Live View.
-
-Chain (per channel):
-
-`rtspsrc → depay → rtph264pay → webrtcbin`. No decode, no re-encode —
-whichever upstream (Stage 1 or Stage 5.5) already produced the encoded
-bytestream is passed straight to the browser.
-
-Startup independence:
-
-Comes up the moment Stage 1's endpoint for a camera is reachable —
-never waits on DeepStream's model-loading time (see ADR-028's Problem
-statement for the defect this fixes).
-
-Failure isolation:
-
-DeepStream crashing takes down only the AI Streaming channel; Live View
-is unaffected. Live Streaming Service crashing affects only browser
-delivery — AI, Recording, and Camera Ingestion are unaffected.
+(Stage 1.5, "Live Streaming Service," removed by ADR-030 — see Stage
+5.5's Output section below for the browser video-output path DeepStream
+now owns directly. Camera Ingestion, Stage 1 above, is unaffected.)
 
 ---
 
@@ -424,18 +398,23 @@ hardware, see `docs/SIV_BASELINE.md`.
 
 Output:
 
-Two independent consumers of this same encoded output, per ADR-028 —
-"every media representation exists exactly once":
+Two independent consumers, each with its own encode off the same
+`sgie_tee` fork point (ADR-030 — DeepStream owns both; neither re-runs
+inference or re-parses `NvDsBatchMeta`):
 
-- Direct RTSP, `rtsp://<host>:<rtsp_port>/<stream_name>` (defaults
-  `8554`/`radar-eye`, `configs/visualization.yaml`) — for VLC or any
-  other RTSP client, unchanged diagnostic access.
-- **AI Streaming**: the same encoded output, locally re-published the
-  same way Camera Ingestion re-publishes Live View (Stage 1), picked up
-  by Stage 1.5's Live Streaming Service as the browser-facing AI
-  Streaming channel. DeepStream itself never runs WebRTC/`webrtcbin`
-  code — `VisualizationManager` remains the sole external boundary,
-  now serving both consumers off one encoded stream.
+- **Diagnostic RTSP**: `rtsp://<host>:<rtsp_port>/<stream_name>`
+  (defaults `8554`/`radar-eye`, `configs/visualization.yaml`) — for VLC
+  or any other RTSP client, via `VisualizationManager`/
+  `RtspStreamServer`, unchanged.
+- **Browser video output (WebRTC)**: `apps/deepstream/app/live_stream/`
+  — a second, independent OSD-annotated encode off `sgie_tee`, feeding
+  `rtph264pay → capsfilter → webrtcbin` directly (a fresh transport
+  triple built per browser connection; `iframeinterval` set on the
+  encoder so late-joining viewers get an immediate keyframe). Delivered
+  to the browser through the existing, unchanged `apps.api` proxy
+  contract (`POST /cameras/{camera_id}/webrtc/offer`). This is the only
+  video representation the browser ever receives — there is no raw/
+  non-AI channel and no separate Live Streaming process (ADR-030).
 
 ---
 
@@ -673,17 +652,18 @@ Evidence Service consumes `ObservationEvent` only — no video/frame data
 flows to it directly, and AI Runtime gains no JPEG/image-writing
 responsibility. When `ObservationEvent` indicates a snapshot is
 warranted, Evidence Service requests/captures the actual frame from
-Stage 1.5's already-published **AI Streaming** output (the same
-representation Live Streaming already subscribes to for the browser),
-never a new representation created by DeepStream for this purpose —
-per ADR-028's "every media representation exists exactly once":
+Stage 5.5's diagnostic RTSP output (the same OSD-annotated
+representation the browser video-output branch also derives from,
+ADR-030), never a new representation created by DeepStream for this
+purpose — per the "every media representation exists exactly once"
+principle:
 
 ```
 ObservationEvent
       ↓
 Evidence Service (decides a snapshot is warranted)
       ↓
-requests/captures a frame from AI Streaming (Stage 1.5 / Stage 5.5)
+requests/captures a frame from Stage 5.5's diagnostic RTSP output
       ↓
 writes the JPEG, emits SnapshotCreatedEvent
 ```

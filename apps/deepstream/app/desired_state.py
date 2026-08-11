@@ -13,13 +13,10 @@ that connection. Connection info therefore comes from
 ``camera_media_endpoints`` (subsystem="ingestion", the row Camera
 Ingestion itself publishes/upserts once it holds a camera's stream --
 see ``apps/ingestion/app/runtime.py``), never from
-``camera_stream_profiles`` directly. This mirrors ``apps/live_stream``'s
-own subscription pattern (``LiveStreamingRuntime._synchronize()``) --
-AI Runtime and Live Streaming both discover their upstream the same way,
-through the Media Distribution Interface, never by re-deriving the
-camera's own credentials. No decryption is needed here: a published
-endpoint's ``address`` is a local loopback URL, not the camera's
-credentials.
+``camera_stream_profiles`` directly, discovering its upstream through the
+Media Distribution Interface rather than re-deriving the camera's own
+credentials. No decryption is needed here: a published endpoint's
+``address`` is a local loopback URL, not the camera's credentials.
 
 Deliberately not a long-lived session holder: each ``read_all()`` call opens
 and closes its own short-lived session (matching ``runtime.py``'s existing

@@ -1,5 +1,8 @@
-"""Bitstream (original, pre-decode H.264) publisher -- Live Streaming
-architecture reset.
+"""Bitstream (original, pre-decode H.264) publisher -- Media Architecture
+Reset (ADR-028). Dormant: ADR-030 removed Live Streaming as this
+publisher's only registered consumer (browser video delivery is now
+AI-annotated-only, tapped downstream of SGIE); kept as reusable
+pre-decode infrastructure for the future consumers listed below.
 
 Attaches to the per-camera bitstream tee's already-existing stub branch
 (``pipeline/frame_distributor.py``'s ``attach_bitstream_branch``) -- no

@@ -173,10 +173,11 @@ class TestValveStateTransitions:
 
 @pytest.mark.asyncio
 class TestValveChangedHook:
-    """Live Monitoring's WebRTC branch (apps/deepstream/app/live_stream/)
-    switches its input-selector via this optional hook -- not a new AI
-    policy, an additional side effect at the one place every valve
-    mutation already funnels through."""
+    """Generic, optional hook fired at the one place every valve mutation
+    already funnels through -- currently unused by Live Monitoring's
+    WebRTC branch (apps/deepstream/app/live_stream/, ADR-030: AI-
+    annotated-only, no runtime source switch to drive), but the hook
+    itself remains a supported RuntimeSupervisor extension point."""
 
     async def test_hook_is_optional(self) -> None:
         loop = asyncio.get_running_loop()

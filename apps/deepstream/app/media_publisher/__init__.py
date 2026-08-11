@@ -37,11 +37,13 @@ Supervisor, Desired State synchronization, or Telemetry, and a failing
 consumer is isolated (logged, never re-raised into the pipeline) rather
 than allowed to affect Camera Runtime.
 
-TODO: as Recording/Snapshot/Other attach here alongside Live Streaming,
-this package is becoming a generic media-distribution framework rather
-than something scoped to "tiers." Consider renaming it (e.g.
-``distribution/``) once those consumers exist -- not this milestone,
-comment only.
+TODO: as Recording/Snapshot/Other attach here, this package is becoming
+a generic media-distribution framework rather than something scoped to
+"tiers." Consider renaming it (e.g. ``distribution/``) once those
+consumers exist -- not this milestone, comment only. (Live Streaming
+was this package's original bitstream consumer; ADR-030 removed it --
+browser video delivery is AI-annotated-only now, see
+``live_stream/__init__.py``.)
 
 No submodule is re-exported here -- callers import
 ``apps.deepstream.app.media_publisher.tier1``/``.tier2``/etc. directly,

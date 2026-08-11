@@ -52,7 +52,6 @@ from apps.deepstream.app.heartbeat_registry import HeartbeatRegistry
 from apps.deepstream.app.ingestion.reconnect import ReconnectPolicy
 from apps.deepstream.app.ingestion.source import RtspSource
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation, PerformanceSnapshot
-from apps.deepstream.app.live_stream.branch import StreamInput
 from apps.deepstream.app.live_stream.manager import LiveStreamManager
 from apps.deepstream.app.media_publisher.media_publisher import MediaPublisher
 from apps.deepstream.app.pipeline.builder import DeepStreamPipeline
@@ -173,7 +172,6 @@ class DeepStreamRuntime:
         self._pipeline.set_tier2_publisher(self.media_publisher.tier2)
         self.live_stream_manager = LiveStreamManager(
             self._pipeline,
-            bitstream_publisher=self.media_publisher.bitstream,
             bridge=self._bridge,
             loop=loop,
             settings=live_stream,
@@ -184,23 +182,20 @@ class DeepStreamRuntime:
             streammux_height=settings.streammux_height,
         )
         """Live Monitoring's permanent video delivery path -- see
-        apps/deepstream/app/live_stream/__init__.py. Stage C: two inputs
-        (input A: the camera's original bitstream via MediaPublisher's
-        BitstreamPublisher; input B: the AI pipeline's own already-
-        produced annotated output, tapped off the shared SGIE tee and
-        encoded independently) -- input-selector picks between them,
-        driven by RuntimeSupervisor's AI valve state via
-        _select_stream_source below. Reuses VisualizationManager's
-        already-live TrackAnnotationRegistry -- no new overlay-rendering
-        mechanism. Per ADR-029, nothing populates this registry from
-        inside AI Runtime anymore (previously ThreatEngineRuntimeAdapter);
-        it is a preserved interface, read as always-empty until a later
-        phase feeds it again over the Event Bus."""
+        apps/deepstream/app/live_stream/__init__.py. AI-annotated-only
+        (ADR-030): one input, the AI pipeline's own already-produced
+        annotated output, tapped off the shared SGIE tee and encoded
+        independently -- no raw passthrough, no runtime source switch.
+        Reuses VisualizationManager's already-live TrackAnnotationRegistry
+        -- no new overlay-rendering mechanism. Per ADR-029, nothing
+        populates this registry from inside AI Runtime anymore (previously
+        ThreatEngineRuntimeAdapter); it is a preserved interface, read as
+        always-empty until a later phase feeds it again over the Event
+        Bus."""
         self.runtime_supervisor = RuntimeSupervisor(
             self._pipeline,
             self._bridge,
             ConcurrentEnableLimiter(max_concurrent=settings.streammux_batch_size),
-            on_valve_changed=self._select_stream_source,
         )
         self._desired_state_reader = DesiredStateReader(session_factory)
         self.desired_state_synchronizer = DesiredStateSynchronizer(
@@ -380,18 +375,6 @@ class DeepStreamRuntime:
                 logger.exception("RuntimeSupervisor failed to fully remove camera %s", camera_id)
 
         self._bridge.schedule(_run())
-
-    def _select_stream_source(self, camera_id: uuid.UUID, ai_active: bool) -> None:
-        """RuntimeSupervisor's on_valve_changed hook -- the one place
-        allowed to translate AI-eligibility state into Live Streaming's
-        own, semantics-free StreamInput vocabulary (see
-        live_stream/branch.py's StreamInput docstring). Fires already on
-        the GLib thread (RuntimeSupervisor._set_valve's own
-        schedule_on_mainloop callback), so live_stream_manager.select_input
-        is called directly, not scheduled again."""
-        self.live_stream_manager.select_input(
-            camera_id, StreamInput.B if ai_active else StreamInput.A
-        )
 
     def _on_health_snapshot(self, camera_id: uuid.UUID, status: Any, fps: float | None) -> None:
         """HeartbeatScheduler's on_health_snapshot hook -- fires every

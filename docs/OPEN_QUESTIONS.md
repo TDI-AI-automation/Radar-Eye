@@ -143,10 +143,12 @@ CLOSED
 
 Answer:
 
-WebRTC. Implemented and hardware-validated (Live Monitoring's Live View
-channel). See ADR-028 and `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5
-for the owning service and `docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live
-Monitoring / WebRTC section for the request/response contract.
+WebRTC. Implemented and hardware-validated (Live Monitoring's single
+AI-annotated video output). See ADR-030 and
+`docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 5.5 for the owning
+service (DeepStream itself, not a separate Live Streaming process) and
+`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live Monitoring / WebRTC section
+for the request/response contract.
 
 ---
 

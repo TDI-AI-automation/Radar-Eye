@@ -216,15 +216,17 @@ class TestCameraSubsystemHealthRepository:
         self, db_session
     ) -> None:
         """Regression test for the exact crash reproduced on real hardware:
-        Live Streaming's _remove_camera() writes a final "DISCONNECTED,
+        a media subsystem's _remove_camera() writes a final "DISCONNECTED,
         endpoint removed" health row when a camera's published endpoint
         disappears -- including when that's because the camera itself was
         just deleted via apps.api. That write must degrade gracefully, not
-        raise IntegrityError and crash-loop the synchronize() loop."""
+        raise IntegrityError and crash-loop the synchronize() loop. Any
+        subsystem string exercises this generic repository behavior; uses
+        "ingestion" here (a real, currently-reporting subsystem)."""
         repo = CameraSubsystemHealthRepository(db_session)
 
         result = await repo.set_health(
-            uuid.uuid4(), "live_streaming", status="DISCONNECTED", detail="endpoint removed"
+            uuid.uuid4(), "ingestion", status="DISCONNECTED", detail="endpoint removed"
         )
 
         assert result is None

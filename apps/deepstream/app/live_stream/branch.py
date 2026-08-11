@@ -1,11 +1,10 @@
 """CameraWebRtcBranch -- one camera's permanent WebRTC publish pipeline.
 
-Built once when a camera connects, torn down once when it disconnects --
-never rebuilt on an AI enable/disable switch. See ``apps/deepstream/app/
-live_stream/__init__.py``'s module docstring for the full branch diagram
-and the architectural reasoning (transport-only, decode-free/encode-free
-passthrough of the camera's original H.264 bitstream for input A;
-whatever the AI pipeline already produces, unmodified, for input B).
+Built once when a camera connects, torn down once when it disconnects.
+AI-annotated-only (ADR-030): a single input chain, taps the AI
+pipeline's SGIE tee, no raw passthrough and no runtime source switch.
+See ``apps/deepstream/app/live_stream/__init__.py``'s module docstring
+for the full branch diagram and the architectural reasoning.
 
 Element construction/linking must run on the GLib main-loop thread
 (``AsyncBridge.schedule_on_mainloop``, the same discipline every other
@@ -14,46 +13,27 @@ pipeline-mutating component in this codebase follows) -- ``build()`` and
 scheduled there by ``manager.py``. ``handle_offer()`` is the one
 ``async`` entry point: SDP/ICE negotiation is a multi-step, promise-based
 GLib exchange, bridged to asyncio the same way ``AsyncBridge`` bridges
-every other GLib callback in this codebase. ``select_input()`` (Stage C)
-is a third entry point -- always called already on the GLib thread (see
-its own docstring), synchronous, and never touches
-webrtcbin/payloader/the peer connection at all.
+every other GLib callback in this codebase.
 """
 
 from __future__ import annotations
 
 import asyncio
-import enum
 import logging
 import re
 import threading
-import time
 import uuid
 from typing import Any
 
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import LiveStreamSettings, VisualizationSettings
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
-from apps.deepstream.app.live_stream.consumer import BitstreamAppsrcBridge
-from apps.deepstream.app.pipeline.frame_distributor import bitstream_queue_element_name
 from apps.deepstream.app.stage_logging import get_stage_logger
 from apps.deepstream.app.visualization.osd_renderer import DeepStreamOverlayRenderer
 from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry
 
 logger = logging.getLogger(__name__)
 _live_stream_logger = get_stage_logger("live_stream")
-
-
-class StreamInput(enum.Enum):
-    """The transport subsystem's own, semantics-free vocabulary for
-    ``input-selector``'s two inputs -- it knows only that it is switching
-    input A to input B, never that this means "raw" vs "annotated" or
-    "AI off" vs "AI on". The one place allowed to know that meaning is
-    ``runtime.py``'s translation between ``RuntimeSupervisor``'s AI valve
-    state and this enum (see ``DeepStreamRuntime._select_stream_source``)."""
-
-    A = "a"
-    B = "b"
 
 
 def _import_gst() -> Any:
@@ -82,7 +62,6 @@ class CameraWebRtcBranch:
         visualization_settings: VisualizationSettings,
         track_annotations: TrackAnnotationRegistry,
         instrumentation: PerformanceInstrumentation | None,
-        appsrc_bridge: BitstreamAppsrcBridge,
         bridge: AsyncBridge,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -96,18 +75,17 @@ class CameraWebRtcBranch:
         self._visualization_settings = visualization_settings
         self._track_annotations = track_annotations
         self._instrumentation = instrumentation
-        self._appsrc_bridge = appsrc_bridge
         self._bridge = bridge
         self._loop = loop
 
         self._elements: list[Any] = []
-        """Persistent, camera-lifetime elements only (both input chains +
-        the selector) -- built once in build(), torn down once in
+        """Persistent, camera-lifetime elements only (the AI-annotated
+        input chain) -- built once in build(), torn down once in
         teardown(). Deliberately excludes payloader/webrtc_caps/webrtcbin;
         see ``_transport_elements``."""
-        self._appsrc: Any = None
-        self._input_selector: Any = None
-        self._selector_pads: dict[StreamInput, Any] = {}
+        self._chain_output: Any = None
+        """The annotated input chain's tail element (``h264parse``) --
+        what the transport's payloader links off."""
 
         self._transport_elements: list[Any] = []
         """payloader, webrtc_caps, webrtcbin -- rebuilt fresh on *every*
@@ -133,72 +111,40 @@ class CameraWebRtcBranch:
         self._annotate_probe_target: Any = None
         self._annotate_probe_id: int | None = None
 
-        self._current_input = StreamInput.A
-        self._switch_output_probe_id: int | None = None
-        self._pending_first_packet = False
-        self._pending_keyframe = False
-        self._switch_started_at: float | None = None
-        self._switch_target: StreamInput | None = None
-
     # -- Construction (GLib main-loop thread only) ---------------------
 
     def build(self) -> None:
         """Constructs and links the persistent, camera-lifetime part of the
-        branch: both input chains plus the selector. Deliberately does
-        *not* construct payloader/webrtc_caps/webrtcbin -- see
+        branch: the AI-annotated input chain. Deliberately does *not*
+        construct payloader/webrtc_caps/webrtcbin -- see
         ``_build_webrtc_transport``, built fresh on every ``handle_offer()``
         call instead. Raises immediately on any construction/link failure,
         matching VisualizationPipelineBuilder's own "fail fast, never
         return a half-built branch" discipline."""
         Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
 
-        raw_src = self._raw_input_chain(Gst)
-        annotated_src = self._annotated_input_chain(Gst)
-
-        selector = self._make(Gst, "input-selector", f"live-selector-{self._camera_id}")
-        self._pipeline.add(selector)
-        self._elements.append(selector)
-        raw_pad = selector.get_request_pad("sink_%u")
-        annotated_pad = selector.get_request_pad("sink_%u")
-        self._link_pads(raw_src.get_static_pad("src"), raw_pad)
-        self._link_pads(annotated_src.get_static_pad("src"), annotated_pad)
-        self._selector_pads = {StreamInput.A: raw_pad, StreamInput.B: annotated_pad}
-        selector.set_property("active-pad", raw_pad)  # AI off by default
-        self._current_input = StreamInput.A
-        self._input_selector = selector
-
-        # Stage C: a single probe on the selector's own src pad sees every
-        # buffer that actually reaches the browser, regardless of which
-        # input produced it -- the one place "first buffer of whichever
-        # input is now active" is unambiguous, without needing a second
-        # probe per branch. Persistent (unlike the transport-chain probe
-        # below), since it lives on the selector, not on webrtc_caps.
-        selector_src_pad = selector.get_static_pad("src")
-        self._switch_output_probe_id = selector_src_pad.add_probe(
-            Gst.PadProbeType.BUFFER, self._on_selector_output
-        )
+        self._chain_output = self._annotated_input_chain(Gst)
 
         for element in self._elements:
             element.sync_state_with_parent()
 
     def _build_webrtc_transport(self) -> None:
         """Builds a fresh payloader -> webrtc_caps -> webrtcbin chain and
-        links it off the (persistent, already-PLAYING) selector. Called
-        from ``handle_offer()`` for *every* browser connection -- see that
-        method's docstring for why a reused webrtcbin doesn't work.
-        GLib main-loop thread only."""
+        links it off the (persistent, already-PLAYING) annotated input
+        chain. Called from ``handle_offer()`` for *every* browser
+        connection -- see that method's docstring for why a reused
+        webrtcbin doesn't work. GLib main-loop thread only."""
         Gst, GstWebRTC, _GstSdp, _GstVideo = _import_gst()
-        assert self._input_selector is not None
+        assert self._chain_output is not None
 
         payloader = self._make(Gst, "rtph264pay", f"live-pay-{self._camera_id}")
         payloader.set_property("pt", 96)  # placeholder -- reset to whatever
         # the browser's offer actually negotiates, in handle_offer() below,
-        # before any real data flows (see BitstreamPublisher attach-timing
-        # note in manager.py). 96 is never itself sent over the wire.
+        # before any real data flows. 96 is never itself sent over the wire.
         payloader.set_property("config-interval", -1)  # in-band SPS/PPS every keyframe
         self._pipeline.add(payloader)
         self._transport_elements.append(payloader)
-        self._link(self._input_selector, payloader)
+        self._link(self._chain_output, payloader)
         self._payloader = payloader
 
         # webrtcbin's create-answer runs before any real data has ever
@@ -283,21 +229,21 @@ class CameraWebRtcBranch:
         self._rtp_probe_id = None
         self._rtp_probe_target = None
 
-        selector_src_pad = self._input_selector.get_static_pad("src")
+        chain_output_pad = self._chain_output.get_static_pad("src")
         quiesced = threading.Event()
 
         def _on_idle(_pad: Any, _info: Any) -> Any:
             quiesced.set()
             return Gst.PadProbeReturn.OK
 
-        probe_id = selector_src_pad.add_probe(Gst.PadProbeType.IDLE, _on_idle)
+        probe_id = chain_output_pad.add_probe(Gst.PadProbeType.IDLE, _on_idle)
         if not quiesced.wait(timeout=1.0):
             logger.warning(
-                "Timed out quiescing camera %s's selector before rebuilding WebRTC "
-                "transport -- proceeding anyway",
+                "Timed out quiescing camera %s's annotated chain before rebuilding "
+                "WebRTC transport -- proceeding anyway",
                 self._camera_id,
             )
-        selector_src_pad.remove_probe(probe_id)
+        chain_output_pad.remove_probe(probe_id)
 
         # Sink-to-source, same discipline (and the same hardware-confirmed
         # reason) as teardown()'s own reversed-NULL loop below.
@@ -310,27 +256,6 @@ class CameraWebRtcBranch:
         self._payloader = None
         self._webrtc_caps = None
         self._webrtcbin = None
-
-    def _raw_input_chain(self, Gst: Any) -> Any:
-        """appsrc, fed directly by ``BitstreamAppsrcBridge`` with the
-        camera's original, already-encoded H.264 access units -- no
-        decode, no convert, no re-encode. The appsrc's own caps (set once
-        the first access unit is observed -- see ``consumer.py``) are the
-        camera's real negotiated H.264 caps, so no additional capsfilter
-        is needed here: whatever ``h264parse`` actually produced is
-        exactly what flows into ``input-selector``."""
-        appsrc = self._make(Gst, "appsrc", f"live-raw-src-{self._camera_id}")
-        appsrc.set_property("is-live", True)
-        appsrc.set_property("format", Gst.Format.TIME)
-        appsrc.set_property("block", False)
-        self._pipeline.add(appsrc)
-        self._elements.append(appsrc)
-        self._appsrc = appsrc
-
-        queue = self._pipeline.get_by_name(bitstream_queue_element_name(self._camera_id))
-        bitstream_src_pad = queue.get_static_pad("src") if queue is not None else None
-        self._appsrc_bridge.set_appsrc(self._camera_id, appsrc, bitstream_src_pad)
-        return appsrc
 
     def _annotated_input_chain(self, Gst: Any) -> Any:
         """tee -> queue -> nvvideoconvert(RGBA) -> [overlay probe, reusing
@@ -429,91 +354,6 @@ class CameraWebRtcBranch:
         )
         return parser
 
-    # -- Dynamic source switching (Stage C) ------------------------------
-
-    def select_input(self, target: StreamInput) -> None:
-        """Switches which of the two already-built, already-encoded
-        inputs feeds the browser -- called already on the GLib main-loop
-        thread (from ``RuntimeSupervisor._set_valve``'s own
-        ``schedule_on_mainloop`` callback, via ``manager.py``'s
-        ``select_input``), so this is a direct, synchronous call, not a
-        second schedule. Never touches webrtcbin, the payloader, or the
-        peer connection -- only ``input-selector``'s ``active-pad``
-        property, plus (when switching to the annotated input) a
-        force-key-unit request on the annotated encoder so the browser
-        doesn't have to wait for that encoder's next *periodic* keyframe.
-        Idempotent: switching to the already-active input is a no-op."""
-        if self._input_selector is None:
-            return
-        if target == self._current_input:
-            return
-
-        _live_stream_logger.info(
-            "Switch requested: camera=%s, current=%s, target=%s",
-            self._camera_id,
-            self._current_input.name,
-            target.name,
-        )
-        self._switch_started_at = time.monotonic()
-        self._switch_target = target
-        self._pending_first_packet = True
-
-        if target == StreamInput.B and self._annotated_encoder is not None:
-            # Switching to the annotated input starts (from the browser's
-            # perspective) a brand new bytestream -- the decoder needs a
-            # keyframe immediately, not whenever this encoder's own
-            # periodic GOP boundary happens to land. Raw (A) has no
-            # equivalent: we cannot force a keyframe on the camera's own
-            # encoder, so switching back to raw waits for its next
-            # naturally occurring one (accepted asymmetry, within at most
-            # one GOP interval).
-            self._pending_keyframe = True
-            Gst, _GstWebRTC, _GstSdp, GstVideo = _import_gst()
-            event = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, 0)
-            self._annotated_encoder.send_event(event)
-            _live_stream_logger.info("Keyframe requested: camera=%s", self._camera_id)
-            _live_stream_logger.info("AI encoder active: camera=%s", self._camera_id)
-
-        pad = self._selector_pads[target]
-        self._input_selector.set_property("active-pad", pad)
-        self._current_input = target
-        _live_stream_logger.info(
-            "Selector switched: camera=%s, active=%s", self._camera_id, target.name
-        )
-
-    def _on_selector_output(self, _pad: Any, info: Any) -> Any:
-        """Runs on a GStreamer streaming thread (pad probe). Sees every
-        buffer that reaches the browser, from whichever input is
-        currently active -- the one place "first buffer since the last
-        switch" is unambiguous without a probe per input branch."""
-        Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
-        gst_buffer = info.get_buffer()
-        if gst_buffer is None:
-            return Gst.PadProbeReturn.OK
-
-        if self._pending_keyframe and not gst_buffer.has_flags(Gst.BufferFlags.DELTA_UNIT):
-            self._pending_keyframe = False
-            _live_stream_logger.info("Keyframe received: camera=%s", self._camera_id)
-
-        if self._pending_first_packet:
-            self._pending_first_packet = False
-            target = self._switch_target
-            started_at = self._switch_started_at
-            latency_ms = (time.monotonic() - started_at) * 1000 if started_at is not None else None
-            _live_stream_logger.info(
-                "First output packet: camera=%s, input=%s",
-                self._camera_id,
-                target.name if target is not None else "unknown",
-            )
-            _live_stream_logger.info(
-                "Switch complete: camera=%s, target=%s, total_switch_latency_ms=%s",
-                self._camera_id,
-                target.name if target is not None else "unknown",
-                f"{latency_ms:.1f}" if latency_ms is not None else "unknown",
-            )
-
-        return Gst.PadProbeReturn.OK
-
     # -- Transport-level logging -----------------------------------------
 
     def _on_rtp_buffer(self, _pad: Any, _info: Any) -> Any:
@@ -556,10 +396,9 @@ class CameraWebRtcBranch:
         ``_ice_gathering_complete`` staleness bug below. Rebuilding fresh
         sidesteps relying on libnice/webrtcbin's own ICE-restart support
         -- every connection is now structurally identical to the (always
-        reliable) first one. Never touches the persistent selector/input
-        chains, and is unrelated to ``select_input()``, which still never
-        touches webrtcbin/payloader/the peer connection."""
-        if self._input_selector is None:
+        reliable) first one. Never touches the persistent annotated input
+        chain."""
+        if self._chain_output is None:
             raise RuntimeError(f"WebRTC branch not built for camera {self._camera_id}")
         Gst, GstWebRTC, GstSdp, _GstVideo = _import_gst()
 
@@ -664,20 +503,11 @@ class CameraWebRtcBranch:
 
     def teardown(self) -> None:
         Gst, _GstWebRTC, _GstSdp, _GstVideo = _import_gst()
-        cid = self._camera_id
-
-        self._appsrc_bridge.remove_appsrc(cid)
 
         # Handles the RTP-buffer probe + payloader/webrtc_caps/webrtcbin
-        # (including quiescing the selector's src pad first) -- a no-op if
-        # no browser ever connected to this camera.
+        # (including quiescing the annotated chain's src pad first) -- a
+        # no-op if no browser ever connected to this camera.
         self._teardown_webrtc_transport()
-
-        if self._switch_output_probe_id is not None and self._input_selector is not None:
-            selector_src_pad = self._input_selector.get_static_pad("src")
-            if selector_src_pad is not None:
-                selector_src_pad.remove_probe(self._switch_output_probe_id)
-        self._switch_output_probe_id = None
 
         if self._annotate_probe_id is not None and self._annotate_probe_target is not None:
             self._annotate_probe_target.remove_probe(self._annotate_probe_id)
@@ -705,9 +535,7 @@ class CameraWebRtcBranch:
             self._sgie_tee.release_request_pad(self._sgie_tee_pad)
             self._sgie_tee_pad = None
 
-        self._appsrc = None
-        self._input_selector = None
-        self._selector_pads = {}
+        self._chain_output = None
         self._annotated_encoder = None
         self._webrtcbin = None
 

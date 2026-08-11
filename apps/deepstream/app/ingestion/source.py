@@ -12,8 +12,12 @@ be exercised on real Jetson/DeepStream hardware.
 Element chain per camera (Jetson hardware decode):
     rtspsrc -> rtph264depay -> h264parse -> bitstream-tee ->
         { bitstream-queue -> bitstream-sink (bitstream stub terminator --
-          Live Streaming's BitstreamPublisher attaches here; encoded
-          H.264, no decode -- see media_publisher/bitstream.py)
+          a future pre-decode consumer, e.g. Recording, attaches here via
+          BitstreamPublisher; encoded H.264, no decode -- see
+          media_publisher/bitstream.py. Currently dormant: ADR-030
+          removed Live Streaming as this tee's consumer -- browser video
+          delivery is AI-annotated-only, tapped downstream of SGIE, not
+          from this pre-decode tee)
         , nvv4l2decoder -> tier1-tee ->
               { tier1-raw-queue -> tier1-raw-sink (Tier 1 stub terminator)
               , valve -> [ghost src pad] (Tier 2 / AI path)
@@ -46,11 +50,11 @@ otherwise unchanged: decoder now feeds the tee instead of the valve
 directly, and the tee's other branch feeds the valve exactly as the
 decoder used to.
 
-Live Streaming architecture reset: the bin also owns one bitstream
+Media Architecture Reset (ADR-028): the bin also owns one bitstream
 ``tee`` (see ``pipeline/frame_distributor.py``'s ``attach_bitstream_branch``),
 positioned between ``h264parse`` and ``nvv4l2decoder`` -- one earlier
-than the Tier 1 tee -- so Live Streaming's raw passthrough is
-structurally independent of decode/AI state entirely, per
+than the Tier 1 tee -- so a future pre-decode consumer is structurally
+independent of decode/AI state entirely, per
 ``docs/DEEPSTREAM_PIPELINE_SPEC.md``'s "every media representation
 exists exactly once" principle: the camera's original H.264 has exactly
 one producer (this bin's own ``h264parse``), and the bitstream tee is
@@ -61,7 +65,11 @@ correct: AU-aligned, caps/SPS-PPS and timestamp continuity identical on
 both branches, decoder unaffected downstream of it. The decode/AI path's
 element count and behavior are otherwise unchanged: the parser now feeds
 the bitstream tee instead of the decoder directly, and the tee's other
-branch feeds the decoder exactly as the parser used to.
+branch feeds the decoder exactly as the parser used to. ADR-030 removed
+this tee's only registered consumer (Live Streaming's raw passthrough);
+the tee itself is kept, dormant, as reusable pre-decode infrastructure
+(e.g. for the postponed Recording service, ADR-029 Phase 9+) rather than
+removed along with it.
 """
 
 from __future__ import annotations
@@ -156,8 +164,8 @@ def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
     # source.transport, which is the Media Distribution Interface's own
     # "rtsp" vs. future "shm"/"srt" transport-*type* tag, not a GStreamer
     # RTSP lower-transport value; the two are unrelated despite the shared
-    # field name) matches apps/live_stream's own proven, hardware-validated
-    # subscriber (shared/media_transport/rtsp.py's build_rtsp_source_element).
+    # field name) matches the proven, hardware-validated subscriber pattern
+    # in shared/media_transport/rtsp.py's build_rtsp_source_element.
     rtspsrc.set_property("protocols", "tcp")
     rtspsrc.set_property("latency", latency_ms)
     valve.set_property("drop", False)

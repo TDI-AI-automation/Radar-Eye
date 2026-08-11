@@ -182,10 +182,10 @@ Not this service's responsibility:
 Consumes `ObservationEvent` directly — not gated on Incident Service or
 Alert Service state. Metadata-only in: no frame data is sent to this
 service by AI Runtime. When a full frame is actually needed, it is
-requested/captured from AI Streaming (the same published representation
-Live Streaming already subscribes to), never a new output DeepStream
-creates for this purpose — see `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage
-8.7. AI Runtime gains no JPEG/image-writing responsibility.
+requested/captured from DeepStream's diagnostic RTSP output (Stage 5.5,
+ADR-030), never a new output DeepStream creates for this purpose — see
+`docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 8.7. AI Runtime gains no
+JPEG/image-writing responsibility.
 
 Responsibilities:
 

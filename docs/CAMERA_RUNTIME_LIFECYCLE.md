@@ -8,14 +8,22 @@ defect was fixed. Not user documentation — this is the "read this instead
 of the source" document for a new engineer joining the subsystem.
 
 **Migration in progress (ADR-028, "Media Architecture Reset"):** camera
-ingestion and Live Streaming/WebRTC are being extracted out of this
-runtime into independent processes — see `docs/DEEPSTREAM_PIPELINE_SPEC.md`'s
-Pipeline Overview/Stage 1/Stage 1.5 for the target state. This document
-still accurately describes the runtime as it exists *today*, mid-migration;
-sections describing camera source-bin construction, the bitstream tee,
-and `live_stream/` will be rewritten as each migration phase lands.
-Section 7's superseded bullet is marked below rather than silently
-removed, to keep the historical record of what was decided and why.
+ingestion was extracted out of this runtime into an independent process
+— see `docs/DEEPSTREAM_PIPELINE_SPEC.md`'s Pipeline Overview/Stage 1 for
+the target state. This document still accurately describes the runtime
+as it exists *today*, mid-migration; sections describing camera
+source-bin construction will be rewritten as each migration phase
+lands. Section 7's superseded bullet is marked below rather than
+silently removed, to keep the historical record of what was decided
+and why.
+
+**Reversed by ADR-030:** Live Streaming/WebRTC is not being extracted
+into a second independent process after all. `apps/deepstream/app/live_stream/`
+stays inside this runtime, permanently, as DeepStream's own
+AI-annotated-only browser video-output path — see
+`docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 5.5. Only Camera Ingestion
+(camera connection ownership) was extracted; browser video delivery was
+not.
 
 ---
 
@@ -371,17 +379,28 @@ redesign, just where new work should attach:
 - ~~**RTSP/WebRTC streaming to the frontend** — likewise a new Tier 1/Tier
   2 consumer; Media Publisher was built with zero default subscribers
   specifically so a real transport can be added without touching the
-  publisher lifecycle itself.~~ **Superseded by ADR-028.** This
-  direction was followed (`apps/deepstream/app/live_stream/`, tapping
+  publisher lifecycle itself.~~ **Superseded by ADR-028, then ADR-028's
+  reversal superseded by ADR-030.** This direction was originally
+  followed (`apps/deepstream/app/live_stream/`, tapping
   `MediaPublisher`'s bitstream tee, sharing this runtime's one
-  `Gst.Pipeline`) and subsequently found to be the direct cause of a
-  real production defect: live video became architecturally hostage to
-  AI model-loading time, since the shared pipeline's state-change walk
-  processes every child element serially. ADR-028 reverses this
-  direction — Live Streaming is now an independent process, subscribing
-  to a locally re-published copy of the camera's stream, never
-  attached to this runtime's `MediaPublisher`/`Gst.Pipeline` at all.
-  See `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 1.5.
+  `Gst.Pipeline`) and found to be the direct cause of a real production
+  defect: live video became architecturally hostage to AI
+  model-loading time, since the shared pipeline's state-change walk
+  processes every child element serially — but that specific defect was
+  caused by *camera ingestion* (`rtspsrc`/depay) sharing the pipeline
+  with `nvinfer`'s blocking model load, not by WebRTC delivery itself.
+  ADR-028 fixed it by extracting camera ingestion into an independent
+  Camera Ingestion Service (Stage 1) — DeepStream now only ever
+  subscribes to Camera Ingestion's already-running, already-republished
+  stream, so `set_state()` never again waits on model loading before
+  video can flow. ADR-028 additionally moved Live Streaming itself into
+  a second independent process; ADR-030 reverses that second part —
+  Radar Eye has no product requirement for raw/non-AI video, so
+  `apps/deepstream/app/live_stream/` stays inside this runtime
+  permanently as the sole, AI-annotated-only browser video-output path,
+  with the original defect's actual root cause (camera ingestion
+  sharing a pipeline with model loading) unaffected and still fixed.
+  See `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 5.5.
 - **Event-driven Desired State updates** — replacing §1.3's temporary
   poll loop. `DesiredStateSynchronizer.synchronize()` already "takes no
   transport-specific arguments and is safe to call from anywhere" (its
