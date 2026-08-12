@@ -117,8 +117,7 @@ class LiveStreamManager:
         if branch is None:
             return
         try:
-            future = self._bridge.schedule_on_mainloop(branch.teardown)
-            await asyncio.wrap_future(future)
+            await branch.teardown()
         except Exception:
             logger.exception(
                 "Live Monitoring failed to tear down WebRTC branch for camera %s", camera_id
