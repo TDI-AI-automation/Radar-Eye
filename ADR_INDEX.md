@@ -755,6 +755,10 @@ Amended by ADR-030:
 
 The process-separation and dual-channel (Live View + AI Streaming) decision for *video delivery* is superseded. Camera Ingestion's one-upstream-connection-per-camera ownership, and the operational constraint requiring it, are unchanged and remain in force.
 
+Amended by ADR-031:
+
+The `webrtcbin`/signaling transport mechanism described here is replaced by HLS. DeepStream remaining the sole owner/producer of browser-facing video (this ADR's core decision) is unchanged.
+
 ---
 
 # ADR-029
@@ -852,3 +856,49 @@ If DeepStream is unavailable, Radar Eye's surveillance video is unavailable. Thi
 Reason:
 
 Radar Eye's product scope is AI-annotated video, not generic live camera streaming. Architecture should reflect the product it serves rather than preserve generality for a capability that was never a requirement.
+
+Amended by ADR-031:
+
+The `webrtcbin` transport mechanics referenced in this ADR's Decision are replaced by HLS -- see ADR-031. This ADR's own core decision (DeepStream is the sole owner/producer of browser-facing video; AI-annotated-only; no raw channel) is unchanged.
+
+---
+
+# ADR-031
+
+Decision:
+
+HLS Video Delivery -- replaces `webrtcbin`/WebRTC as the browser-facing video transport; DeepStream's AI pipeline becomes fully persistent and is never mutated by a browser connecting, disconnecting, or refreshing.
+
+Status:
+
+ACCEPTED
+
+Supersedes:
+
+ADR-030's and ADR-028's `webrtcbin`/WebRTC transport mechanics (SDP offer/answer, ICE/DTLS lifecycle, the local signaling server, and the per-browser-connection transport sub-branch rebuilt on every `handle_offer()` call). ADR-030's core decision -- DeepStream is the sole owner/producer of browser-facing video, AI-annotated-only, no raw channel, no second Live Streaming process -- is not superseded; this ADR only changes the wire protocol video is delivered over.
+
+Not superseded:
+
+`Camera Ingestion -> AI Runtime -> ObservationEvent -> EventBus`, ADR-027's anti-corruption layer, ADR-029's phase sequence, and Incident Service are all unaffected by this ADR, same as they were unaffected by ADR-030.
+
+Context:
+
+ADR-030 kept WebRTC (`webrtcbin`) as the browser transport, moving only which process owned it. In production use this repeatedly surfaced as the dominant source of engineering cost and instability in the video path: ICE/SDP renegotiation edge cases, a `webrtcbin` reuse bug requiring a fresh transport triple rebuilt on every single browser (re)connection, backpressure/deadlock failure modes when a browser peer went unresponsive, and a multi-session glass-to-glass latency investigation (see `apps/deepstream/app/live_stream/branch.py`'s git history for the `idrinterval` root-cause fix that came out of it) that, even after fixing a real root cause (IDR cadence), left WebRTC's per-connection lifecycle as an ongoing source of complexity disproportionate to the product's actual latency requirement (a surveillance UI, not a real-time conferencing product).
+
+Problem:
+
+The DeepStream AI pipeline dynamically created and destroyed a WebRTC transport sub-branch (queue, payloader, `webrtcbin`) on every browser connect/reconnect -- a fresh transport triple per `handle_offer()` call, requested/released against a permanent output tee. Every reconnect, browser refresh, or additional viewer touched live GStreamer pipeline state inside the same process running PGIE/tracker/SGIE, and a stuck/unresponsive browser peer's `webrtcbin` internals had a documented, hardware-confirmed path to stall the shared SGIE tee -- i.e., a browser-side problem could, in the wrong conditions, affect AI inference for every camera. This is exactly the kind of coupling ADR-028/ADR-029 already eliminated elsewhere (camera connectivity, subsystem process boundaries); WebRTC's per-connection lifecycle re-introduced an equivalent coupling inside the video-delivery branch itself.
+
+Decision:
+
+Replace `webrtcbin` with `hlssink2` (HTTP Live Streaming) as the AI-annotated branch's output sink. Per camera, DeepStream builds exactly one linear chain once, when the camera is added, and tears it down exactly once, when the camera is removed: SGIE tee -> queue -> `nvvideoconvert` -> `nvdsosd` -> `nvvideoconvert` -> `nvv4l2h264enc` -> `h264parse` -> `hlssink2`, writing rolling `segment*.ts` + `playlist.m3u8` files to a shared output directory (`configs/live_stream.yaml`'s `output_dir`, short segments -- `segment_target_duration_seconds: 2`, `playlist_length: 3` -- for low glass-to-browser latency). No output tee, no per-connection sub-branch, no dynamic pad request/release tied to browser activity: `hlssink2` is a single permanent consumer, structurally identical to writing to a file. `apps.api` serves the same directory directly over authenticated HTTP (`GET /cameras/{camera_id}/hls/playlist.m3u8`, `GET /cameras/{camera_id}/hls/{segment_name}`) -- a file hand-off via a shared directory, not a network proxy to a DeepStream-hosted signaling server. The browser plays it via `hls.js` (not native HLS -- native playback cannot attach the `Authorization` header this API requires). All WebRTC-specific code is removed: `webrtcbin`, the local FastAPI signaling server (`apps/deepstream/app/live_stream/signaling_server.py`), the SDP offer/answer proxy route, the output tee and its per-connection transport sub-branch, and the `POST /cameras/{camera_id}/webrtc/offer` contract.
+
+Consequences:
+
+Glass-to-browser latency is now bounded below by HLS segmenting (roughly `playlist_length * segment_target_duration_seconds`, ~3-6s as configured) rather than WebRTC's sub-second potential -- accepted, since Radar Eye's surveillance product has no sub-second latency requirement and this trades a latency ceiling that was never actually being hit reliably in practice for the complete removal of per-connection pipeline mutation, ICE/DTLS/SDP lifecycle, and the coupling failure mode described above. DeepStream is now provably unaffected by browser activity of any kind -- measured directly (2026-08-16): CPU, RSS, and GPU utilization/memory are indistinguishable between zero and three simultaneous browser viewers, since `hlssink2` has no concept of a connected viewer at all. A DeepStream crash now means the last-written HLS files simply stop updating (playback stalls, does not error) until DeepStream restarts and resumes writing -- consistent with ADR-030's already-accepted trade-off that there is no product requirement to view video with no AI running.
+
+Reason:
+
+A dynamically-mutated, per-connection network transport living inside the same process as AI inference is unnecessary architectural surface and a proven source of coupling and instability for a product with no sub-second-latency requirement. A persistent AI pipeline writing to a stable, protocol-simple output that a separate, already-existing authenticated HTTP layer serves is both simpler and structurally incapable of the failure modes WebRTC's lifecycle introduced.
+
+---

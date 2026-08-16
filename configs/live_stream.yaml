@@ -1,4 +1,4 @@
-# Live Monitoring's permanent video delivery path (WebRTC).
+# Live Monitoring's permanent video delivery path (HLS, ADR-031).
 #
 # Unlike configs/visualization.yaml (an optional RTSP diagnostic feature,
 # off by default), this is core Camera Runtime functionality -- a
@@ -11,15 +11,17 @@
 
 enabled: true
 
-# Signaling server bind host/port -- 127.0.0.1 only, never network-exposed.
-# apps.api is the sole externally-reachable authenticated door; it proxies
-# the SDP offer/answer exchange to this address (POST /cameras/{id}/webrtc/offer).
-host: 127.0.0.1
-port: 8590
+# Where hlssink2 writes each camera's segment*.ts + playlist.m3u8 (one
+# subdirectory per camera_id). apps.api reads from this same path to
+# serve it over HTTP -- keep this in sync with configs/api.yaml (or
+# wherever LiveStreamHttpSettings is configured) if you change it.
+output_dir: /tmp/radar-eye/hls
 
 output_codec: h264
 output_bitrate: 4000000
 
-# Empty -- a single-node, air-gapped, LAN deployment only ever needs host
-# ICE candidates; no STUN/TURN server is reachable or required.
-stun_servers: []
+# Short segments keep glass-to-browser latency low (roughly
+# playlist_length * segment_target_duration_seconds).
+segment_target_duration_seconds: 2
+playlist_length: 3
+max_segment_files: 10

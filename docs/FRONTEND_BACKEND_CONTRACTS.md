@@ -57,43 +57,46 @@ Purpose:
 
 Real-time operational monitoring.
 
-## WebRTC
+## HLS Video Delivery (ADR-031)
 
-POST /cameras/{camera_id}/webrtc/offer
-
-Request:
-
-{
-  "sdp": "...",
-  "type": "offer"
-}
+GET /cameras/{camera_id}/hls/playlist.m3u8
 
 Response:
 
-{
-  "sdp": "...",
-  "type": "answer"
-}
+HLS playlist (`application/vnd.apple.mpegurl`), `Cache-Control: no-store`.
+
+GET /cameras/{camera_id}/hls/{segment_name}
+
+Response:
+
+One MPEG-TS segment (`video/mp2t`), `Cache-Control: no-store`.
+`segment_name` must match DeepStream's own `hlssink2` naming pattern
+exactly (`segment#####.ts`) — anything else 404s before touching the
+filesystem.
 
 Purpose:
 
-Live video delivery. The browser sends one SDP offer per
-`RTCPeerConnection`; this route returns the SDP answer. Once
-negotiated, media flows directly between the browser and DeepStream —
-never through this route, and never through the API service at all.
+Live video delivery. `apps.api` serves these files directly off disk —
+they're written by `apps.deepstream`'s `hlssink2` (a shared directory
+hand-off, `configs/live_stream.yaml`'s `output_dir`), not proxied
+through any DeepStream-hosted server or signaling exchange. The browser
+plays the playlist via `hls.js` (not native `<video src>` HLS — native
+playback has no way to attach the `Authorization` header both routes
+require, since this API uses bearer tokens, not cookies).
 
-Backend ownership (ADR-030):
+Backend ownership (ADR-030/ADR-031):
 
-This route proxies the offer/answer exchange to **DeepStream**'s own
-WebRTC signaling server — see `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage
-5.5), loopback-only, never network-exposed directly. The frontend has
-no awareness of, and no dependency on, which backend process answers
-this route — `WebRtcVideoProvider`'s contract is exactly the
-request/response shape above, nothing more.
+DeepStream is the sole producer of these files (Stage 5.5), and is
+never touched by a browser requesting them — connecting, disconnecting,
+refreshing, or how many browsers are watching, are all invisible to
+DeepStream; it writes the same rolling segments/playlist regardless.
+The frontend has no awareness of, and no dependency on, which backend
+process wrote the files it's reading — `HlsVideoProvider`'s contract is
+exactly the two routes above, nothing more.
 
 Channels:
 
-Exactly one representation exists behind this route: DeepStream's
+Exactly one representation exists behind these routes: DeepStream's
 AI-annotated output. There is no raw/non-AI channel (ADR-030) — Radar
 Eye has no product requirement to show camera video independent of AI
 processing. The browser never sees "raw," "annotated," or "AI" in this

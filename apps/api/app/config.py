@@ -160,32 +160,28 @@ def get_settings() -> Settings:
 DEFAULT_LIVE_STREAM_PATH = REPO_ROOT / "configs" / "live_stream.yaml"
 
 
-class LiveStreamProxySettings(BaseModel):
-    """Where the local-only, 127.0.0.1-bound signaling server inside
-    apps.deepstream is listening -- apps.api proxies
-    ``POST /cameras/{camera_id}/webrtc/offer`` to it (ADR-011,
-    "centralized access control": apps.api is the sole externally-
-    reachable authenticated door; apps.deepstream's signaling server has
-    no auth of its own and is never network-exposed).
+class LiveStreamHttpSettings(BaseModel):
+    """Where apps.deepstream's ``hlssink2`` writes each camera's HLS
+    segments/playlist (ADR-031) -- apps.api serves this directory
+    directly over authenticated HTTP (``GET /cameras/{camera_id}/hls/...``,
+    ADR-011 "centralized access control": apps.api is the sole
+    externally-reachable authenticated door). File-based hand-off, not a
+    network proxy: both processes read the *same*
+    ``configs/live_stream.yaml`` independently (one file, one source of
+    truth for the path), and there is no other cross-process
+    communication between them for video besides this shared directory."""
 
-    Reads the *same* ``configs/live_stream.yaml`` apps.deepstream's own
-    ``LiveStreamSettings`` reads -- one file, one source of truth for
-    host/port, each process parsing it independently (there is no other
-    cross-process communication between them besides the shared
-    database; see apps/deepstream/app/config.py's LiveStreamSettings)."""
-
-    host: str = "127.0.0.1"
-    port: int = 8590
+    output_dir: str = "/tmp/radar-eye/hls"
 
 
-def load_live_stream_proxy_settings(
+def load_live_stream_http_settings(
     live_stream_path: Path | None = None,
-) -> LiveStreamProxySettings:
+) -> LiveStreamHttpSettings:
     path = live_stream_path or DEFAULT_LIVE_STREAM_PATH
     raw = _load_yaml(path)
-    return LiveStreamProxySettings(host=raw.get("host", "127.0.0.1"), port=raw.get("port", 8590))
+    return LiveStreamHttpSettings(output_dir=raw.get("output_dir", "/tmp/radar-eye/hls"))
 
 
 @lru_cache
-def get_live_stream_proxy_settings() -> LiveStreamProxySettings:
-    return load_live_stream_proxy_settings()
+def get_live_stream_http_settings() -> LiveStreamHttpSettings:
+    return load_live_stream_http_settings()

@@ -186,25 +186,6 @@ class CameraBrandInfoSchema(BaseModel):
     default_stream_path: str
 
 
-class WebRtcOfferRequestSchema(BaseModel):
-    """Body of ``POST /cameras/{camera_id}/webrtc/offer`` -- Live
-    Monitoring's video signaling. Non-trickle: the browser has already
-    finished gathering its own ICE candidates before sending this (see
-    apps.deepstream.app.live_stream's module docstring), so this single
-    request/response is the entire SDP exchange."""
-
-    sdp: str
-    type: str = "offer"
-
-
-class WebRtcAnswerResponseSchema(BaseModel):
-    """Response body -- this server's answer, ICE already fully gathered
-    (also non-trickle)."""
-
-    sdp: str
-    type: str = "answer"
-
-
 class CameraCalibrationSchema(BaseModel):
     """Ground-plane calibration for a camera (ADR-016).
 

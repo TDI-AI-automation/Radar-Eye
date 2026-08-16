@@ -33,17 +33,18 @@ a name/location edit).
 
 from __future__ import annotations
 
+import re
 import uuid
-from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.audit import AuditLogger
-from apps.api.app.config import LiveStreamProxySettings, Settings, get_live_stream_proxy_settings
+from apps.api.app.config import LiveStreamHttpSettings, Settings, get_live_stream_http_settings
 from apps.api.app.models.camera import Camera, CameraCalibration, CameraStreamProfile
 from apps.api.app.models.user import ROLE_ADMIN
 from apps.api.app.repositories.camera import (
@@ -76,8 +77,6 @@ from shared.schemas.camera import (
     CameraCreateRequestSchema,
     CameraSchema,
     CameraUpdateRequestSchema,
-    WebRtcAnswerResponseSchema,
-    WebRtcOfferRequestSchema,
 )
 
 router = APIRouter(tags=["Camera Management"], dependencies=[Depends(get_current_user)])
@@ -319,52 +318,54 @@ async def delete_camera(
     return ApiResponse(success=True, data=None)
 
 
-async def get_webrtc_proxy_client() -> AsyncIterator[httpx.AsyncClient]:
-    """Isolated from the test client's own ``httpx.AsyncClient`` usage via
-    FastAPI's dependency-override mechanism (``app.dependency_overrides``)
-    rather than monkeypatching ``httpx.AsyncClient.post`` globally -- the
-    latter would also intercept the test's own calls into this app."""
-    async with httpx.AsyncClient() as client:
-        yield client
+_HLS_SEGMENT_NAME_RE = re.compile(r"^segment\d{5}\.ts$")
+"""Matches hlssink2's own fixed ``location`` pattern (see
+apps/deepstream/app/live_stream/branch.py, ``segment%05d.ts``) exactly --
+the sole validation ``get_camera_hls_segment`` applies to its path
+parameter before touching the filesystem, so an unexpected value (e.g.
+``..``) is rejected outright rather than ever reaching a path join."""
 
 
-@router.post(
-    "/cameras/{camera_id}/webrtc/offer",
-    response_model=ApiResponse[WebRtcAnswerResponseSchema],
-)
-async def post_webrtc_offer(
+def _hls_camera_dir(output_dir: str, camera_id: uuid.UUID) -> Path:
+    return Path(output_dir) / str(camera_id)
+
+
+def _hls_file_response(path: Path, *, media_type: str) -> FileResponse:
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera video is not currently available")
+    # no-store: a live playlist/segment must never be served stale from any
+    # cache between here and the browser -- hls.js also re-fetches the
+    # playlist on its own schedule regardless, but this makes it explicit.
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/cameras/{camera_id}/hls/playlist.m3u8")
+async def get_camera_hls_playlist(
     camera_id: uuid.UUID,
-    body: WebRtcOfferRequestSchema,
-    live_stream_settings: Annotated[
-        LiveStreamProxySettings, Depends(get_live_stream_proxy_settings)
-    ],
-    http_client: Annotated[httpx.AsyncClient, Depends(get_webrtc_proxy_client)],
-) -> ApiResponse[WebRtcAnswerResponseSchema]:
-    """Live Monitoring's video signaling -- proxies the SDP offer/answer
-    exchange to apps.deepstream's local-only (127.0.0.1) signaling
-    server. This is the one point where the operator's browser reaches
-    Live Monitoring's video path; the actual media (once negotiated)
-    flows directly between the browser and apps.deepstream over WebRTC,
-    not through this route (see apps.deepstream.app.live_stream's module
-    docstring). Gated by the router-level ``get_current_user`` dependency
-    like every other route here -- ADR-011's "centralized access
-    control" applied to signaling, same as everything else in this file.
-    """
-    url = (
-        f"http://{live_stream_settings.host}:{live_stream_settings.port}"
-        f"/cameras/{camera_id}/webrtc/offer"
+    live_stream_settings: Annotated[LiveStreamHttpSettings, Depends(get_live_stream_http_settings)],
+) -> FileResponse:
+    """Live Monitoring's video delivery (ADR-031) -- serves the HLS
+    playlist apps.deepstream's ``hlssink2`` writes for this camera
+    directly off disk. Gated by the router-level ``get_current_user``
+    dependency like every other route here -- ADR-011's "centralized
+    access control." 404 (not 503) when the camera has no branch built
+    yet or DeepStream hasn't written a first playlist -- matches
+    ``VideoProvider``'s "unavailable" status, not an error condition."""
+    camera_dir = _hls_camera_dir(live_stream_settings.output_dir, camera_id)
+    return _hls_file_response(
+        camera_dir / "playlist.m3u8", media_type="application/vnd.apple.mpegurl"
     )
-    try:
-        response = await http_client.post(url, json=body.model_dump(), timeout=15.0)
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Live Monitoring's video service is unavailable",
-        ) from exc
 
-    if response.status_code == status.HTTP_404_NOT_FOUND:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera not connected to Live Monitoring")
-    if response.status_code != status.HTTP_200_OK:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to negotiate WebRTC stream")
 
-    return ApiResponse(success=True, data=WebRtcAnswerResponseSchema(**response.json()))
+@router.get("/cameras/{camera_id}/hls/{segment_name}")
+async def get_camera_hls_segment(
+    camera_id: uuid.UUID,
+    segment_name: str,
+    live_stream_settings: Annotated[LiveStreamHttpSettings, Depends(get_live_stream_http_settings)],
+) -> FileResponse:
+    """Serves one HLS segment (``segment*.ts``) referenced by this
+    camera's playlist -- see ``_HLS_SEGMENT_NAME_RE``."""
+    if not _HLS_SEGMENT_NAME_RE.fullmatch(segment_name):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera video is not currently available")
+    camera_dir = _hls_camera_dir(live_stream_settings.output_dir, camera_id)
+    return _hls_file_response(camera_dir / segment_name, media_type="video/mp2t")

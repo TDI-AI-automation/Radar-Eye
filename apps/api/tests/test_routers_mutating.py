@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.app.config import Settings, get_settings
+from apps.api.app.config import LiveStreamHttpSettings, Settings, get_settings
 from apps.api.app.main import create_app
 from apps.api.app.models.camera import Camera
 from apps.api.app.models.human_review import HumanReviewItem
@@ -39,7 +38,7 @@ from apps.api.app.repositories.media import (
     CameraMediaEndpointRepository,
     CameraSubsystemHealthRepository,
 )
-from apps.api.app.routers.cameras import get_webrtc_proxy_client
+from apps.api.app.routers.cameras import get_live_stream_http_settings
 from apps.api.app.security.auth import create_token_pair, hash_password
 from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
@@ -557,109 +556,101 @@ class TestCamerasBrands:
             assert entry["label"]
 
 
-class _FakeWebRtcProxyClient:
-    """Stands in for httpx.AsyncClient in the webrtc proxy route. Wired in
-    via app.dependency_overrides[get_webrtc_proxy_client] rather than
-    monkeypatching httpx.AsyncClient.post globally -- the latter would
-    also intercept this test file's own _client(app) calls, which are
-    themselves httpx.AsyncClient instances."""
-
-    def __init__(self, post_impl) -> None:  # noqa: ANN001
-        self._post_impl = post_impl
-
-    async def post(self, url, *, json, timeout):  # noqa: ANN001
-        return await self._post_impl(url, json=json, timeout=timeout)
-
-
 @pytest.mark.asyncio
-class TestWebRtcOfferProxy:
-    """POST /cameras/{camera_id}/webrtc/offer -- proxies to apps.deepstream's
-    local-only signaling server via httpx. Stubs the get_webrtc_proxy_client
-    dependency rather than requiring a real deepstream process, matching
+class TestCameraHlsDelivery:
+    """GET /cameras/{camera_id}/hls/playlist.m3u8 and
+    .../hls/{segment_name} -- Live Monitoring's video delivery (ADR-031).
+    Serves whatever apps.deepstream's hlssink2 has written directly off
+    disk; overrides get_live_stream_http_settings to point at a pytest
+    tmp_path rather than requiring a real deepstream process, matching
     this file's existing "no real external service" testing convention."""
 
-    _BODY = {"sdp": "v=0\r\n...offer...", "type": "offer"}
-
-    async def test_requires_authentication(
+    async def test_playlist_requires_authentication(
         self, db_engine, db_session, test_settings: Settings
     ) -> None:
         app = create_app(settings=test_settings)
         async with await _client(app) as client:
-            response = await client.post(f"/cameras/{uuid.uuid4()}/webrtc/offer", json=self._BODY)
+            response = await client.get(f"/cameras/{uuid.uuid4()}/hls/playlist.m3u8")
         assert response.status_code == 401
 
-    async def test_proxies_offer_and_returns_answer(
-        self, db_engine, db_session, test_settings: Settings
+    async def test_playlist_served_when_present(
+        self, db_engine, db_session, test_settings: Settings, tmp_path
     ) -> None:
         viewer = await _make_user(db_session, ROLE_VIEWER)
         camera_id = uuid.uuid4()
-
-        class _FakeResponse:
-            status_code = 200
-
-            def json(self) -> dict:
-                return {"sdp": "v=0\r\n...answer...", "type": "answer"}
-
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            assert url.endswith(f"/cameras/{camera_id}/webrtc/offer")
-            assert json == TestWebRtcOfferProxy._BODY
-            return _FakeResponse()
+        camera_dir = tmp_path / str(camera_id)
+        camera_dir.mkdir()
+        playlist_body = "#EXTM3U\n#EXT-X-VERSION:3\n"
+        (camera_dir / "playlist.m3u8").write_text(playlist_body)
 
         app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
+        app.dependency_overrides[get_live_stream_http_settings] = lambda: LiveStreamHttpSettings(
+            output_dir=str(tmp_path)
         )
         async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{camera_id}/webrtc/offer",
-                json=self._BODY,
+            response = await client.get(
+                f"/cameras/{camera_id}/hls/playlist.m3u8",
                 headers=_auth_header(viewer, ROLE_VIEWER),
             )
         assert response.status_code == 200
-        assert response.json()["data"] == {"sdp": "v=0\r\n...answer...", "type": "answer"}
+        assert response.text == playlist_body
+        assert response.headers["cache-control"] == "no-store"
 
-    async def test_unreachable_deepstream_signaling_server_returns_503(
-        self, db_engine, db_session, test_settings: Settings
+    async def test_playlist_404_when_camera_not_streaming(
+        self, db_engine, db_session, test_settings: Settings, tmp_path
     ) -> None:
         viewer = await _make_user(db_session, ROLE_VIEWER)
 
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            raise httpx.ConnectError("connection refused")
-
         app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
+        app.dependency_overrides[get_live_stream_http_settings] = lambda: LiveStreamHttpSettings(
+            output_dir=str(tmp_path)
         )
         async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{uuid.uuid4()}/webrtc/offer",
-                json=self._BODY,
+            response = await client.get(
+                f"/cameras/{uuid.uuid4()}/hls/playlist.m3u8",
                 headers=_auth_header(viewer, ROLE_VIEWER),
             )
-        assert response.status_code == 503
+        assert response.status_code == 404
 
-    async def test_unknown_camera_returns_404(
-        self, db_engine, db_session, test_settings: Settings
+    async def test_segment_served_when_present(
+        self, db_engine, db_session, test_settings: Settings, tmp_path
     ) -> None:
         viewer = await _make_user(db_session, ROLE_VIEWER)
-
-        class _FakeResponse:
-            status_code = 404
-
-            def json(self) -> dict:
-                return {}
-
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            return _FakeResponse()
+        camera_id = uuid.uuid4()
+        camera_dir = tmp_path / str(camera_id)
+        camera_dir.mkdir()
+        segment_body = b"\x00\x01not-really-mpegts"
+        (camera_dir / "segment00000.ts").write_bytes(segment_body)
 
         app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
+        app.dependency_overrides[get_live_stream_http_settings] = lambda: LiveStreamHttpSettings(
+            output_dir=str(tmp_path)
         )
         async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{uuid.uuid4()}/webrtc/offer",
-                json=self._BODY,
+            response = await client.get(
+                f"/cameras/{camera_id}/hls/segment00000.ts",
+                headers=_auth_header(viewer, ROLE_VIEWER),
+            )
+        assert response.status_code == 200
+        assert response.content == segment_body
+
+    async def test_segment_name_must_match_hlssink2_pattern(
+        self, db_engine, db_session, test_settings: Settings, tmp_path
+    ) -> None:
+        """Rejects anything that isn't exactly hlssink2's own
+        ``segmentNNNNN.ts`` shape -- including path-traversal attempts --
+        before ever touching the filesystem (see
+        apps/api/app/routers/cameras.py's _HLS_SEGMENT_NAME_RE)."""
+        viewer = await _make_user(db_session, ROLE_VIEWER)
+        camera_id = uuid.uuid4()
+
+        app = create_app(settings=test_settings)
+        app.dependency_overrides[get_live_stream_http_settings] = lambda: LiveStreamHttpSettings(
+            output_dir=str(tmp_path)
+        )
+        async with await _client(app) as client:
+            response = await client.get(
+                f"/cameras/{camera_id}/hls/..%2F..%2Fetc%2Fpasswd",
                 headers=_auth_header(viewer, ROLE_VIEWER),
             )
         assert response.status_code == 404

@@ -437,11 +437,11 @@ def get_visualization_settings() -> VisualizationSettings:
 
 
 class LiveStreamSettings(BaseModel):
-    """Live Monitoring's permanent video delivery path (WebRTC) -- see
-    apps/deepstream/app/live_stream/. Unlike Visualization (an optional,
-    off-by-default RTSP diagnostic feature), this is core Camera Runtime
-    functionality: a connected camera must always be watchable, so
-    ``enabled`` defaults to ``true``.
+    """Live Monitoring's permanent video delivery path (HLS, ADR-031) --
+    see apps/deepstream/app/live_stream/. Unlike Visualization (an
+    optional, off-by-default RTSP diagnostic feature), this is core
+    Camera Runtime functionality: a connected camera must always be
+    watchable, so ``enabled`` defaults to ``true``.
 
     Overlay styling (colors, draw_* toggles, font size) is deliberately
     NOT duplicated here -- the live-stream OSD branch reuses
@@ -451,18 +451,29 @@ class LiveStreamSettings(BaseModel):
     place overlay appearance is configured."""
 
     enabled: bool = True
-    host: str = "127.0.0.1"
-    """Signaling server bind host -- 127.0.0.1 only, never network-exposed.
-    apps.api is the sole externally-reachable authenticated door (ADR-011,
-    "centralized access control"); it proxies the SDP offer/answer
-    exchange to this address."""
-    port: int = 8590
+    output_dir: str = "/tmp/radar-eye/hls"
+    """Where ``hlssink2`` writes each camera's segment*.ts + playlist.m3u8
+    (one subdirectory per camera_id). Transient, rolling data -- old
+    segments are deleted automatically once ``max_segment_files`` is
+    reached -- not evidence/recording storage (a separate, postponed
+    subsystem; see CLAUDE.md's Recording Rules). ``apps.api`` reads from
+    this same path to serve it over HTTP -- see
+    ``apps/api/app/config.py``'s ``LiveStreamHttpSettings``, which must be
+    kept pointed at the same directory."""
     output_codec: Literal["h264"] = "h264"
     output_bitrate: int = 4_000_000
-    stun_servers: list[str] = []
-    """Empty by default -- a single-node, air-gapped, LAN deployment only
-    ever needs host ICE candidates; no STUN/TURN server is reachable or
-    required."""
+    segment_target_duration_seconds: int = 2
+    """hlssink2's ``target-duration``. Short segments keep glass-to-
+    browser latency low (roughly playlist_length * this value); paired
+    with the ~1s IDR cadence set on the encoder below so each segment
+    boundary lands on (or very near) a real keyframe."""
+    playlist_length: int = 3
+    """hlssink2's ``playlist-length`` -- 3 is the HLS spec's own stated
+    minimum for a compliant live playlist (RFC 8216 6.3.3)."""
+    max_segment_files: int = 10
+    """hlssink2's ``max-files`` -- bounds disk usage by deleting the
+    oldest segment once this many exist on disk, independent of
+    playlist_length (which only bounds how many are *advertised*)."""
 
 
 def load_live_stream_settings(live_stream_path: Path | None = None) -> LiveStreamSettings:

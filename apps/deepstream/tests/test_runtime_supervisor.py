@@ -175,7 +175,7 @@ class TestValveStateTransitions:
 class TestValveChangedHook:
     """Generic, optional hook fired at the one place every valve mutation
     already funnels through -- currently unused by Live Monitoring's
-    WebRTC branch (apps/deepstream/app/live_stream/, ADR-030: AI-
+    HLS branch (apps/deepstream/app/live_stream/, ADR-030/031: AI-
     annotated-only, no runtime source switch to drive), but the hook
     itself remains a supported RuntimeSupervisor extension point."""
 

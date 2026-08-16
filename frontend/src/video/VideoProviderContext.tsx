@@ -1,18 +1,18 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { VideoProvider, VideoHandle } from "./VideoProvider";
-import { WebRtcVideoProvider } from "./WebRtcVideoProvider";
+import { HlsVideoProvider } from "./HlsVideoProvider";
 
 /**
  * The one place a concrete VideoProvider is chosen. `CameraTile` (Phase 3)
  * calls `useVideoProvider()` and never imports a concrete class directly
- * -- WebRtcVideoProvider (Live Monitoring's permanent video delivery
- * path) replaced PlaceholderVideoProvider here; swapping it again later
+ * -- HlsVideoProvider (Live Monitoring's permanent video delivery path,
+ * ADR-031) replaced WebRtcVideoProvider here; swapping it again later
  * changes only this file.
  */
 const VideoProviderContext = createContext<VideoProvider | null>(null);
 
 export function VideoProviderRoot({ children }: { children: ReactNode }) {
-  const provider = useMemo<VideoProvider>(() => new WebRtcVideoProvider(), []);
+  const provider = useMemo<VideoProvider>(() => new HlsVideoProvider(), []);
   return <VideoProviderContext.Provider value={provider}>{children}</VideoProviderContext.Provider>;
 }
 

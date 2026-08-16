@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type Hls from "hls.js";
 import { Maximize2, Circle, VideoOff } from "lucide-react";
 import type { Camera } from "@/domain/models/Camera";
 import type { ThreatAssessment } from "@/domain/models/ThreatAssessment";
@@ -42,11 +43,11 @@ export function LiveCameraTile({
   const [videoElementErrored, setVideoElementErrored] = useState(false);
   useEffect(() => setVideoElementErrored(false), [videoHandle]);
 
-  const stream =
-    videoHandle.status === "playing" && videoHandle.source instanceof MediaStream
+  const hls =
+    videoHandle.status === "playing" && isHlsInstance(videoHandle.source)
       ? videoHandle.source
       : null;
-  const isPlaying = stream !== null && !videoElementErrored;
+  const isPlaying = hls !== null && !videoElementErrored;
 
   const critical = threats.some((t) => t.requiresImmediateAction());
   const border = critical
@@ -61,7 +62,7 @@ export function LiveCameraTile({
     >
       <div className="relative aspect-video bg-black">
         {isPlaying ? (
-          <VideoStreamElement stream={stream} onError={() => setVideoElementErrored(true)} />
+          <VideoStreamElement hls={hls} onError={() => setVideoElementErrored(true)} />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/60">
             <VideoOff className="h-8 w-8 mb-2" strokeWidth={1.25} />
@@ -109,19 +110,24 @@ export function LiveCameraTile({
   );
 }
 
-/** Attaches a MediaStream via `srcObject` -- not settable as a plain JSX
- * attribute, so this needs a ref + effect rather than the div-based
- * placeholder's pure render. `onError` lets the caller fall back to the
- * "No Signal" state if playback itself fails after the WebRTC connection
- * already reported "playing". */
-function VideoStreamElement({ stream, onError }: { stream: MediaStream; onError: () => void }) {
+/** Attaches an already-loading Hls.js instance to a real <video> element
+ * via `attachMedia` -- the hls.js analogue of `video.srcObject =
+ * mediaStream` for the WebRTC provider this replaces. Needs a ref +
+ * effect rather than the div-based placeholder's pure render, same
+ * reason. `onError` lets the caller fall back to the "No Signal" state if
+ * playback itself fails after HlsVideoProvider already reported
+ * "playing". Detaches (not destroys -- HlsVideoProvider owns the
+ * instance's lifecycle) on unmount so a remount can reattach the same,
+ * still-loading instance without restarting playback. */
+function VideoStreamElement({ hls, onError }: { hls: Hls; onError: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.srcObject = stream;
-  }, [stream]);
+    hls.attachMedia(video);
+    return () => hls.detachMedia();
+  }, [hls]);
 
   return (
     <video
@@ -132,5 +138,14 @@ function VideoStreamElement({ stream, onError }: { stream: MediaStream; onError:
       onError={onError}
       className="absolute inset-0 h-full w-full object-cover"
     />
+  );
+}
+
+function isHlsInstance(source: unknown): source is Hls {
+  return (
+    source !== null &&
+    typeof source === "object" &&
+    "attachMedia" in source &&
+    "detachMedia" in source
   );
 }

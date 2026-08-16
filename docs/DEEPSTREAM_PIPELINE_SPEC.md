@@ -24,10 +24,22 @@ a second, independent Live Streaming Service with two channels (raw
 there is no raw/non-AI browser-facing video path and no separate Live
 Streaming process. DeepStream is the sole producer of the one video
 representation the browser ever receives — AI-annotated, encoded, and
-delivered directly over WebRTC (`webrtcbin`) through the existing,
-unchanged `apps.api` proxy contract. If DeepStream is unavailable,
-browser video is unavailable; this is an accepted trade-off, not a gap
-(see ADR-030's Consequences).
+written as HLS segments/playlist (`hlssink2`) that `apps.api` serves
+directly over authenticated HTTP (ADR-031). If DeepStream is
+unavailable, browser video is unavailable; this is an accepted
+trade-off, not a gap (see ADR-030's Consequences).
+
+**HLS Video Delivery (ADR-031): the AI-annotated branch is fully
+persistent, never mutated by browser activity.** ADR-030 kept WebRTC
+(`webrtcbin`) as the transport, which required a dynamic per-browser-
+connection transport sub-branch (built and torn down on every connect/
+reconnect) inside the same process running PGIE/tracker/SGIE. ADR-031
+replaces `webrtcbin` with `hlssink2`: one linear chain per camera, built
+once at camera-add and torn down once at camera-remove, with no output
+tee and no dynamic pad request/release of any kind. Browser
+connect/disconnect/refresh, and how many browsers are watching, never
+reach DeepStream at all — `apps.api` reads the same files independently
+for however many viewers there are.
 
 **Pipeline Decomposition (ADR-029): DeepStream is a pure CV engine.**
 Everything downstream of metadata extraction — Distance Estimation,
@@ -54,10 +66,11 @@ Encoded Split — every subsystem below subscribes independently,
     │   NVDEC → StreamMux → Primary GIE → NvDCF Tracker →
     │   Secondary GIE → Metadata Extraction (RuntimeAdapter, ADR-027)
     │       │
-    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → WebRTC
-    │       │       (webrtcbin) → apps.api proxy → Browser (ADR-030;
-    │       │       the sole video representation the browser ever
-    │       │       receives — no raw/non-AI channel exists)
+    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → HLS
+    │       │       (hlssink2) → apps.api serves the files directly →
+    │       │       Browser (ADR-030/ADR-031; the sole video
+    │       │       representation the browser ever receives — no
+    │       │       raw/non-AI channel exists)
     │       │
     │       └── Stage 5.6: ObservationEvent → published on the Event
     │               Bus (Stage 10) — DeepStream's last step; it does
@@ -100,8 +113,9 @@ AI video-output branch never re-runs inference, never re-parses
 `NvDsBatchMeta`, and cannot affect the Inference Path. What changed
 relative to ADR-028 is: it no longer owns the camera connection (Camera
 Ingestion still does — unchanged), but per ADR-030 it now *does* own
-browser video delivery directly, terminating `webrtcbin` itself rather
-than re-publishing for a separate Live Streaming process to pick up.
+browser video delivery directly, writing HLS segments/playlist
+(`hlssink2`, ADR-031) rather than re-publishing for a separate Live
+Streaming process to pick up.
 What ADR-029 changes is everything *below* DeepStream's metadata
 extraction: Distance Estimation, Threat Engine, Incident Service, Alert
 Service, and Hardware Action Service are no longer in-process calls
@@ -113,7 +127,7 @@ reacting to Stage 5.6's published `ObservationEvent`.
 once.** The camera's original encoded H.264 exists once (Stage 1).
 DeepStream's decoded NVMM frame exists once, inside DeepStream only.
 DeepStream's OSD-annotated encoded frame exists once per consumer
-purpose (Stage 5.5: one encode for the browser WebRTC output, one for
+purpose (Stage 5.5: one encode for the browser HLS output, one for
 the diagnostic RTSP output — see Stage 5.5's Output section). Every
 subsystem consumes one of those existing representations by
 subscribing to it; no subsystem creates another copy of a
@@ -406,15 +420,23 @@ inference or re-parses `NvDsBatchMeta`):
   (defaults `8554`/`radar-eye`, `configs/visualization.yaml`) — for VLC
   or any other RTSP client, via `VisualizationManager`/
   `RtspStreamServer`, unchanged.
-- **Browser video output (WebRTC)**: `apps/deepstream/app/live_stream/`
+- **Browser video output (HLS, ADR-031)**: `apps/deepstream/app/live_stream/`
   — a second, independent OSD-annotated encode off `sgie_tee`, feeding
-  `rtph264pay → capsfilter → webrtcbin` directly (a fresh transport
-  triple built per browser connection; `iframeinterval` set on the
-  encoder so late-joining viewers get an immediate keyframe). Delivered
-  to the browser through the existing, unchanged `apps.api` proxy
-  contract (`POST /cameras/{camera_id}/webrtc/offer`). This is the only
-  video representation the browser ever receives — there is no raw/
-  non-AI channel and no separate Live Streaming process (ADR-030).
+  `h264parse → hlssink2` directly. Built exactly once per camera (at
+  camera-add) and torn down exactly once (at camera-remove) — no output
+  tee, no per-browser-connection sub-branch, no dynamic pad request/
+  release of any kind; `idrinterval`/`iframeinterval` are both set to
+  the encoder's own output-fps (~1s cadence) so segment boundaries land
+  on real keyframes. `apps.api` serves the resulting
+  `segment*.ts`/`playlist.m3u8` files directly over authenticated HTTP
+  (`GET /cameras/{camera_id}/hls/playlist.m3u8`,
+  `GET /cameras/{camera_id}/hls/{segment_name}`) — a shared-directory
+  file hand-off, not a network proxy to a DeepStream-hosted server; the
+  browser plays it via `hls.js`. This is the only video representation
+  the browser ever receives — there is no raw/non-AI channel and no
+  separate Live Streaming process (ADR-030); DeepStream is never
+  touched by a browser connecting, disconnecting, refreshing, or by how
+  many browsers are watching (ADR-031).
 
 ---
 

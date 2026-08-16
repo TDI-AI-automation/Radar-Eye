@@ -155,7 +155,7 @@ class RuntimeSupervisor:
         with the new ``drop`` state. Not a new AI policy: this changes
         nothing about whether/when AI is enabled -- it is an additional
         side effect at the one existing point every valve mutation
-        already funnels through, letting Live Monitoring's WebRTC branch
+        already funnels through, letting Live Monitoring's HLS branch
         (apps/deepstream/app/live_stream/) switch which input feeds its
         encoder without owning or re-deciding any part of AI eligibility
         itself."""

@@ -143,12 +143,13 @@ CLOSED
 
 Answer:
 
-WebRTC. Implemented and hardware-validated (Live Monitoring's single
-AI-annotated video output). See ADR-030 and
+HLS (`hlssink2`), replacing an earlier WebRTC (`webrtcbin`) implementation
+per ADR-031. Implemented and hardware-validated (Live Monitoring's single
+AI-annotated video output). See ADR-030/ADR-031 and
 `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 5.5 for the owning
 service (DeepStream itself, not a separate Live Streaming process) and
-`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live Monitoring / WebRTC section
-for the request/response contract.
+`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live Monitoring / HLS Video
+Delivery section for the request/response contract.
 
 ---
 

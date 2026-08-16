@@ -125,7 +125,7 @@ class DeepStreamPipeline:
         VisualizationManager's exact reasoning for the same split."""
         self._live_stream_enabled = live_stream_enabled
         self._sgie_tee: Any = None
-        """Live Monitoring's WebRTC branch (apps/deepstream/app/live_stream/)
+        """Live Monitoring's HLS branch (apps/deepstream/app/live_stream/)
         needs a request pad off the same shared SGIE tee Visualization/
         Tier 2 already share -- see build()'s ``needs_sgie_tee``. Unlike
         those two, its own per-camera branch construction lives entirely
@@ -138,7 +138,7 @@ class DeepStreamPipeline:
         called from add_source()/remove_source() exactly where
         VisualizationManager/Tier2Publisher already are, for the same
         reason (camera_id/name/removal timing all only known here). This
-        is the one hook Live Monitoring's WebRTC branch needs to build/
+        is the one hook Live Monitoring's HLS branch needs to build/
         tear down in lockstep with a camera's source, covering every
         removal path uniformly -- bus-message failure (_on_bus_message),
         reconnect, and deletion-driven removal (DesiredStateSynchronizer
@@ -502,7 +502,7 @@ class DeepStreamPipeline:
                     source.camera_id,
                 )
 
-        # Live Monitoring's WebRTC branch -- same failure-isolation
+        # Live Monitoring's HLS branch -- same failure-isolation
         # guarantee as visualization/Tier 2 above; idempotent on the
         # reconnect path (LiveStreamManager.add_camera() itself no-ops
         # for an already-known camera_id).
@@ -565,14 +565,14 @@ class DeepStreamPipeline:
 
     def gst_pipeline(self) -> Any:
         """The real ``Gst.Pipeline`` -- for callers (Live Monitoring's
-        WebRTC branch) that need to ``add()``/``remove()`` elements
+        HLS branch) that need to ``add()``/``remove()`` elements
         directly, which this wrapper class itself doesn't expose."""
         return self._pipeline
 
     def sgie_tee(self) -> Any | None:
         """The shared tee immediately after SGIE, or ``None`` if nothing
         requested one (``needs_sgie_tee`` was false at ``build()`` time).
-        Visualization/Tier 2/Live Monitoring's WebRTC branch each request
+        Visualization/Tier 2/Live Monitoring's HLS branch each request
         their own ``src_%u`` pad off this same element -- an element's
         output can only feed one thing directly, so a tee is exactly the
         "more than one subsystem forks off SGIE" primitive; this accessor
@@ -581,7 +581,7 @@ class DeepStreamPipeline:
 
     def camera_name_for(self, camera_id: uuid.UUID) -> str | None:
         """The camera's registered name, or ``None`` if no source is
-        currently active for it -- for callers (Live Monitoring's WebRTC
+        currently active for it -- for callers (Live Monitoring's HLS
         branch) that need it at a point where they only have the
         camera_id, mirroring ``bin_for()``'s exact shape."""
         source = self._sources.get(camera_id)
@@ -678,7 +678,7 @@ class DeepStreamPipeline:
         # below -- failure isolation matches add_source()'s guarantee. Its
         # own request pad on nvstreamdemux is, by the same rationale as
         # streammux's below, never released either (see tier2.py).
-        # Live Monitoring's WebRTC branch -- called before the source bin
+        # Live Monitoring's HLS branch -- called before the source bin
         # itself is torn down below, same as Tier 2 above. The actual
         # teardown this triggers is scheduled (async), not synchronous
         # here -- Tier1Publisher's own detach() already tolerates the pad

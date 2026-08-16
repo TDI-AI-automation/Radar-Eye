@@ -6,8 +6,6 @@ type CameraHealthDto = components["schemas"]["CameraHealthSchema"];
 type CameraUpdateRequest = components["schemas"]["CameraUpdateRequestSchema"];
 type CameraCreateRequest = components["schemas"]["CameraCreateRequestSchema"];
 export type CameraBrandInfoDto = components["schemas"]["CameraBrandInfoSchema"];
-type WebRtcOfferRequest = components["schemas"]["WebRtcOfferRequestSchema"];
-type WebRtcAnswerResponse = components["schemas"]["WebRtcAnswerResponseSchema"];
 
 export function listCameras(): Promise<CameraDto[] | null> {
   return apiClient.request<CameraDto[]>("/cameras");
@@ -58,19 +56,5 @@ export function updateCamera(
 export function deleteCamera(cameraId: string): Promise<null> {
   return apiClient.request<null>(`/cameras/${cameraId}`, {
     method: "DELETE",
-  });
-}
-
-/** POST /cameras/{id}/webrtc/offer -- Live Monitoring's WebRTC signaling.
- * Non-trickle: the offer/answer exchange is this one request/response
- * (see WebRtcVideoProvider). Proxied by apps.api to apps.deepstream's
- * local-only signaling server -- same auth as every other route here. */
-export function postWebRtcOffer(
-  cameraId: string,
-  body: WebRtcOfferRequest,
-): Promise<WebRtcAnswerResponse | null> {
-  return apiClient.request<WebRtcAnswerResponse>(`/cameras/${cameraId}/webrtc/offer`, {
-    method: "POST",
-    body,
   });
 }
