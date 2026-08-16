@@ -592,7 +592,7 @@ function FlagPill({ enabled }: { enabled: boolean }) {
  * operators need to flip from the list itself (RM-12 Design Principle 3:
  * AI never auto-starts, so this is the day-to-day on/off control, not
  * buried in the Edit modal). Video visibility is unaffected either way --
- * Live Monitoring's WebRTC stream keeps flowing regardless of this
+ * Live Monitoring's video stream keeps flowing regardless of this
  * setting, only the overlays it carries change. */
 function AiTogglePill({
   enabled,

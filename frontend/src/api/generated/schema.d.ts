@@ -217,53 +217,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/cameras/{camera_id}/hls/playlist.m3u8": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * Get Camera Hls Playlist
-     * @description Live Monitoring's video delivery (ADR-031) -- serves the HLS
-     *     playlist apps.deepstream's ``hlssink2`` writes for this camera
-     *     directly off disk. Gated by the router-level ``get_current_user``
-     *     dependency like every other route here -- ADR-011's "centralized
-     *     access control." 404 (not 503) when the camera has no branch built
-     *     yet or DeepStream hasn't written a first playlist -- matches
-     *     ``VideoProvider``'s "unavailable" status, not an error condition.
-     */
-    get: operations["get_camera_hls_playlist_cameras__camera_id__hls_playlist_m3u8_get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/cameras/{camera_id}/hls/{segment_name}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * Get Camera Hls Segment
-     * @description Serves one HLS segment (``segment*.ts``) referenced by this
-     *     camera's playlist -- see ``_HLS_SEGMENT_NAME_RE``.
-     */
-    get: operations["get_camera_hls_segment_cameras__camera_id__hls__segment_name__get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/threats/active": {
     parameters: {
       query?: never;
@@ -2241,69 +2194,6 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ApiResponse_CameraCalibrationSchema_"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  get_camera_hls_playlist_cameras__camera_id__hls_playlist_m3u8_get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        camera_id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": unknown;
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  get_camera_hls_segment_cameras__camera_id__hls__segment_name__get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        camera_id: string;
-        segment_name: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": unknown;
         };
       };
       /** @description Validation Error */

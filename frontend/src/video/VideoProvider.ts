@@ -2,10 +2,11 @@
  * VideoProvider abstraction.
  *
  * `CameraTile` (and any future video-consuming component) depends on this
- * interface only -- never a concrete provider. `WebRtcVideoProvider` is
- * the concrete implementation today (Live Monitoring's WebRTC video
- * delivery, see its own docstring); this is the seam that keeps
- * components ignorant of the underlying transport.
+ * interface only -- never a concrete provider. `MpegtsVideoProvider` is
+ * the concrete implementation today (Live Monitoring's low-latency
+ * MPEG-TS-over-WebSocket video delivery, ADR-032, see its own docstring);
+ * this is the seam that keeps components ignorant of the underlying
+ * transport.
  *
  * Capability flags let a component ask "can this provider do X" instead of
  * assuming every provider supports every feature -- e.g. a future
@@ -29,10 +30,10 @@ export interface VideoHandle {
 export interface VideoProvider {
   /** Begin streaming for a camera. Returns the handle's current state
    * synchronously; concrete providers whose connection is asynchronous
-   * (e.g. WebRTC negotiation) return a "connecting" handle here and
-   * deliver later updates through subscribe(). Idempotent -- calling this
-   * again for a camera that's already connecting/connected must not
-   * restart the connection. */
+   * (e.g. waiting for a WebSocket handshake) return a "connecting" handle
+   * here and deliver later updates through subscribe(). Idempotent --
+   * calling this again for a camera that's already connecting/connected
+   * must not restart the connection. */
   connect(cameraId: string): VideoHandle;
 
   /** Reactive updates for `cameraId`'s handle -- mirrors ws/connection.ts's

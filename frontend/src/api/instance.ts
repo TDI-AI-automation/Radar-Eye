@@ -16,8 +16,9 @@ import { tokenStore } from "../auth/tokenStore";
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 /** Exported for the rare caller that needs the raw base URL rather than
- * going through ApiClient.request() -- e.g. HlsVideoProvider, which hands
- * a full playlist URL to hls.js rather than fetching it itself. */
+ * going through ApiClient.request() -- e.g. MpegtsVideoProvider, which
+ * derives its own WebSocket URL (ws(s)://.../ws/cameras/{id}/video) from
+ * it rather than fetching through the JSON-envelope REST path. */
 export const apiBaseUrl = baseUrl;
 
 export const apiClient = new ApiClient({

@@ -6,9 +6,13 @@ Owns ``VisualizationPipelineBuilder``, ``TrackAnnotationRegistry``, and
 package touches those classes directly. ``apps/deepstream/app/
 pipeline/builder.py`` and ``runtime.py`` only ever call the five members
 exposed here: ``initialize()``, ``start()``, ``stop()``, ``health()``, and
-the ``track_annotations`` accessor. Future additions (recording, snapshots,
-WebRTC, web streaming) become internal additions to this package,
-never touching the pipeline builder or ``runtime.py`` again.
+the ``track_annotations`` accessor. Future additions (recording,
+snapshots) become internal additions to this package, never touching the
+pipeline builder or ``runtime.py`` again. This is a separate concern from
+Live Monitoring's own browser-facing video delivery (``apps/deepstream/
+app/live_stream/``, ADR-032) -- this package's RTSP output is an
+optional, off-by-default operator/VLC diagnostic feature, not a browser
+transport candidate.
 
 Always constructed regardless of ``visualization.enabled`` (cheap -- no
 GStreamer/pyds touched by ``__init__`` itself), so ``health()`` can always

@@ -750,13 +750,15 @@ class Orchestrator:
         # the API/Frontend above): a running instance owns live GStreamer
         # pipeline/GPU state that can't be safely "verified healthy" from
         # the outside the way a REST health check can. Unlike Stage C
-        # (WebRTC era), DeepStream no longer binds any dedicated TCP port
-        # of its own (ADR-031: Live Monitoring delivers video as HLS files
-        # on disk, not a signaling server) -- there is no cheap early
-        # double-start guard left to check; a real double-start still
-        # fails, just deeper inside DeepStream's own GStreamer/GPU
-        # initialization instead of at a friendly "port already in use"
-        # check up front.
+        # (WebRTC era), DeepStream no longer binds one single, fixed,
+        # well-known TCP port (ADR-032: Live Monitoring delivers video as
+        # MPEG-TS over a per-camera tcpserversink, one port per camera,
+        # assigned dynamically at runtime from configs/live_stream.yaml's
+        # tcp_port_range_start -- not known statically until the camera
+        # roster loads) -- there is no cheap early double-start guard left
+        # to check; a real double-start still fails, just deeper inside
+        # DeepStream's own GStreamer/GPU initialization instead of at a
+        # friendly "port already in use" check up front.
         # ------------------------------------------------------------------
         deepstream = ManagedService(
             name="deepstream",
