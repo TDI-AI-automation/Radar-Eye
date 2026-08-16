@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from shared.events.envelope import EventEnvelope
 from shared.events.payloads import (
+    AlarmEligiblePayload,
     AlarmRequestedPayload,
+    AlertRaisedPayload,
     CalibrationUpdatedPayload,
     CameraDisconnectedPayload,
     CameraRegisteredPayload,
@@ -50,7 +52,9 @@ ThreatAssessmentEvent = EventEnvelope[ThreatAssessmentPayload]
 HumanReviewItemCreatedEvent = EventEnvelope[HumanReviewItemCreatedPayload]
 IncidentCreatedEvent = EventEnvelope[IncidentCreatedPayload]
 IncidentUpdatedEvent = EventEnvelope[IncidentUpdatedPayload]
+AlarmEligibleEvent = EventEnvelope[AlarmEligiblePayload]
 AlarmRequestedEvent = EventEnvelope[AlarmRequestedPayload]
+AlertRaisedEvent = EventEnvelope[AlertRaisedPayload]
 SnapshotCreatedEvent = EventEnvelope[SnapshotCreatedPayload]
 ClipCreatedEvent = EventEnvelope[ClipCreatedPayload]
 CameraDisconnectedEvent = EventEnvelope[CameraDisconnectedPayload]
@@ -59,7 +63,9 @@ CalibrationUpdatedEvent = EventEnvelope[CalibrationUpdatedPayload]
 SystemEvent = EventEnvelope[SystemEventPayload]
 
 __all__ = [
+    "AlarmEligibleEvent",
     "AlarmRequestedEvent",
+    "AlertRaisedEvent",
     "CalibrationUpdatedEvent",
     "CameraDisconnectedEvent",
     "CameraRegisteredEvent",

@@ -9,9 +9,10 @@ matching frontend schema and broadcasts it to every currently-connected
 client on that channel via ``ConnectionManager`` -- N connected clients on
 one channel means one translation per event, not N.
 
-Five of the six ``/ws/*`` channels in docs/FRONTEND_BACKEND_CONTRACTS.md
+Six of the seven ``/ws/*`` channels in docs/FRONTEND_BACKEND_CONTRACTS.md
 are wired here: ``threats``, ``incidents``, ``camera_health``, ``reviews``,
-``alarms``. ``/ws/tracking`` is explicitly out of scope for RM-12
+``alarms``, ``alerts`` (the last added under ADR-029 Phase 6, Alert
+Service). ``/ws/tracking`` is explicitly out of scope for RM-12
 (docs/OPEN_QUESTIONS.md Q-015 -- no event model, payload, or publisher
 exists for it anywhere in the codebase).
 
@@ -42,6 +43,7 @@ from apps.api.app.websockets.connection_manager import ConnectionManager
 from shared.events.bus import EventBus
 from shared.events.envelope import EventEnvelope
 from shared.schemas.alarm import AlarmSchema
+from shared.schemas.alert import AlertSchema
 from shared.schemas.camera import CameraDisconnectedSchema, SystemEventSchema
 from shared.schemas.incident import IncidentCreatedSchema, IncidentUpdatedSchema
 from shared.schemas.review import HumanReviewSchema
@@ -94,6 +96,18 @@ def _translate_alarm_requested(event: EventEnvelope) -> dict:
     ).model_dump(mode="json")
 
 
+def _translate_alert_raised(event: EventEnvelope) -> dict:
+    p = event.payload
+    return AlertSchema(
+        alert_id=p.alert_id,
+        incident_id=p.incident_id,
+        camera_id=p.camera_id,
+        severity=p.severity,
+        channels=p.channels,
+        deduplicated=p.deduplicated,
+    ).model_dump(mode="json")
+
+
 def _translate_camera_disconnected(event: EventEnvelope) -> dict:
     p = event.payload
     return CameraDisconnectedSchema(camera_id=p.camera_id, reason=p.reason).model_dump(mode="json")
@@ -112,6 +126,7 @@ _CHANNEL_BY_EVENT_TYPE: dict[str, str] = {
     "IncidentUpdatedEvent": "incidents",
     "HumanReviewItemCreatedEvent": "reviews",
     "AlarmRequestedEvent": "alarms",
+    "AlertRaisedEvent": "alerts",
     "CameraDisconnectedEvent": "camera_health",
     "SystemEvent": "camera_health",
 }
@@ -122,11 +137,19 @@ _TRANSLATOR_BY_EVENT_TYPE: dict[str, Translator] = {
     "IncidentUpdatedEvent": _translate_incident_updated,
     "HumanReviewItemCreatedEvent": _translate_review_created,
     "AlarmRequestedEvent": _translate_alarm_requested,
+    "AlertRaisedEvent": _translate_alert_raised,
     "CameraDisconnectedEvent": _translate_camera_disconnected,
     "SystemEvent": _translate_system_event,
 }
 
-CHANNELS: tuple[str, ...] = ("threats", "incidents", "camera_health", "reviews", "alarms")
+CHANNELS: tuple[str, ...] = (
+    "threats",
+    "incidents",
+    "camera_health",
+    "reviews",
+    "alarms",
+    "alerts",
+)
 
 
 class WebSocketBridge:

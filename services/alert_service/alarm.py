@@ -1,20 +1,27 @@
 """Hardware-agnostic Alarm Service integration and threat filtering.
 
 Source:
-  - docs/ADR_INDEX.md (ADR-012: Alarm Integration Protocol, ADR-026: Alarm Trigger Policy)
+  - docs/ADR_INDEX.md (ADR-012: Alarm Integration Protocol, ADR-026: Alarm Trigger Policy,
+    ADR-029: Post-Media-Architecture-Reset Pipeline Decomposition)
   - docs/THREAT_ENGINE_SPEC.md (Alarm Policy: HIGH/FIRE eligible, others excluded)
   - docs/IMPLEMENTATION_ROADMAP.md (RM-10 deliverables and acceptance criteria)
 
-Integration boundary (per the RM-10 architectural review, Repository Integration
-Audit): ``trigger()`` is a plain, timing-free public entry point for the future
-Threat Engine Runtime Adapter (RM-11) -- the same in-process-call shape as
-``IncidentService.handle_escalation()`` (RM-07's design review), not a bus
-event. The Runtime Adapter observes ``EscalationSignal`` and invokes both
-services directly, so it does not need two different hand-off mechanisms for
-the two outputs of one state machine. ``AlarmRequestedEvent`` (EVENT_CONTRACTS.md)
-remains a valid shared contract but is not this service's integration point.
+Relocated from ``services/incident_service`` to ``services/alert_service``
+under ADR-029 Phase 6: alarm-eligibility ownership (ADR-026's HIGH/FIRE rule)
+moved from an undifferentiated "Alarm Service" to Alert Service specifically.
+Only the module's location and caller changed -- the class itself, its
+filtering rule, and its hardware-adapter boundary are unchanged from RM-10.
 
-Per RM-10 requirements:
+Integration boundary: ``trigger()`` is a plain, timing-free public entry
+point, called by ``services/alert_service/main.py``'s own dispatch loop in
+response to ``AlarmEligibleEvent`` (Incident Service's republication of
+Threat Engine's ``EscalationSignalType.ALARM_ELIGIBLE`` -- see
+``shared/events/payloads.py``'s ``AlarmEligiblePayload`` docstring for why
+that event exists). ``trigger()`` itself contains no escalation-timing
+logic -- Threat Engine remains the sole owner of sustained-duration timing
+(ADR-021); by the time this is called, that decision has already been made.
+
+Per RM-10 requirements (unchanged by the ADR-029 relocation):
   - Filters alarm requests: ONLY HIGH (and FIRE, always resolved to HIGH by the
     Threat Engine per ADR-015/RM-06) trigger alarms. MEDIUM, LOW, ALLY, OBSERVE,
     and HUMAN_REVIEW are explicitly ignored (ADR-026).
@@ -23,7 +30,11 @@ Per RM-10 requirements:
   - MockAlarmAdapter included for hardware-free development and testing environments.
   - Fail-safe process shutdown behavior (`stop()`) automatically silences active outputs.
   - Operator manual silence (`silence()`) and clear (`clear()`) capabilities.
-  - Publishes operational `SystemEvent` audit messages onto the internal EventBus.
+  - Publishes operational `SystemEvent` audit messages onto the internal EventBus, and
+    (closing a previously-documented gap -- see docs/IMPLEMENTATION_STATUS.md's Incident
+    Service row before this change) the `AlarmRequestedEvent` EVENT_CONTRACTS.md
+    documents this service as producing, so Hardware Action Service (ADR-029 Phase 7,
+    not yet built) has a real event to consume once it exists.
 """
 
 from __future__ import annotations
@@ -37,8 +48,8 @@ from enum import Enum
 
 from shared.constants.threat_levels import ThreatLevel
 from shared.events.bus import EventBus
-from shared.events.payloads import SystemEventPayload
-from shared.events.types import SystemEvent
+from shared.events.payloads import AlarmRequestedPayload, SystemEventPayload
+from shared.events.types import AlarmRequestedEvent, SystemEvent
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +194,20 @@ class AlarmService:
         await self._adapter.trigger_alarm(record)
 
         if self._bus is not None:
+            await self._bus.publish(
+                AlarmRequestedEvent(
+                    event_type="AlarmRequestedEvent",
+                    source="alert_service",
+                    timestamp=now,
+                    payload=AlarmRequestedPayload(
+                        incident_id=incident_id,
+                        camera_id=camera_id,
+                        track_id=track_id,
+                        threat_level=threat_level,
+                        reason=reason,
+                    ),
+                )
+            )
             await self._bus.publish(
                 SystemEvent(
                     event_type="SystemEvent",

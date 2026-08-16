@@ -182,12 +182,49 @@ Incident Service
 
 ---
 
+# AlarmEligibleEvent
+
+Added by ADR-029 (Phase 6), during implementation -- not explicitly named
+in ADR-029's own decision text, which only says Alert Service "consumes
+Incident events (IncidentCreatedEvent/IncidentUpdatedEvent)". Neither of
+those two events carries the sustained-duration signal Threat Engine
+computes (INCIDENT_ELIGIBLE at HIGH sustained >=1s vs. the separate,
+later ALARM_ELIGIBLE at HIGH sustained >=3s, or FIRE immediate -- ADR-021
+keeps this timing exclusively Threat Engine's) -- without this event,
+Alert Service would have no way to reproduce the existing, hardware-
+validated alarm-eligibility timing. Incident Service already observes
+Threat Engine's ALARM_ELIGIBLE signal internally (it always has, to
+decide whether to also request an incident); this event just republishes
+that observation onto the bus, the same pattern ThreatAssessmentEvent
+already uses for a different internally-observed Threat Engine signal.
+
+## Producer
+
+Incident Service
+
+## Consumers
+
+- Alert Service
+
+## Payload
+
+{
+  "incident_id": "uuid",
+  "camera_id": "uuid",
+  "track_id": 123,
+  "threat_level": "HIGH",
+  "reason": "sustained_high_threat"
+}
+
+---
+
 # AlarmRequestedEvent
 
 ## Producer
 
 Alert Service (amended by ADR-029 — was Threat Engine; Alert Service
-now owns the HIGH/FIRE eligibility rule per ADR-026)
+now owns the HIGH/FIRE eligibility rule per ADR-026), triggered by
+AlarmEligibleEvent above.
 
 ## Consumers
 
@@ -383,6 +420,7 @@ Examples:
 - HumanReviewItemCreatedEvent
 - IncidentCreatedEvent
 - IncidentUpdatedEvent
+- AlarmEligibleEvent
 - AlarmRequestedEvent
 - AlertRaisedEvent
 - SnapshotCreatedEvent

@@ -6,6 +6,7 @@ Source: docs/FRONTEND_BACKEND_CONTRACTS.md — Real-Time Event Streams.
   - /ws/camera-health
   - /ws/reviews
   - /ws/alarms
+  - /ws/alerts (ADR-029 Phase 6, Alert Service)
 
 ``/ws/tracking`` is not implemented (docs/OPEN_QUESTIONS.md Q-015).
 
@@ -96,3 +97,8 @@ async def ws_reviews(websocket: WebSocket) -> None:
 @router.websocket("/ws/alarms")
 async def ws_alarms(websocket: WebSocket) -> None:
     await _run_channel(websocket, "alarms")
+
+
+@router.websocket("/ws/alerts")
+async def ws_alerts(websocket: WebSocket) -> None:
+    await _run_channel(websocket, "alerts")

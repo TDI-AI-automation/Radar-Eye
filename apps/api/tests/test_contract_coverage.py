@@ -98,6 +98,7 @@ IMPLEMENTED_WS_CHANNELS: set[str] = {
     "/ws/camera-health",
     "/ws/reviews",
     "/ws/alarms",
+    "/ws/alerts",
     "/ws/cameras/{camera_id}/video",
 }
 

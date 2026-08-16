@@ -14,6 +14,7 @@ Typical import patterns::
 """
 
 from shared.schemas.alarm import AlarmSchema
+from shared.schemas.alert import AlertSchema
 from shared.schemas.analytics import (
     CameraAnalyticsSchema,
     IncidentAnalyticsSchema,
@@ -121,6 +122,8 @@ __all__ = [
     "SystemHealthSchema",
     # alarm
     "AlarmSchema",
+    # alert
+    "AlertSchema",
     # user
     "UserRoleUpdateRequestSchema",
     "UserSchema",

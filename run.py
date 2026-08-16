@@ -746,6 +746,30 @@ class Orchestrator:
         print(_pass("Incident Service healthy"))
 
         # ------------------------------------------------------------------
+        # Alert Service (ADR-029 Phase 6) -- a new, independent process
+        # subscribing to IncidentCreatedEvent/AlarmEligibleEvent/
+        # IncidentUpdatedEvent, publishing AlertRaisedEvent (operator
+        # notification, every incident) and AlarmRequestedEvent (HIGH/FIRE
+        # only, ADR-026). Started after Incident Service for the same
+        # head-start reasoning as Incident Service's own comment above --
+        # its subscriptions should be live before Incident Service's first
+        # publish, not the other way around.
+        # ------------------------------------------------------------------
+        alert_service = ManagedService(
+            name="alert_service",
+            command=[str(VENV_PYTHON), "-m", "services.alert_service.main"],
+            cwd=REPO_ROOT,
+            ready_pattern=re.compile(r"radar-eye-alert-service running"),
+        )
+        self.services.append(alert_service)
+        print(_c("\nStarting Alert Service...", _BOLD))
+        alert_service.start(env)
+        if not alert_service.wait_until_healthy(timeout=30.0):
+            self._report_startup_failure(alert_service)
+            return False
+        print(_pass("Alert Service healthy"))
+
+        # ------------------------------------------------------------------
         # DeepStream Runtime -- always started fresh, never adopted (unlike
         # the API/Frontend above): a running instance owns live GStreamer
         # pipeline/GPU state that can't be safely "verified healthy" from

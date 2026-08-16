@@ -1,15 +1,18 @@
-"""Unit tests for AlarmService (RM-10).
+"""Unit tests for AlarmService (RM-10, relocated to services.alert_service
+under ADR-029 Phase 6).
 
 Source:
-  - docs/ADR_INDEX.md (ADR-012: Hardware-agnostic Alarm Protocol, ADR-026: Alarm Trigger Policy)
+  - docs/ADR_INDEX.md (ADR-012: Hardware-agnostic Alarm Protocol, ADR-026: Alarm Trigger Policy,
+    ADR-029: Post-Media-Architecture-Reset Pipeline Decomposition)
   - docs/IMPLEMENTATION_ROADMAP.md (RM-10 acceptance criteria)
   - docs/THREAT_ENGINE_SPEC.md (Alarm eligibility: HIGH only, all others excluded)
 
-trigger() is exercised directly here, simulating the future Threat Engine
-Runtime Adapter (RM-11), per the RM-10 architectural review (Repository
-Integration Audit) that replaced the original AlarmRequestedEvent bus
-subscription with a direct in-process entry point -- the same shape as
-IncidentService.handle_escalation() (RM-07).
+trigger() is exercised directly here, simulating Alert Service's own
+dispatch loop (services/alert_service/main.py's _handle_alarm_eligible),
+which calls it in response to AlarmEligibleEvent -- the same "plain,
+timing-free entry point" shape the RM-10 architectural review (Repository
+Integration Audit) originally established for the (now superseded)
+Threat Engine Runtime Adapter.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from services.incident_service.alarm import (
+from services.alert_service.alarm import (
     AlarmAdapter,
     AlarmRecord,
     AlarmService,
@@ -262,5 +265,30 @@ class TestSystemEventBusIntegration:
             assert "Alarm silenced" in events[1].payload.message
             assert events[2].payload.severity == "INFO"
             assert "Alarm cleared" in events[2].payload.message
+        finally:
+            await bus.stop()
+
+    async def test_trigger_publishes_alarm_requested_event(self) -> None:
+        """Closes a previously-documented gap (docs/IMPLEMENTATION_STATUS.md's
+        Incident Service row before ADR-029 Phase 6): trigger() must publish
+        the AlarmRequestedEvent EVENT_CONTRACTS.md documents this service as
+        producing, not only the SystemEvent audit message."""
+        bus = InProcessEventBus()
+        try:
+            events: list = []
+            bus.subscribe("AlarmRequestedEvent", _collecting_handler(events))
+
+            service = AlarmService(bus=bus)
+            kwargs = _alarm_kwargs()
+
+            record = await service.trigger(**kwargs)
+            await asyncio.sleep(0.05)
+
+            assert record is not None
+            assert len(events) == 1
+            assert events[0].payload.incident_id == kwargs["incident_id"]
+            assert events[0].payload.camera_id == kwargs["camera_id"]
+            assert events[0].payload.threat_level is ThreatLevel.HIGH
+            assert events[0].payload.reason == kwargs["reason"]
         finally:
             await bus.stop()

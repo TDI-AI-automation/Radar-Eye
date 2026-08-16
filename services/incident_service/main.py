@@ -3,7 +3,15 @@
 Subscribes to ``ObservationEvent`` on the production EventBus and, for
 each tracked detection, calls ``CalibrationService`` -> ``ThreatEngine``
 -> ``IncidentService.handle_escalation()`` -- publishing
-``IncidentCreatedEvent``/``IncidentUpdatedEvent``.
+``IncidentCreatedEvent``/``IncidentUpdatedEvent``. When Threat Engine
+reports ``EscalationSignalType.ALARM_ELIGIBLE`` (a separate, later
+threshold than incident creation -- HIGH sustained >=3s vs. 1s, see
+``shared/events/payloads.py``'s ``AlarmEligiblePayload``), also publishes
+``AlarmEligibleEvent`` -- Alert Service (ADR-029 Phase 6, a separate
+process) is the one that decides what to do with it; this module no
+longer calls any alarm-triggering logic itself (moved to
+``services/alert_service`` under Phase 6, per ADR-029's "no subsystem may
+call another independently-deployed subsystem's internal logic directly").
 
 The two handler functions below are Incident Service's own internal
 event-handling logic, not a separate architectural component: the
@@ -35,7 +43,6 @@ from apps.api.app.repositories.human_review import HumanReviewRepository
 from services.calibration import service as calibration_service_module
 from services.calibration.service import CalibrationService
 from services.calibration.types import CalibrationNotFoundError
-from services.incident_service.alarm import AlarmService
 from services.incident_service.classification import (
     PERSON_LABEL,
     associate_weapons_with_persons,
@@ -44,8 +51,13 @@ from services.incident_service.service import IncidentService
 from services.threat_engine.engine import ThreatEngine
 from services.threat_engine.types import EscalationSignal, EscalationSignalType
 from shared.events.bus import EventBus
-from shared.events.payloads import HumanReviewItemCreatedPayload, ThreatAssessmentPayload
+from shared.events.payloads import (
+    AlarmEligiblePayload,
+    HumanReviewItemCreatedPayload,
+    ThreatAssessmentPayload,
+)
 from shared.events.types import (
+    AlarmEligibleEvent,
     CalibrationUpdatedEvent,
     HumanReviewItemCreatedEvent,
     ObservationEvent,
@@ -67,20 +79,18 @@ async def _handle_observation(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     threat_engine: ThreatEngine,
-    alarm_service: AlarmService,
     bus: EventBus,
     last_published_assessment: dict[_AssessmentKey, _AssessmentSignature],
 ) -> None:
     """ObservationEvent -> Calibration -> ThreatEngine -> IncidentService.
 
     One short-lived session per event (SQLAlchemy's recommended unit-of-
-    work pattern) -- ``session_factory``/``threat_engine``/``alarm_service``/
-    ``bus`` are the only long-lived collaborators, injected once at
-    process startup. ``CalibrationService``/``IncidentService`` are
-    constructed fresh inside this one session's scope, matching
-    ``CalibrationService``'s own pre-existing documented convention
-    ("constructed per request/session throughout the rest of the
-    repository").
+    work pattern) -- ``session_factory``/``threat_engine``/``bus`` are the
+    only long-lived collaborators, injected once at process startup.
+    ``CalibrationService``/``IncidentService`` are constructed fresh inside
+    this one session's scope, matching ``CalibrationService``'s own
+    pre-existing documented convention ("constructed per request/session
+    throughout the rest of the repository").
 
     Threat Engine tracks per-*person* subjects, so only ``"person"``
     detections are fed to it -- ``associate_weapons_with_persons()``
@@ -161,12 +171,23 @@ async def _handle_observation(
                             timestamp=datetime.now(timezone.utc),
                         )
                         if result.signal_type is EscalationSignalType.ALARM_ELIGIBLE:
-                            await alarm_service.trigger(
-                                camera_id=result.camera_id,
-                                track_id=result.track_id,
-                                incident_id=incident.id,
-                                threat_level=result.threat_level,
-                                reason=result.reason,
+                            # Republish onto the bus rather than calling Alert
+                            # Service in-process (ADR-029 governing principle
+                            # 2: no cross-subsystem in-process calls) -- see
+                            # AlarmEligiblePayload's docstring for why this
+                            # event exists at all.
+                            await bus.publish(
+                                AlarmEligibleEvent(
+                                    event_type="AlarmEligibleEvent",
+                                    source="incident_service",
+                                    payload=AlarmEligiblePayload(
+                                        incident_id=incident.id,
+                                        camera_id=result.camera_id,
+                                        track_id=result.track_id,
+                                        threat_level=result.threat_level,
+                                        reason=result.reason,
+                                    ),
+                                )
                             )
                     elif isinstance(result.payload, ThreatAssessmentPayload):
                         await incident_service.on_threat_assessment(
@@ -240,7 +261,6 @@ async def _run() -> None:
     session_factory = create_session_factory(engine)
     bus = ZmqEventBus(source="incident_service")
     threat_engine = ThreatEngine()
-    alarm_service = AlarmService(bus=bus)
     last_published_assessment: dict[_AssessmentKey, _AssessmentSignature] = {}
 
     async def _on_observation(event: ObservationEvent) -> None:
@@ -248,7 +268,6 @@ async def _run() -> None:
             event,
             session_factory=session_factory,
             threat_engine=threat_engine,
-            alarm_service=alarm_service,
             bus=bus,
             last_published_assessment=last_published_assessment,
         )
