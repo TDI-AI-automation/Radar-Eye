@@ -375,6 +375,27 @@ Minimize implementation blast radius.
 
 ---
 
+## NVIDIA DeepStream Agent
+
+Whenever a task involves NVIDIA DeepStream, GStreamer video pipelines, pyds, nvinfer, nvtracker, nvdsosd, streammux, DeepStream Python APIs, DeepStream plugins, TensorRT integration within DeepStream, performance optimization, debugging, or DeepStream deployment, use the available NVIDIA DeepStream Agent/skill whenever applicable and technically possible.
+
+The DeepStream Agent should be the preferred implementation/research authority for DeepStream-specific work rather than independently designing or guessing DeepStream APIs, pipeline patterns, plugin configuration, or performance practices.
+
+This is mandatory for relevant DeepStream work, not for unrelated application/backend/frontend/documentation tasks.
+
+Before implementing DeepStream changes:
+
+Determine whether the DeepStream Agent has a relevant capability/skill.
+Use it when available.
+Follow the repository architecture/ADR hierarchy first; the agent does not override project architecture.
+Validate the resulting implementation against the actual repository and hardware/runtime environment.
+
+For model import/integration work, use the DeepStream model-import capability when applicable. For general DeepStream pipeline/application development, use the DeepStream development capability.
+
+Do not merely mention that the agent was used — actually invoke it when relevant.
+
+---
+
 ## Multi-Agent Collaboration
 
 Respect subsystem ownership.
