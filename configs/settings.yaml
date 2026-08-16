@@ -20,7 +20,7 @@ deepstream:
   streammux_batched_push_timeout_us: 40000
   streammux_width: 1920
   streammux_height: 1080
-  rtsp_default_latency_ms: 200
+  rtsp_default_latency_ms: 1000
   tracker_ll_lib_path: /opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so
   tracker_ll_config_path: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
   tracker_width: 640

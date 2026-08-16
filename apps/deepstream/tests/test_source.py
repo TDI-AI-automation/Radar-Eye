@@ -112,6 +112,35 @@ class TestValveIntegration:
         assert valve_element_name(id_a) != valve_element_name(id_b)
 
 
+class TestRtspJitterbufferLatency:
+    """2026-08-16 latency fix: rtspsrc's internal rtpjitterbuffer
+    (mode=slave, GStreamer default) grows its buffer without bound on a
+    long-lived connection to Camera Ingestion's republished RTSP stream.
+    See ``source.py``'s ``build_source_bin`` and
+    ``DeepStreamSettings.rtsp_default_latency_ms`` for the full finding."""
+
+    def test_drop_on_latency_is_enabled(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        rtspsrc = bin_.get_by_name(f"rtspsrc-{source.camera_id}")
+        assert rtspsrc.get_property("drop-on-latency") is True
+
+    def test_latency_property_uses_the_caller_supplied_value(self) -> None:
+        source = _make_source()
+        bin_ = build_source_bin(source, latency_ms=1000)
+        rtspsrc = bin_.get_by_name(f"rtspsrc-{source.camera_id}")
+        assert rtspsrc.get_property("latency") == 1000
+
+    def test_default_latency_is_1000ms(self) -> None:
+        """The proven A/B-tested default (200ms dropped ~18-20% of frames
+        paired with drop-on-latency; 1000ms measured flat/bounded with no
+        frame loss)."""
+        source = _make_source()
+        bin_ = build_source_bin(source)
+        rtspsrc = bin_.get_by_name(f"rtspsrc-{source.camera_id}")
+        assert rtspsrc.get_property("latency") == 1000
+
+
 class TestConstructionDestructionLifecycle:
     def test_bin_reaches_null_state_cleanly(self) -> None:
         """Mirrors pipeline/builder.py's remove_source() teardown -- a bin

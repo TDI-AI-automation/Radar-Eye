@@ -65,12 +65,29 @@ class DeepStreamSettings(BaseModel):
     streammux_width: int = 1920
     streammux_height: int = 1080
 
-    rtsp_default_latency_ms: int = 200
+    rtsp_default_latency_ms: int = 1000
     """RM-11.SIV Decision B: folded into this existing section rather than
     a new configs/rtsp.yaml -- was previously hardcoded in
     ingestion/source.py's build_source_bin. Per-camera transport already
     comes from camera_stream_profiles.transport (DB); latency has no
-    per-camera column, so it's a single pipeline-wide default here."""
+    per-camera column, so it's a single pipeline-wide default here.
+
+    Raised from 200 to 1000 (2026-08-16, real-hardware A/B test): this
+    rtspsrc consumes Camera Ingestion's republished RTSP endpoint, not the
+    camera directly, and its internal rtpjitterbuffer runs in GStreamer's
+    default mode=slave (synchronizes local playout to the sender's RTCP
+    Sender Reports). At 200ms, that jitterbuffer's buffer grew without
+    bound over a long-lived connection -- ~6.5s stale at 3 minutes, ~48s
+    stale at 40+ minutes, confirmed via a burned-in-camera-OSD-timestamp
+    ground-truth measurement, while nvv4l2decoder's own internal latency
+    stayed flat the entire time (the growth was isolated to this
+    jitterbuffer, not decode). See ``ingestion/source.py``'s
+    ``build_source_bin`` for the paired ``drop-on-latency=True`` --
+    the two only work together: a wider ceiling alone still grows
+    unbounded, and 200ms with drop-on-latency dropped ~18-20% of frames
+    (visibly jittery, inference_fps ~20 vs. the normal ~24.5). 1000ms +
+    drop-on-latency=True measured flat at ~0.5s stale across 15+ minutes,
+    zero decode errors, full ~24.5fps, no visible quality loss."""
 
     tracker_ll_lib_path: str = (
         "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"

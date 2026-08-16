@@ -107,7 +107,7 @@ def valve_element_name(camera_id: uuid.UUID) -> str:
     return f"ai-valve-{camera_id}"
 
 
-def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
+def build_source_bin(source: CameraSource, *, latency_ms: int = 1000) -> Any:
     """Construct one camera's decode bin. Returns a ``Gst.Bin`` with a ghost
     src pad named ``src`` carrying decoded (NVMM) frames.
 
@@ -168,6 +168,21 @@ def build_source_bin(source: CameraSource, *, latency_ms: int = 200) -> Any:
     # in shared/media_transport/rtsp.py's build_rtsp_source_element.
     rtspsrc.set_property("protocols", "tcp")
     rtspsrc.set_property("latency", latency_ms)
+    # This rtspsrc consumes Camera Ingestion's republished RTSP endpoint,
+    # not the camera directly. Its internal rtpjitterbuffer runs in
+    # GStreamer's default mode=slave (synchronizes local playout to the
+    # sender's RTCP Sender Reports); on a long-lived connection to a
+    # republished (not original-camera) source, that jitterbuffer grows
+    # its buffer without bound instead of settling -- confirmed on real
+    # hardware via burned-in-camera-OSD-timestamp ground truth: ~6.5s
+    # stale at 3 minutes, ~48s stale at 40+ minutes. drop-on-latency=True
+    # caps the jitterbuffer at `latency_ms` and drops rather than grows,
+    # keeping it bounded. The two settings are paired and load-bearing
+    # together: drop-on-latency alone at the old 200ms default dropped
+    # ~18-20% of frames (visibly jittery); see
+    # DeepStreamSettings.rtsp_default_latency_ms's docstring (config.py)
+    # for the full A/B measurement this pairing is based on.
+    rtspsrc.set_property("drop-on-latency", True)
     valve.set_property("drop", False)
 
     depay.link(parse)
@@ -217,7 +232,7 @@ class RtspSource:
     def camera_id(self) -> uuid.UUID:
         return self.camera.camera_id
 
-    def build(self, *, latency_ms: int = 200) -> Any:
+    def build(self, *, latency_ms: int = 1000) -> Any:
         self.bin = build_source_bin(self.camera, latency_ms=latency_ms)
         return self.bin
 

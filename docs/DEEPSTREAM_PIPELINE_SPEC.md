@@ -256,6 +256,27 @@ Output:
 
 - Batched GPU frames
 
+**Latency investigation note (2026-08-16):** this Stage's `rtspsrc`
+subscription to Stage 1's republished stream was found, on real
+hardware, to accumulate unbounded glass-to-glass latency over the life
+of a long-running connection -- ~48 seconds stale after 40+ minutes,
+confirmed via a burned-in-camera-OSD-timestamp ground-truth measurement
+(the browser/relay path, Camera Ingestion's republish, both GStreamer
+tees, and `nvv4l2decoder` were each independently measured and
+exonerated). Root cause: `rtspsrc`'s internal `rtpjitterbuffer` runs in
+GStreamer's default `mode=slave`, which synchronizes local playout to
+the sender's RTCP Sender Reports -- correct behavior against a live
+camera's own RTP timing, but on a *republished* (not original-camera)
+source it never settles and keeps growing. Fix: `rtspsrc`'s
+`drop-on-latency` property set `true`, paired with raising
+`latency_ms` (`DeepStreamSettings.rtsp_default_latency_ms`) from 200 to
+1000, caps the jitterbuffer at that ceiling and drops rather than
+grows. `drop-on-latency=true` alone at the old 200ms default bounded
+latency but dropped ~18-20% of frames (visibly jittery); the wider
+1000ms ceiling measured flat at ~0.5s stale across 15+ minutes with
+zero frame loss. See `apps/deepstream/app/ingestion/source.py`'s
+`build_source_bin` for the implementation.
+
 ---
 
 # Stage 3: Primary GIE
