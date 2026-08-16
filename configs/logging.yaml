@@ -1,0 +1,33 @@
+# RM-11.SIV -- per-subsystem stage logger levels.
+#
+# Each entry configures one `radar_eye.stage.<name>` logger (see
+# apps/deepstream/app/stage_logging.py). These are separate from, and
+# additional to, the existing application-wide logger
+# (apps.api.app.logging_config.configure_logging) -- that one still governs
+# every logging.getLogger(__name__) call site in the repository unchanged.
+# Any stage name omitted here falls back to default_level.
+#
+# radar_eye.audit is not listed -- it always logs at INFO and is never
+# independently silenced, per the RM-11.SIV approval's Audit Logger
+# requirement (operator-facing major events must always be visible).
+
+default_level: INFO
+
+loggers:
+  camera: INFO
+  rtsp: INFO
+  deepstream: INFO
+  pgie: INFO
+  nvdcf: INFO
+  sgie: INFO
+  runtime_adapter: INFO
+  threat_runtime_adapter: INFO
+  calibration: INFO
+  threat_engine: INFO
+  incident_service: INFO
+  alarm_service: INFO
+  recording: INFO
+  health: INFO
+  event_bus: INFO
+  performance: INFO
+  system: INFO

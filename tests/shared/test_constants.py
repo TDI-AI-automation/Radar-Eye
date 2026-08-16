@@ -7,6 +7,8 @@ Acceptance criteria (RM-02):
 
 from __future__ import annotations
 
+from enum import Enum
+
 import pytest
 
 from shared.constants import (
@@ -17,7 +19,6 @@ from shared.constants import (
     UniformClass,
     WeaponType,
 )
-
 
 # ---------------------------------------------------------------------------
 # ThreatLevel
@@ -137,7 +138,7 @@ class TestNoDuplicatesAcrossEnums:
     confusion when comparing values from different enum families.
     """
 
-    ENUM_CLASSES = [ThreatLevel, DistanceZone, WeaponType, UniformClass]
+    ENUM_CLASSES: list[type[Enum]] = [ThreatLevel, DistanceZone, WeaponType, UniformClass]
 
     def test_no_value_collision_across_enums(self) -> None:
         seen: dict[str, str] = {}  # value -> enum class name

@@ -1,0 +1,19 @@
+# Camera Ingestion Service (ADR-028, Media Architecture Reset).
+#
+# This service holds the one real RTSP connection per camera, ever, and
+# re-publishes it locally (Media Distribution Interface, Phase 1 = RTSP)
+# for every other subsystem to subscribe to independently. It has no
+# AI-eligibility concept -- every registered camera with a stream
+# profile is always ingested.
+
+reconnect_initial_backoff_seconds: 1.0
+reconnect_max_backoff_seconds: 30.0
+reconnect_backoff_multiplier: 2.0
+desired_state_poll_interval_seconds: 1.0
+rtsp_default_latency_ms: 200
+
+# Media Distribution Interface publish addressing -- 127.0.0.1 only,
+# never network-exposed. Every consumer runs on the same node.
+publish_host: 127.0.0.1
+publish_rtsp_port: 8600
+publish_udp_port_range_start: 8700

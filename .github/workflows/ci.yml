@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          # Name must end in "_test" -- enforced by conftest.py's guard
+          # (see the root conftest.py's docstring: tests must never be
+          # able to point at a real, non-disposable database).
+          POSTGRES_DB: radar_eye_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install PyGObject/GStreamer system dependencies
+        # apps/deepstream's media_publisher tests import gi.repository.Gst
+        # (apps/deepstream/app/media_publisher/base.py's _import_gst()).
+        # On the real Jetson/DeepStream target this comes from the JetPack
+        # SDK image, not pip (see that module's own comment) -- so it's
+        # deliberately absent from requirements*.txt. actions/setup-python
+        # provisions an isolated interpreter with no access to any
+        # system-wide python3-gi, so PyGObject must be built from source
+        # here against these dev headers/typelibs instead.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev \
+            gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+            libgstreamer1.0-dev gstreamer1.0-plugins-base
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install pygobject
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Black
+        run: black --check .
+
+      - name: Mypy (advisory only, does not fail the build)
+        continue-on-error: true
+        run: mypy .
+
+      - name: Pytest with coverage
+        # RADAR_EYE_DB_USER/PASSWORD/ENCRYPTION_KEY are not set here -- the
+        # root conftest.py's autouse fixture (_default_env) provides them
+        # for every test. RADAR_EYE_TEST_DATABASE_URL is required and
+        # explicit here -- conftest.py's db_engine fixture fails the whole
+        # session immediately if it's unset (see that module's docstring).
+        env:
+          RADAR_EYE_TEST_DATABASE_URL: postgresql+asyncpg://test_user:test_password@localhost:5432/radar_eye_test
+        run: pytest --cov --cov-report=term

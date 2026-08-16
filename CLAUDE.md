@@ -375,6 +375,27 @@ Minimize implementation blast radius.
 
 ---
 
+## NVIDIA DeepStream Agent
+
+Whenever a task involves NVIDIA DeepStream, GStreamer video pipelines, pyds, nvinfer, nvtracker, nvdsosd, streammux, DeepStream Python APIs, DeepStream plugins, TensorRT integration within DeepStream, performance optimization, debugging, or DeepStream deployment, use the available NVIDIA DeepStream Agent/skill whenever applicable and technically possible.
+
+The DeepStream Agent should be the preferred implementation/research authority for DeepStream-specific work rather than independently designing or guessing DeepStream APIs, pipeline patterns, plugin configuration, or performance practices.
+
+This is mandatory for relevant DeepStream work, not for unrelated application/backend/frontend/documentation tasks.
+
+Before implementing DeepStream changes:
+
+Determine whether the DeepStream Agent has a relevant capability/skill.
+Use it when available.
+Follow the repository architecture/ADR hierarchy first; the agent does not override project architecture.
+Validate the resulting implementation against the actual repository and hardware/runtime environment.
+
+For model import/integration work, use the DeepStream model-import capability when applicable. For general DeepStream pipeline/application development, use the DeepStream development capability.
+
+Do not merely mention that the agent was used — actually invoke it when relevant.
+
+---
+
 ## Multi-Agent Collaboration
 
 Respect subsystem ownership.
@@ -401,9 +422,28 @@ Four distinct concerns, kept separate:
 
 **Subsystem ownership** — each subsystem branch owns one logical part of the architecture. See docs/IMPLEMENTATION_STATUS.md's Subsystem Status table for the current list and their corresponding apps/, services/, or shared/ paths.
 
-**Git branching** — long-lived subsystem branches (feature/api, feature/deepstream, feature/threat-engine, feature/incident-service, feature/recording, feature/calibration, feature/shared-contracts, feature/frontend-integration, feature/deployment, feature/testing) are the primary integration branches. A milestone is implemented on the subsystem branch its work belongs to. If a milestone is large enough to need parallel work, short-lived ticket branches branch from the subsystem branch (e.g. feature/RE-301-rtsp-ingestion from feature/deepstream) and merge back into it.
+**Git branching** — branch hierarchy, top to bottom:
 
-**Merge strategy** — ticket branches merge into their subsystem branch when their piece is done. Subsystem branches merge into master at a reviewed, approved integration point — not automatically after every milestone. master never receives a direct commit.
+```
+main (production)
+    ↑
+develop (integration)
+    ↑
+long-lived subsystem branches
+    ↑
+optional short-lived ticket branches
+```
+
+- `main` — production only. Never developed on directly. Only receives merges from `develop`, and only at a full production release (see Production Release Gate below).
+- `develop` — the primary integration branch. Every completed, reviewed subsystem milestone merges here. Continuous integration and integration testing run against `develop`. It always represents the latest integrated engineering build.
+- Long-lived subsystem branches (feature/api, feature/deepstream, feature/threat-engine, feature/incident-service, feature/recording, feature/calibration, feature/shared-contracts, feature/frontend-integration, feature/developer-infrastructure, feature/testing) each own one logical part of the architecture. A milestone is implemented on the subsystem branch its work belongs to. New subsystems introduced by the Media Architecture Reset (ADR-028, ADR-029) — apps/ingestion, apps/live_stream, services/alert_service, services/hardware_action, services/evidence — are developed on `feature/media-architecture-reset` pending their own promotion to long-lived subsystem branches; see PROJECT_CONTEXT.md's Repository section.
+- If a milestone is large enough to need parallel work, short-lived ticket branches branch from the subsystem branch (e.g. feature/RE-301-rtsp-ingestion from feature/deepstream) and merge back into it after review.
+
+**Merge strategy** — Developer → ticket branch (optional) → subsystem branch → Principal Engineer review → testing → merge into `develop` (regular merge commit, never squash) → integration testing on `develop`. `develop` never receives a direct commit outside of these subsystem merges. Repeat across all subsystems until end-to-end validation and a production readiness review are complete, then merge `develop` → `main` for a production release.
+
+**Owner override** — the project owner may explicitly instruct skipping the Principal Engineer review step for a specific merge into `develop`; when they do, merge on their direct instruction (regular merge commit, never squash — that part of the strategy still applies) rather than blocking on review. Record each such override where it happens (commit message and/or IMPLEMENTATION_STATUS.md), since it's an exception being exercised, not a standing change to the process. First exercised 2026-08-10: `feature/media-architecture-reset` → `develop` (commit `72af011`).
+
+**Production Release Gate** — `develop` must not be merged into `main` until ALL of the following are complete: every roadmap milestone implemented; DeepStream pipeline, AI pipeline, API, frontend, database, event bus, incident pipeline, recording, alarm pipeline, and calibration all integrated; Developer Infrastructure and Testing subsystems complete; end-to-end integration tests passing; system acceptance testing complete; architecture review passed; production deployment validated. Only then may `develop` be merged into `main`.
 
 ---
 

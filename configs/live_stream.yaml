@@ -1,0 +1,23 @@
+# Live Monitoring's permanent video delivery path (low-latency MPEG-TS
+# over TCP, ADR-032).
+#
+# Unlike configs/visualization.yaml (an optional RTSP diagnostic feature,
+# off by default), this is core Camera Runtime functionality -- a
+# connected camera must always be watchable in Live Monitoring, so
+# enabled defaults to true.
+#
+# Overlay appearance (colors, draw_* toggles) is configured once, in
+# configs/visualization.yaml, and reused here regardless of whether
+# Visualization's own RTSP output is enabled.
+
+enabled: true
+
+# Loopback only, never network-exposed directly -- apps.api relays this
+# TCP byte stream to authenticated browser WebSocket clients (see
+# apps/api/app/routers/live_video.py). One fixed port per camera,
+# starting here and incrementing, assigned once at camera-add time.
+tcp_host: 127.0.0.1
+tcp_port_range_start: 8610
+
+output_codec: h264
+output_bitrate: 4000000
