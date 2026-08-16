@@ -135,7 +135,23 @@ function VideoStreamElement({ player, onError }: { player: Mpegts.Player; onErro
       // rare cases -- the <video> element's own onError/black-frame
       // state already communicates this; no separate handling needed.
     });
-    return () => player.detachMediaElement();
+    return () => {
+      // MpegtsVideoProvider can call player.destroy() (a hard playback
+      // error, or a network-error retry -- see its own retryAfterDelay())
+      // between this effect's mount and this cleanup running. A destroyed
+      // player's internal engine reference is already null, so calling
+      // detachMediaElement() on it throws (reproduced: "Cannot read
+      // properties of null (reading 'detachMediaElement')"), which this
+      // component has no public API to check for ahead of time. Left
+      // unguarded, that throw propagates out of a passive-effect cleanup
+      // and trips the route's root error boundary on every subsequent
+      // navigation, not just this one -- detach is best-effort here.
+      try {
+        player.detachMediaElement();
+      } catch {
+        // Already destroyed -- nothing left to detach.
+      }
+    };
   }, [player]);
 
   return (

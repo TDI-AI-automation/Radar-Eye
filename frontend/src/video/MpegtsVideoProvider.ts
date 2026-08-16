@@ -179,6 +179,16 @@ export class MpegtsVideoProvider implements VideoProvider {
   private retryAfterDelay(cameraId: string, connection: CameraConnection): void {
     connection.player?.destroy();
     connection.player = null;
+    // Without this, connection.handle.source keeps pointing at the just-
+    // destroyed player -- any already-rendered VideoStreamElement never
+    // re-renders (its `player` prop looks unchanged) and keeps holding
+    // that stale reference until this camera's *next* status change,
+    // whenever that is. Its eventual unmount then calls
+    // detachMediaElement() on an already-destroyed player and throws
+    // (see VideoStreamElement's cleanup for the defensive fix on that
+    // side); reporting "connecting" here promptly, every retry, closes
+    // the window instead of just papering over its symptom.
+    this.setHandle(cameraId, connection, { status: "connecting", source: null });
     connection.retryTimer = setTimeout(() => {
       connection.retryTimer = null;
       if (this.connections.get(cameraId) === connection) {
