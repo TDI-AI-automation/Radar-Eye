@@ -16,6 +16,7 @@ import logging
 import uuid
 from typing import Any
 
+from apps.api.app.repositories.media import CameraMediaEndpointRepository
 from apps.deepstream.app.bridge import AsyncBridge
 from apps.deepstream.app.config import LiveStreamSettings, VisualizationSettings
 from apps.deepstream.app.instrumentation import PerformanceInstrumentation
@@ -23,6 +24,13 @@ from apps.deepstream.app.live_stream.branch import CameraHlsBranch
 from apps.deepstream.app.visualization.track_annotations import TrackAnnotationRegistry
 
 logger = logging.getLogger(__name__)
+
+_SUBSYSTEM = "live_stream"
+"""camera_media_endpoints.subsystem value this manager owns -- apps.api's
+WebSocket video relay (apps/api/app/routers/live_video.py) reads this row
+to discover which TCP port DeepStream assigned this camera, the same
+DB-backed service-discovery pattern apps.ingestion already uses for its
+own RTSP republish endpoint (apps/ingestion/app/runtime.py)."""
 
 
 class LiveStreamManager:
@@ -37,6 +45,7 @@ class LiveStreamManager:
         instrumentation: PerformanceInstrumentation | None,
         streammux_width: int,
         streammux_height: int,
+        session_factory: Any,
     ) -> None:
         self._pipeline = pipeline
         self._bridge = bridge
@@ -46,7 +55,13 @@ class LiveStreamManager:
         self._instrumentation = instrumentation
         self._width = streammux_width
         self._height = streammux_height
+        self._session_factory = session_factory
         self._branches: dict[uuid.UUID, CameraHlsBranch] = {}
+        self._next_tcp_port = settings.tcp_port_range_start
+        """Monotonically increasing, never reused -- mirrors
+        RtspMediaPublisher's own ``_next_udp_port`` convention
+        (shared/media_transport/rtsp.py). One fixed port per camera,
+        assigned once at add_camera() time."""
 
     async def start(self) -> None:
         """No-op beyond validating settings -- there is no signaling
@@ -75,11 +90,15 @@ class LiveStreamManager:
             )
             return
 
+        tcp_port = self._next_tcp_port
+        self._next_tcp_port += 1
+
         branch = CameraHlsBranch(
             camera_id,
             camera_name,
             streammux_width=self._width,
             streammux_height=self._height,
+            tcp_port=tcp_port,
             live_settings=self._settings,
             visualization_settings=self._visualization_settings,
             track_annotations=self._track_annotations,
@@ -102,6 +121,15 @@ class LiveStreamManager:
 
         self._branches[camera_id] = branch
 
+        async with self._session_factory() as session:
+            await CameraMediaEndpointRepository(session).set_endpoint(
+                camera_id,
+                _SUBSYSTEM,
+                transport="tcp",
+                address=f"{self._settings.tcp_host}:{tcp_port}",
+            )
+            await session.commit()
+
     async def remove_camera(self, camera_id: uuid.UUID) -> None:
         branch = self._branches.pop(camera_id, None)
         if branch is None:
@@ -117,3 +145,7 @@ class LiveStreamManager:
             logger.exception(
                 "Live Monitoring failed to tear down HLS branch for camera %s", camera_id
             )
+
+        async with self._session_factory() as session:
+            await CameraMediaEndpointRepository(session).delete_endpoint(camera_id, _SUBSYSTEM)
+            await session.commit()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type Hls from "hls.js";
+import type Mpegts from "mpegts.js";
 import { Maximize2, Circle, VideoOff } from "lucide-react";
 import type { Camera } from "@/domain/models/Camera";
 import type { ThreatAssessment } from "@/domain/models/ThreatAssessment";
@@ -16,8 +16,8 @@ import { ThreatLevelBadge } from "./ThreatLevelBadge";
  * ThreatAssessmentEvent carries no bounding-box coordinates for the
  * detection-overlay feature"). This preserves the visual language (video
  * area, top/bottom gradient overlays, REC indicator, fullscreen control)
- * but renders only real data: live video via WebRtcVideoProvider (falling
- * back to a "No Signal" state for "connecting"/"error"/"unavailable"),
+ * but renders only real data: live video via the active VideoProvider
+ * (falling back to a "No Signal" state for "connecting"/"error"/"unavailable"),
  * real per-camera fps (nullable), and active threats for this camera as
  * labeled chips instead of fabricated pixel-space boxes. AI overlays (when
  * enabled) are already burned into the stream server-side -- this
@@ -43,11 +43,11 @@ export function LiveCameraTile({
   const [videoElementErrored, setVideoElementErrored] = useState(false);
   useEffect(() => setVideoElementErrored(false), [videoHandle]);
 
-  const hls =
-    videoHandle.status === "playing" && isHlsInstance(videoHandle.source)
+  const player =
+    videoHandle.status === "playing" && isMpegtsPlayer(videoHandle.source)
       ? videoHandle.source
       : null;
-  const isPlaying = hls !== null && !videoElementErrored;
+  const isPlaying = player !== null && !videoElementErrored;
 
   const critical = threats.some((t) => t.requiresImmediateAction());
   const border = critical
@@ -62,7 +62,7 @@ export function LiveCameraTile({
     >
       <div className="relative aspect-video bg-black">
         {isPlaying ? (
-          <VideoStreamElement hls={hls} onError={() => setVideoElementErrored(true)} />
+          <VideoStreamElement player={player} onError={() => setVideoElementErrored(true)} />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/60">
             <VideoOff className="h-8 w-8 mb-2" strokeWidth={1.25} />
@@ -110,24 +110,33 @@ export function LiveCameraTile({
   );
 }
 
-/** Attaches an already-loading Hls.js instance to a real <video> element
- * via `attachMedia` -- the hls.js analogue of `video.srcObject =
- * mediaStream` for the WebRTC provider this replaces. Needs a ref +
- * effect rather than the div-based placeholder's pure render, same
- * reason. `onError` lets the caller fall back to the "No Signal" state if
- * playback itself fails after HlsVideoProvider already reported
- * "playing". Detaches (not destroys -- HlsVideoProvider owns the
- * instance's lifecycle) on unmount so a remount can reattach the same,
- * still-loading instance without restarting playback. */
-function VideoStreamElement({ hls, onError }: { hls: Hls; onError: () => void }) {
+/** Attaches an mpegts.js player to a real <video> element -- unlike
+ * hls.js's `attachMedia`, mpegts.js requires `attachMediaElement()`
+ * followed by an explicit `load()` (and `play()`, since `autoPlay` alone
+ * doesn't reliably start a freshly-loaded MSE source across browsers) to
+ * actually begin playback; MpegtsVideoProvider creates the player but
+ * deliberately never calls these itself, since it has no `<video>`
+ * element to attach until this component mounts. `onError` lets the
+ * caller fall back to the "No Signal" state if playback itself fails
+ * after MpegtsVideoProvider already reported "playing". Detaches (not
+ * destroys -- MpegtsVideoProvider owns the instance's lifecycle) on
+ * unmount so a remount can reattach the same instance without
+ * restarting the underlying WebSocket connection. */
+function VideoStreamElement({ player, onError }: { player: Mpegts.Player; onError: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    hls.attachMedia(video);
-    return () => hls.detachMedia();
-  }, [hls]);
+    player.attachMediaElement(video);
+    player.load();
+    void player.play()?.catch(() => {
+      // Autoplay can be rejected by browser policy even with `muted` in
+      // rare cases -- the <video> element's own onError/black-frame
+      // state already communicates this; no separate handling needed.
+    });
+    return () => player.detachMediaElement();
+  }, [player]);
 
   return (
     <video
@@ -141,11 +150,11 @@ function VideoStreamElement({ hls, onError }: { hls: Hls; onError: () => void })
   );
 }
 
-function isHlsInstance(source: unknown): source is Hls {
+function isMpegtsPlayer(source: unknown): source is Mpegts.Player {
   return (
     source !== null &&
     typeof source === "object" &&
-    "attachMedia" in source &&
-    "detachMedia" in source
+    "attachMediaElement" in source &&
+    "detachMediaElement" in source
   );
 }

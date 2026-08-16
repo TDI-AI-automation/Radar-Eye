@@ -901,4 +901,52 @@ Reason:
 
 A dynamically-mutated, per-connection network transport living inside the same process as AI inference is unnecessary architectural surface and a proven source of coupling and instability for a product with no sub-second-latency requirement. A persistent AI pipeline writing to a stable, protocol-simple output that a separate, already-existing authenticated HTTP layer serves is both simpler and structurally incapable of the failure modes WebRTC's lifecycle introduced.
 
+Amended by ADR-032:
+
+`hlssink2`/HTTP file delivery is replaced by low-latency MPEG-TS over a WebSocket relay -- measured glass-to-glass latency with HLS was ~10s, unacceptable for real-time surveillance. This ADR's core decision (DeepStream is the sole owner/producer of browser-facing video; one persistent output, never mutated by browser activity; AI-annotated-only) is unchanged -- only the specific sink/transport (`hlssink2` + HTTP file serving) is superseded.
+
+---
+
+# ADR-032
+
+Decision:
+
+Low-Latency MPEG-TS Video Delivery -- replaces `hlssink2`/HTTP file serving (ADR-031) as the browser-facing video transport; DeepStream's `tcpserversink` output and the AI pipeline's fully-persistent, viewer-agnostic design (ADR-031's central lesson) are unchanged.
+
+Status:
+
+ACCEPTED
+
+Supersedes:
+
+ADR-031's choice of `hlssink2` (HTTP Live Streaming, file-based segments/playlist) as the sink, and `apps.api`'s corresponding `GET /cameras/{camera_id}/hls/playlist.m3u8` / `GET /cameras/{camera_id}/hls/{segment_name}` file-serving routes. ADR-031's architectural lesson -- DeepStream owns exactly one persistent video output per camera, built once at camera-add and torn down once at camera-remove, never mutated by browser connect/disconnect/viewer-count -- is not superseded; this ADR keeps that design and only changes the sink element and the mechanism `apps.api` uses to reach it.
+
+Not superseded:
+
+`Camera Ingestion -> AI Runtime -> ObservationEvent -> EventBus`, ADR-027's anti-corruption layer, ADR-029's phase sequence, and Incident Service are all unaffected, same as they were unaffected by ADR-030/ADR-031.
+
+Context:
+
+ADR-031 replaced WebRTC with HLS specifically to eliminate per-connection pipeline mutation and its associated instability. That goal was achieved and remains achieved under this ADR. However, real-camera, real-browser measurement of the ADR-031 implementation (2026-08-16, immediately following its own initial validation) found actual glass-to-glass latency of approximately 10 seconds -- an artifact of HLS's segment-based design (a client can only ever be as current as the most recently *completed* segment, and a decodable start requires at least one full segment plus playlist round-trip), not a misconfiguration. This is unacceptable for Radar Eye's real-time military surveillance mission, which requires latency as close to real-time as practically achievable.
+
+Problem:
+
+Radar Eye needed a browser-compatible LAN video transport that is simultaneously: (a) low-latency (sub-second, or as close as practically achievable), (b) capable of serving multiple simultaneous browser viewers, and (c) structurally incapable of requiring DeepStream's AI pipeline to be mutated by browser connect/disconnect (ADR-031's non-negotiable architectural lesson, kept). WebRTC (ADR-030-era) satisfied (a) but violated (c) by design (a per-connection transport sub-branch). HLS (ADR-031) satisfied (c) but failed (a) by roughly an order of magnitude versus the requirement.
+
+Investigation:
+
+The actual GStreamer/DeepStream environment was inspected before choosing (`gst-inspect-1.0`, this GStreamer 1.20.3 build) rather than assumed: `hlssink2`/fragmented `mp4mux` (CMAF-style low-latency fMP4 over a raw byte broadcast) was considered and rejected at the design stage -- fragmented MP4's one-time "moov" initialization segment is emitted once, at pipeline start, and a client (or, here, `apps.api`'s relay) connecting afterward would need that segment re-served or cached out-of-band before it could initialize `MediaSource`, an unproven mechanism on this GStreamer version's `tcpserversink`/`multifdsink`. MPEG-TS was chosen instead specifically because it does not have this problem: `mpegtsmux`'s default `pat-interval`/`pmt-interval` (9000 ticks @ 90kHz = 100ms) repeat the program tables continuously, and combined with the already-tuned ~1s IDR cadence (ADR-030-era `idrinterval` fix), any client connecting at an arbitrary moment can self-initialize within about one GOP -- the same self-describing, join-anytime property broadcast/cable MPEG-TS systems have always relied on. This was validated empirically, not assumed: a minimal end-to-end prototype (real camera, real `nvv4l2h264enc` hardware encoder, real browser) was built and measured before committing to the design.
+
+Decision:
+
+Per camera, DeepStream's OSD/encode chain (unchanged from ADR-031: `SGIE tee -> queue -> nvvideoconvert -> nvdsosd -> nvvideoconvert -> nvv4l2h264enc -> h264parse`) now feeds `mpegtsmux -> tcpserversink` instead of `hlssink2`. `tcpserversink` binds one fixed local TCP port per camera (loopback only) and natively accepts any number of simultaneous TCP client connections -- GStreamer's own built-in multi-client fan-out, not application code -- with `sync-method=next-keyframe` so a newly-connecting client always starts from a clean, decodable point. The branch is still built exactly once at camera-add and torn down exactly once at camera-remove; still no output tee, no per-connection sub-branch, no dynamic pad request/release of any kind. `apps.api` discovers each camera's assigned port via `camera_media_endpoints` (`subsystem="live_stream"`, the same DB-backed service-discovery mechanism `apps.ingestion` already uses for its own RTSP republish endpoint) and exposes one authenticated WebSocket route, `GET /ws/cameras/{camera_id}/video`, that opens one dedicated TCP connection to that port per browser connection and relays bytes verbatim in both directions -- a pure byte relay holding no shared/broadcast state of its own; `tcpserversink` is what makes multiple simultaneous viewers possible, not this route. The browser plays the stream via `mpegts.js` (MIT-licensed, MSE-based, purpose-built for exactly this "raw MPEG-TS over WebSocket, low latency" pattern), replacing `hls.js`. `hlssink2`, the `GET /cameras/{camera_id}/hls/...` routes, and `LiveStreamHttpSettings` are removed.
+
+Consequences:
+
+Measured directly (2026-08-16, real camera, real browser, burned-in wall-clock overlay compared against actual capture-instant wall-clock time): glass-to-glass latency of approximately 0-1.2 seconds across repeated samples -- meeting the sub-second/near-real-time requirement, roughly an order of magnitude improvement over HLS's ~10s. Startup time (page navigation to first decodable frame): ~1.3s. Page reload and three simultaneous browser viewers both verified working with zero DeepStream pipeline-mutation log activity and CPU/RSS/GPU indistinguishable from zero-viewer baseline (same measurement methodology as ADR-031's own validation) -- ADR-031's central architectural property (viewer lifecycle cannot touch the AI pipeline) holds under this transport exactly as it did under HLS. `apps.api` now holds one live TCP relay connection per browser viewer per camera for the connection's duration (bounded by concurrent viewer count, not by AI/GPU load) -- a new but small and well-understood resource, unlike WebRTC's per-connection GStreamer state.
+
+Reason:
+
+Sub-second glass-to-glass latency is a hard requirement for real-time military surveillance and HLS could not meet it by construction, regardless of tuning (confirmed by measurement, not assumed). MPEG-TS over a WebSocket byte relay meets the latency requirement while preserving every structural guarantee ADR-031 established -- DeepStream's AI pipeline remains fully persistent and completely unaware of browser viewer lifecycle -- because the relay and the multi-client fan-out both live entirely outside DeepStream's own process and pipeline graph.
+
 ---

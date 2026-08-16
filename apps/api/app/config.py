@@ -155,33 +155,3 @@ def load_settings(settings_path: Path | None = None) -> Settings:
 @lru_cache
 def get_settings() -> Settings:
     return load_settings()
-
-
-DEFAULT_LIVE_STREAM_PATH = REPO_ROOT / "configs" / "live_stream.yaml"
-
-
-class LiveStreamHttpSettings(BaseModel):
-    """Where apps.deepstream's ``hlssink2`` writes each camera's HLS
-    segments/playlist (ADR-031) -- apps.api serves this directory
-    directly over authenticated HTTP (``GET /cameras/{camera_id}/hls/...``,
-    ADR-011 "centralized access control": apps.api is the sole
-    externally-reachable authenticated door). File-based hand-off, not a
-    network proxy: both processes read the *same*
-    ``configs/live_stream.yaml`` independently (one file, one source of
-    truth for the path), and there is no other cross-process
-    communication between them for video besides this shared directory."""
-
-    output_dir: str = "/tmp/radar-eye/hls"
-
-
-def load_live_stream_http_settings(
-    live_stream_path: Path | None = None,
-) -> LiveStreamHttpSettings:
-    path = live_stream_path or DEFAULT_LIVE_STREAM_PATH
-    raw = _load_yaml(path)
-    return LiveStreamHttpSettings(output_dir=raw.get("output_dir", "/tmp/radar-eye/hls"))
-
-
-@lru_cache
-def get_live_stream_http_settings() -> LiveStreamHttpSettings:
-    return load_live_stream_http_settings()

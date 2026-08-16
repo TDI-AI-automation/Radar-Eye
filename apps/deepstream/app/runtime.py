@@ -179,6 +179,7 @@ class DeepStreamRuntime:
             instrumentation=self._instrumentation,
             streammux_width=settings.streammux_width,
             streammux_height=settings.streammux_height,
+            session_factory=session_factory,
         )
         """Live Monitoring's permanent video delivery path -- see
         apps/deepstream/app/live_stream/__init__.py. AI-annotated-only

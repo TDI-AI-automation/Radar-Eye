@@ -7,6 +7,7 @@ from apps.api.app.routers.cameras import router as cameras_router
 from apps.api.app.routers.evidence import router as evidence_router
 from apps.api.app.routers.health import router as health_router
 from apps.api.app.routers.incidents import router as incidents_router
+from apps.api.app.routers.live_video import router as live_video_router
 from apps.api.app.routers.reviews import router as reviews_router
 from apps.api.app.routers.threats import router as threats_router
 from apps.api.app.routers.users import router as users_router
@@ -19,6 +20,7 @@ __all__ = [
     "evidence_router",
     "health_router",
     "incidents_router",
+    "live_video_router",
     "reviews_router",
     "threats_router",
     "users_router",

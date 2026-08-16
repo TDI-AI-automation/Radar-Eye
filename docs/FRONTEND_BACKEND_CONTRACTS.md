@@ -53,50 +53,56 @@ GET /incidents/open
 
 /ws/camera-health
 
+/ws/cameras/{camera_id}/video
+
 Purpose:
 
 Real-time operational monitoring.
 
-## HLS Video Delivery (ADR-031)
+## Live Video Delivery (ADR-032)
 
-GET /cameras/{camera_id}/hls/playlist.m3u8
+WS /ws/cameras/{camera_id}/video
 
-Response:
+Auth: `?token=` query parameter (browsers cannot set a WebSocket
+handshake header) — same convention as every other `/ws/` channel in
+this contract.
 
-HLS playlist (`application/vnd.apple.mpegurl`), `Cache-Control: no-store`.
-
-GET /cameras/{camera_id}/hls/{segment_name}
-
-Response:
-
-One MPEG-TS segment (`video/mp2t`), `Cache-Control: no-store`.
-`segment_name` must match DeepStream's own `hlssink2` naming pattern
-exactly (`segment#####.ts`) — anything else 404s before touching the
-filesystem.
+Message shape: no framing, no JSON envelope. Binary WebSocket frames
+carrying a raw, continuous, low-latency MPEG-TS byte stream (H.264
+video, AI overlays already burned in) — the same bytes `apps.deepstream`
+writes to its own local `tcpserversink`, relayed verbatim.
 
 Purpose:
 
-Live video delivery. `apps.api` serves these files directly off disk —
-they're written by `apps.deepstream`'s `hlssink2` (a shared directory
-hand-off, `configs/live_stream.yaml`'s `output_dir`), not proxied
-through any DeepStream-hosted server or signaling exchange. The browser
-plays the playlist via `hls.js` (not native `<video src>` HLS — native
-playback has no way to attach the `Authorization` header both routes
-require, since this API uses bearer tokens, not cookies).
+Live video delivery. `apps.api` opens one dedicated TCP connection per
+browser WebSocket connection to `apps.deepstream`'s per-camera
+`tcpserversink` port (discovered via `camera_media_endpoints`,
+`subsystem="live_stream"` — not a static config value, since the port
+is assigned at runtime) and relays bytes in both directions, unmodified.
+Not a network proxy to a DeepStream-hosted signaling server -- no
+signaling of any kind is involved. The browser plays the stream via
+`mpegts.js` (MSE-based; a plain `<video src>` cannot consume a raw
+MPEG-TS byte stream, and native browser HLS/MSE APIs have no built-in
+demuxer for it either).
 
-Backend ownership (ADR-030/ADR-031):
+Backend ownership (ADR-030/ADR-031/ADR-032):
 
-DeepStream is the sole producer of these files (Stage 5.5), and is
-never touched by a browser requesting them — connecting, disconnecting,
+DeepStream is the sole producer of this stream (Stage 5.5), and is
+never touched by a browser requesting it — connecting, disconnecting,
 refreshing, or how many browsers are watching, are all invisible to
-DeepStream; it writes the same rolling segments/playlist regardless.
-The frontend has no awareness of, and no dependency on, which backend
-process wrote the files it's reading — `HlsVideoProvider`'s contract is
-exactly the two routes above, nothing more.
+DeepStream; `tcpserversink` accepts any number of simultaneous TCP
+clients natively (GStreamer's own multi-client fan-out), so `apps.api`
+opening more or fewer relay connections never reaches DeepStream's
+pipeline at all. The frontend has no awareness of, and no dependency
+on, which backend process is producing the bytes it's relaying --
+`MpegtsVideoProvider`'s contract is exactly this one WebSocket channel,
+nothing more. Measured glass-to-glass latency: ~0-1.2 seconds (replaces
+ADR-031's HLS delivery, measured at ~10s and rejected as unacceptable
+for real-time surveillance).
 
 Channels:
 
-Exactly one representation exists behind these routes: DeepStream's
+Exactly one representation exists behind this channel: DeepStream's
 AI-annotated output. There is no raw/non-AI channel (ADR-030) — Radar
 Eye has no product requirement to show camera video independent of AI
 processing. The browser never sees "raw," "annotated," or "AI" in this

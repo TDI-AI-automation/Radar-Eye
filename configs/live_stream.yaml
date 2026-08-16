@@ -1,4 +1,5 @@
-# Live Monitoring's permanent video delivery path (HLS, ADR-031).
+# Live Monitoring's permanent video delivery path (low-latency MPEG-TS
+# over TCP, ADR-032).
 #
 # Unlike configs/visualization.yaml (an optional RTSP diagnostic feature,
 # off by default), this is core Camera Runtime functionality -- a
@@ -11,17 +12,12 @@
 
 enabled: true
 
-# Where hlssink2 writes each camera's segment*.ts + playlist.m3u8 (one
-# subdirectory per camera_id). apps.api reads from this same path to
-# serve it over HTTP -- keep this in sync with configs/api.yaml (or
-# wherever LiveStreamHttpSettings is configured) if you change it.
-output_dir: /tmp/radar-eye/hls
+# Loopback only, never network-exposed directly -- apps.api relays this
+# TCP byte stream to authenticated browser WebSocket clients (see
+# apps/api/app/routers/live_video.py). One fixed port per camera,
+# starting here and incrementing, assigned once at camera-add time.
+tcp_host: 127.0.0.1
+tcp_port_range_start: 8610
 
 output_codec: h264
 output_bitrate: 4000000
-
-# Short segments keep glass-to-browser latency low (roughly
-# playlist_length * segment_target_duration_seconds).
-segment_target_duration_seconds: 2
-playlist_length: 3
-max_segment_files: 10

@@ -143,12 +143,15 @@ CLOSED
 
 Answer:
 
-HLS (`hlssink2`), replacing an earlier WebRTC (`webrtcbin`) implementation
-per ADR-031. Implemented and hardware-validated (Live Monitoring's single
-AI-annotated video output). See ADR-030/ADR-031 and
+Low-latency MPEG-TS over a WebSocket relay (ADR-032), the third protocol
+this question has actually been answered with: WebRTC (`webrtcbin`,
+ADR-030-era) → HLS (`hlssink2`, ADR-031, rejected after measurement at
+~10s glass-to-glass latency) → MPEG-TS (ADR-032, measured at ~0-1.2s).
+Implemented and hardware-validated (Live Monitoring's single
+AI-annotated video output). See ADR-030/ADR-031/ADR-032 and
 `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage 5.5 for the owning
 service (DeepStream itself, not a separate Live Streaming process) and
-`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live Monitoring / HLS Video
+`docs/FRONTEND_BACKEND_CONTRACTS.md`'s Live Monitoring / Live Video
 Delivery section for the request/response contract.
 
 ---

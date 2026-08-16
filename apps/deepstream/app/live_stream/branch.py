@@ -1,20 +1,25 @@
-"""CameraHlsBranch -- one camera's permanent AI-annotated HLS output branch.
+"""CameraHlsBranch -- one camera's permanent AI-annotated low-latency
+MPEG-TS output branch (ADR-032; class name predates the HLS->MPEG-TS
+transport swap, kept to avoid a churny rename across manager.py/tests).
 
 Built once when a camera connects, torn down once when it disconnects --
 mirrors ``apps/deepstream/app/visualization/pipeline_builder.py``'s
 ``VisualizationPipelineBuilder`` almost exactly (same OSD/encode chain,
 same disable-passthrough fix, same fail-fast construction discipline),
 swapping that module's ``rtph264pay -> udpsink`` (RTSP, for an operator's
-VLC client) for ``hlssink2`` (HTTP Live Streaming segments/playlist on
-disk, for a browser). AI-annotated-only (ADR-030): a single input chain,
-taps the AI pipeline's SGIE tee, no raw passthrough.
+VLC client) for ``mpegtsmux -> tcpserversink`` (a persistent local TCP
+broadcast, for ``apps.api`` to relay to browsers over WebSocket -- see
+``apps/api/app/routers/live_video.py``). AI-annotated-only (ADR-030): a
+single input chain, taps the AI pipeline's SGIE tee, no raw passthrough.
 
-No WebRTC, no per-browser-connection state, no signaling. ``hlssink2``
-writes segments and a playlist to ``output_dir``; any number of browsers
-read them independently over plain HTTP (served by ``apps.api`` -- see
-``apps/api/app/routers/cameras.py``). Connecting, refreshing, or adding
-more browser viewers touches nothing here at all -- the branch is built
-once at camera-add and never mutated again until camera-remove.
+No WebRTC, no HLS, no per-browser-connection state inside DeepStream at
+all. ``tcpserversink`` accepts any number of simultaneous TCP clients
+natively (built-in multi-client fan-out, GStreamer's own mechanism, not
+something this code manages) -- apps.api holds one persistent TCP
+connection per camera and relays its bytes to however many authenticated
+browser WebSocket clients are watching. Connecting, refreshing, or
+adding more browser viewers touches nothing here at all -- the branch is
+built once at camera-add and never mutated again until camera-remove.
 
 Element construction/teardown must run on the GLib main-loop thread
 (``AsyncBridge.schedule_on_mainloop``, via ``manager.py``) -- both
@@ -25,7 +30,6 @@ async/promise-based negotiation left to bridge.
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Any
 
@@ -52,6 +56,7 @@ class CameraHlsBranch:
         *,
         streammux_width: int,
         streammux_height: int,
+        tcp_port: int,
         live_settings: LiveStreamSettings,
         visualization_settings: VisualizationSettings,
         track_annotations: TrackAnnotationRegistry,
@@ -61,6 +66,7 @@ class CameraHlsBranch:
         self._camera_name = camera_name
         self._width = streammux_width
         self._height = streammux_height
+        self._tcp_port = tcp_port
         self._settings = live_settings
         self._visualization_settings = visualization_settings
         self._track_annotations = track_annotations
@@ -73,16 +79,13 @@ class CameraHlsBranch:
         self._annotate_probe_id: int | None = None
 
     def build(self, pipeline: Any, sgie_tee: Any) -> None:
-        """Constructs and links the full HLS branch off ``sgie_tee``:
-        ``queue -> nvvideoconvert(RGBA) -> [annotate probe] -> nvdsosd ->
-        nvvideoconvert(NV12) -> nvv4l2h264enc -> h264parse -> hlssink2``.
-        Raises immediately on any construction/link failure -- never
-        returns a half-built branch (same discipline as
-        ``VisualizationPipelineBuilder.build()``)."""
+        """Constructs and links the full low-latency branch off
+        ``sgie_tee``: ``queue -> nvvideoconvert(RGBA) -> [annotate probe]
+        -> nvdsosd -> nvvideoconvert(NV12) -> nvv4l2h264enc -> h264parse
+        -> mpegtsmux -> tcpserversink``. Raises immediately on any
+        construction/link failure -- never returns a half-built branch
+        (same discipline as ``VisualizationPipelineBuilder.build()``)."""
         Gst = _import_gst()
-
-        output_dir = os.path.join(self._settings.output_dir, str(self._camera_id))
-        os.makedirs(output_dir, exist_ok=True)
 
         queue = self._make(Gst, "queue", f"live-osd-queue-{self._camera_id}")
         queue.set_property("leaky", 2)  # downstream: drop oldest, never block
@@ -119,12 +122,10 @@ class CameraHlsBranch:
         # just iframeinterval -- see docs/DEEPSTREAM_PIPELINE_SPEC.md's
         # latency investigation note (2026-08-16): idrinterval, left at its
         # default (256), is the property that actually governs when a
-        # newly-attaching decoder (or, here, a newly-starting HLS segment)
-        # can start clean playback -- iframeinterval alone does not. A ~1s
-        # IDR cadence keeps hlssink2's segment boundaries (target-duration,
-        # below) aligned to real keyframes; hlssink2's own
-        # send-keyframe-requests (default true) additionally requests one
-        # at each segment boundary regardless.
+        # newly-attaching decoder can start clean playback -- iframeinterval
+        # alone does not. A ~1s IDR cadence also bounds how long a
+        # newly-connecting TCP client (tcpserversink's sync-method=
+        # next-keyframe, below) waits before it receives any data at all.
         encoder.set_property("iframeinterval", self._visualization_settings.output_fps)
         encoder.set_property("idrinterval", self._visualization_settings.output_fps)
         # Match the camera's own real profile (Main) -- see
@@ -133,19 +134,36 @@ class CameraHlsBranch:
         encoder.set_property("profile", 2)  # GST_V4L2_H264_VIDENC_MAIN_PROFILE
 
         parser = self._make(Gst, "h264parse", f"live-annotated-parse-{self._camera_id}")
+        parser.set_property("config-interval", -1)  # in-band SPS/PPS every keyframe
 
-        hlssink = self._make(Gst, "hlssink2", f"live-hlssink-{self._camera_id}")
-        hlssink.set_property("location", os.path.join(output_dir, "segment%05d.ts"))
-        hlssink.set_property("playlist-location", os.path.join(output_dir, "playlist.m3u8"))
-        hlssink.set_property("target-duration", self._settings.segment_target_duration_seconds)
-        hlssink.set_property("playlist-length", self._settings.playlist_length)
-        hlssink.set_property("max-files", self._settings.max_segment_files)
+        muxer = self._make(Gst, "mpegtsmux", f"live-tsmux-{self._camera_id}")
+        # Defaults (pat/pmt-interval 9000 ticks @ 90kHz = 100ms) already
+        # make PAT/PMT self-describing/join-anytime -- a client connecting
+        # at an arbitrary moment gets a usable program table within
+        # ~100ms, combined with the ~1s IDR cadence above for a decodable
+        # picture. No property overrides needed.
+
+        tcpsink = self._make(Gst, "tcpserversink", f"live-tcpsink-{self._camera_id}")
+        tcpsink.set_property("host", self._settings.tcp_host)
+        tcpsink.set_property("port", self._tcp_port)
+        # next-keyframe: a newly-connecting TCP client (apps.api, on
+        # behalf of a newly-connecting browser) receives nothing until
+        # the next keyframe, then a clean start -- never a partial/
+        # undecodable prefix. tcpserversink's own multi-client fan-out
+        # (not GStreamer pad linking) is what lets any number of
+        # apps.api connections attach/detach without this branch ever
+        # being touched.
+        tcpsink.set_property("sync-method", 1)  # next-keyframe
+        tcpsink.set_property("sync", False)
+        tcpsink.set_property("async", False)
 
         for element in (queue, convert_in, caps_rgba, osd, convert_out, caps_nv12, encoder, parser):
             pipeline.add(element)
             self._elements.append(element)
-        pipeline.add(hlssink)
-        self._elements.append(hlssink)
+        pipeline.add(muxer)
+        self._elements.append(muxer)
+        pipeline.add(tcpsink)
+        self._elements.append(tcpsink)
 
         self._link(queue, convert_in)
         self._link(convert_in, caps_rgba)
@@ -155,11 +173,14 @@ class CameraHlsBranch:
         self._link(caps_nv12, encoder)
         self._link(encoder, parser)
 
-        video_sink_pad = hlssink.get_request_pad("video")
-        if video_sink_pad is None:
-            raise RuntimeError(f"Failed to request hlssink2 video pad for camera {self._camera_id}")
-        if parser.get_static_pad("src").link(video_sink_pad) != Gst.PadLinkReturn.OK:
-            raise RuntimeError(f"Failed to link h264parse to hlssink2 for camera {self._camera_id}")
+        mux_sink_pad = muxer.get_request_pad("sink_%d")
+        if mux_sink_pad is None:
+            raise RuntimeError(f"Failed to request mpegtsmux sink pad for camera {self._camera_id}")
+        if parser.get_static_pad("src").link(mux_sink_pad) != Gst.PadLinkReturn.OK:
+            raise RuntimeError(
+                f"Failed to link h264parse to mpegtsmux for camera {self._camera_id}"
+            )
+        self._link(muxer, tcpsink)
 
         tee_pad = sgie_tee.get_request_pad("src_%u")
         if tee_pad is None:
