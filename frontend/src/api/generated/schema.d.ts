@@ -217,28 +217,47 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/cameras/{camera_id}/webrtc/offer": {
+  "/cameras/{camera_id}/hls/playlist.m3u8": {
     parameters: {
       query?: never;
       header?: never;
       path?: never;
       cookie?: never;
     };
-    get?: never;
-    put?: never;
     /**
-     * Post Webrtc Offer
-     * @description Live Monitoring's video signaling -- proxies the SDP offer/answer
-     *     exchange to apps.deepstream's local-only (127.0.0.1) signaling
-     *     server. This is the one point where the operator's browser reaches
-     *     Live Monitoring's video path; the actual media (once negotiated)
-     *     flows directly between the browser and apps.deepstream over WebRTC,
-     *     not through this route (see apps.deepstream.app.live_stream's module
-     *     docstring). Gated by the router-level ``get_current_user`` dependency
-     *     like every other route here -- ADR-011's "centralized access
-     *     control" applied to signaling, same as everything else in this file.
+     * Get Camera Hls Playlist
+     * @description Live Monitoring's video delivery (ADR-031) -- serves the HLS
+     *     playlist apps.deepstream's ``hlssink2`` writes for this camera
+     *     directly off disk. Gated by the router-level ``get_current_user``
+     *     dependency like every other route here -- ADR-011's "centralized
+     *     access control." 404 (not 503) when the camera has no branch built
+     *     yet or DeepStream hasn't written a first playlist -- matches
+     *     ``VideoProvider``'s "unavailable" status, not an error condition.
      */
-    post: operations["post_webrtc_offer_cameras__camera_id__webrtc_offer_post"];
+    get: operations["get_camera_hls_playlist_cameras__camera_id__hls_playlist_m3u8_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/cameras/{camera_id}/hls/{segment_name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Camera Hls Segment
+     * @description Serves one HLS segment (``segment*.ts``) referenced by this
+     *     camera's playlist -- see ``_HLS_SEGMENT_NAME_RE``.
+     */
+    get: operations["get_camera_hls_segment_cameras__camera_id__hls__segment_name__get"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -934,13 +953,6 @@ export interface components {
       /** Success */
       success: boolean;
       data?: components["schemas"]["UserSchema"] | null;
-      error?: components["schemas"]["ApiError"] | null;
-    };
-    /** ApiResponse[WebRtcAnswerResponseSchema] */
-    ApiResponse_WebRtcAnswerResponseSchema_: {
-      /** Success */
-      success: boolean;
-      data?: components["schemas"]["WebRtcAnswerResponseSchema"] | null;
       error?: components["schemas"]["ApiError"] | null;
     };
     /** ApiResponse[list[ActiveThreatSchema]] */
@@ -1835,37 +1847,6 @@ export interface components {
      * @enum {string}
      */
     WeaponType: "none" | "non_lethal" | "melee_lethal" | "ranged_lethal" | "fire";
-    /**
-     * WebRtcAnswerResponseSchema
-     * @description Response body -- this server's answer, ICE already fully gathered
-     *     (also non-trickle).
-     */
-    WebRtcAnswerResponseSchema: {
-      /** Sdp */
-      sdp: string;
-      /**
-       * Type
-       * @default answer
-       */
-      type: string;
-    };
-    /**
-     * WebRtcOfferRequestSchema
-     * @description Body of ``POST /cameras/{camera_id}/webrtc/offer`` -- Live
-     *     Monitoring's video signaling. Non-trickle: the browser has already
-     *     finished gathering its own ICE candidates before sending this (see
-     *     apps.deepstream.app.live_stream's module docstring), so this single
-     *     request/response is the entire SDP exchange.
-     */
-    WebRtcOfferRequestSchema: {
-      /** Sdp */
-      sdp: string;
-      /**
-       * Type
-       * @default offer
-       */
-      type: string;
-    };
   };
   responses: never;
   parameters: never;
@@ -2273,7 +2254,7 @@ export interface operations {
       };
     };
   };
-  post_webrtc_offer_cameras__camera_id__webrtc_offer_post: {
+  get_camera_hls_playlist_cameras__camera_id__hls_playlist_m3u8_get: {
     parameters: {
       query?: never;
       header?: never;
@@ -2282,11 +2263,7 @@ export interface operations {
       };
       cookie?: never;
     };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["WebRtcOfferRequestSchema"];
-      };
-    };
+    requestBody?: never;
     responses: {
       /** @description Successful Response */
       200: {
@@ -2294,7 +2271,39 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["ApiResponse_WebRtcAnswerResponseSchema_"];
+          "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_camera_hls_segment_cameras__camera_id__hls__segment_name__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        camera_id: string;
+        segment_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
         };
       };
       /** @description Validation Error */

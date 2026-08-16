@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +38,6 @@ from apps.api.app.repositories.media import (
     CameraMediaEndpointRepository,
     CameraSubsystemHealthRepository,
 )
-from apps.api.app.routers.cameras import get_webrtc_proxy_client
 from apps.api.app.security.auth import create_token_pair, hash_password
 from shared.constants.incident_types import IncidentStatus, IncidentType
 from shared.constants.threat_levels import ThreatLevel
@@ -555,114 +553,6 @@ class TestCamerasBrands:
             assert entry["default_port"] == 554
             assert entry["default_stream_path"]
             assert entry["label"]
-
-
-class _FakeWebRtcProxyClient:
-    """Stands in for httpx.AsyncClient in the webrtc proxy route. Wired in
-    via app.dependency_overrides[get_webrtc_proxy_client] rather than
-    monkeypatching httpx.AsyncClient.post globally -- the latter would
-    also intercept this test file's own _client(app) calls, which are
-    themselves httpx.AsyncClient instances."""
-
-    def __init__(self, post_impl) -> None:  # noqa: ANN001
-        self._post_impl = post_impl
-
-    async def post(self, url, *, json, timeout):  # noqa: ANN001
-        return await self._post_impl(url, json=json, timeout=timeout)
-
-
-@pytest.mark.asyncio
-class TestWebRtcOfferProxy:
-    """POST /cameras/{camera_id}/webrtc/offer -- proxies to apps.deepstream's
-    local-only signaling server via httpx. Stubs the get_webrtc_proxy_client
-    dependency rather than requiring a real deepstream process, matching
-    this file's existing "no real external service" testing convention."""
-
-    _BODY = {"sdp": "v=0\r\n...offer...", "type": "offer"}
-
-    async def test_requires_authentication(
-        self, db_engine, db_session, test_settings: Settings
-    ) -> None:
-        app = create_app(settings=test_settings)
-        async with await _client(app) as client:
-            response = await client.post(f"/cameras/{uuid.uuid4()}/webrtc/offer", json=self._BODY)
-        assert response.status_code == 401
-
-    async def test_proxies_offer_and_returns_answer(
-        self, db_engine, db_session, test_settings: Settings
-    ) -> None:
-        viewer = await _make_user(db_session, ROLE_VIEWER)
-        camera_id = uuid.uuid4()
-
-        class _FakeResponse:
-            status_code = 200
-
-            def json(self) -> dict:
-                return {"sdp": "v=0\r\n...answer...", "type": "answer"}
-
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            assert url.endswith(f"/cameras/{camera_id}/webrtc/offer")
-            assert json == TestWebRtcOfferProxy._BODY
-            return _FakeResponse()
-
-        app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
-        )
-        async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{camera_id}/webrtc/offer",
-                json=self._BODY,
-                headers=_auth_header(viewer, ROLE_VIEWER),
-            )
-        assert response.status_code == 200
-        assert response.json()["data"] == {"sdp": "v=0\r\n...answer...", "type": "answer"}
-
-    async def test_unreachable_deepstream_signaling_server_returns_503(
-        self, db_engine, db_session, test_settings: Settings
-    ) -> None:
-        viewer = await _make_user(db_session, ROLE_VIEWER)
-
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            raise httpx.ConnectError("connection refused")
-
-        app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
-        )
-        async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{uuid.uuid4()}/webrtc/offer",
-                json=self._BODY,
-                headers=_auth_header(viewer, ROLE_VIEWER),
-            )
-        assert response.status_code == 503
-
-    async def test_unknown_camera_returns_404(
-        self, db_engine, db_session, test_settings: Settings
-    ) -> None:
-        viewer = await _make_user(db_session, ROLE_VIEWER)
-
-        class _FakeResponse:
-            status_code = 404
-
-            def json(self) -> dict:
-                return {}
-
-        async def _fake_post(url, *, json, timeout):  # noqa: ANN001
-            return _FakeResponse()
-
-        app = create_app(settings=test_settings)
-        app.dependency_overrides[get_webrtc_proxy_client] = lambda: _FakeWebRtcProxyClient(
-            _fake_post
-        )
-        async with await _client(app) as client:
-            response = await client.post(
-                f"/cameras/{uuid.uuid4()}/webrtc/offer",
-                json=self._BODY,
-                headers=_auth_header(viewer, ROLE_VIEWER),
-            )
-        assert response.status_code == 404
 
 
 @pytest.mark.asyncio

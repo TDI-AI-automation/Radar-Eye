@@ -24,10 +24,29 @@ a second, independent Live Streaming Service with two channels (raw
 there is no raw/non-AI browser-facing video path and no separate Live
 Streaming process. DeepStream is the sole producer of the one video
 representation the browser ever receives — AI-annotated, encoded, and
-delivered directly over WebRTC (`webrtcbin`) through the existing,
-unchanged `apps.api` proxy contract. If DeepStream is unavailable,
-browser video is unavailable; this is an accepted trade-off, not a gap
-(see ADR-030's Consequences).
+written as low-latency MPEG-TS (`mpegtsmux` → `tcpserversink`) that
+`apps.api` relays to authenticated browser WebSocket clients (ADR-032).
+If DeepStream is unavailable, browser video is unavailable; this is an
+accepted trade-off, not a gap (see ADR-030's Consequences).
+
+**Low-Latency MPEG-TS Video Delivery (ADR-031/ADR-032): the
+AI-annotated branch is fully persistent, never mutated by browser
+activity.** ADR-030 kept WebRTC (`webrtcbin`) as the transport, which
+required a dynamic per-browser-connection transport sub-branch (built
+and torn down on every connect/reconnect) inside the same process
+running PGIE/tracker/SGIE. ADR-031 replaced `webrtcbin` with `hlssink2`
+(HLS) to eliminate that per-connection mutation; real-camera/real-
+browser measurement then found HLS's glass-to-glass latency (~10s) was
+unacceptable for real-time surveillance, so ADR-032 replaced `hlssink2`
+with `mpegtsmux` → `tcpserversink` instead, keeping ADR-031's structural
+lesson intact: one linear chain per camera, built once at camera-add
+and torn down once at camera-remove, with no output tee and no dynamic
+pad request/release of any kind. Browser connect/disconnect/refresh,
+and how many browsers are watching, never reach DeepStream at all —
+`tcpserversink` accepts any number of simultaneous TCP clients natively
+(GStreamer's own multi-client fan-out), and `apps.api` opens one
+persistent relay connection per browser viewer independently. Measured
+glass-to-glass latency: ~0-1.2 seconds.
 
 **Pipeline Decomposition (ADR-029): DeepStream is a pure CV engine.**
 Everything downstream of metadata extraction — Distance Estimation,
@@ -54,10 +73,11 @@ Encoded Split — every subsystem below subscribes independently,
     │   NVDEC → StreamMux → Primary GIE → NvDCF Tracker →
     │   Secondary GIE → Metadata Extraction (RuntimeAdapter, ADR-027)
     │       │
-    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → WebRTC
-    │       │       (webrtcbin) → apps.api proxy → Browser (ADR-030;
-    │       │       the sole video representation the browser ever
-    │       │       receives — no raw/non-AI channel exists)
+    │       ├── Stage 5.5: OSD Overlay → H.264 Encode → MPEG-TS
+    │       │       (mpegtsmux → tcpserversink) → apps.api relays over
+    │       │       WebSocket → Browser (ADR-030/ADR-032; the sole
+    │       │       video representation the browser ever receives —
+    │       │       no raw/non-AI channel exists)
     │       │
     │       └── Stage 5.6: ObservationEvent → published on the Event
     │               Bus (Stage 10) — DeepStream's last step; it does
@@ -100,8 +120,9 @@ AI video-output branch never re-runs inference, never re-parses
 `NvDsBatchMeta`, and cannot affect the Inference Path. What changed
 relative to ADR-028 is: it no longer owns the camera connection (Camera
 Ingestion still does — unchanged), but per ADR-030 it now *does* own
-browser video delivery directly, terminating `webrtcbin` itself rather
-than re-publishing for a separate Live Streaming process to pick up.
+browser video delivery directly, writing low-latency MPEG-TS
+(`mpegtsmux` → `tcpserversink`, ADR-032) rather than re-publishing for a
+separate Live Streaming process to pick up.
 What ADR-029 changes is everything *below* DeepStream's metadata
 extraction: Distance Estimation, Threat Engine, Incident Service, Alert
 Service, and Hardware Action Service are no longer in-process calls
@@ -113,7 +134,7 @@ reacting to Stage 5.6's published `ObservationEvent`.
 once.** The camera's original encoded H.264 exists once (Stage 1).
 DeepStream's decoded NVMM frame exists once, inside DeepStream only.
 DeepStream's OSD-annotated encoded frame exists once per consumer
-purpose (Stage 5.5: one encode for the browser WebRTC output, one for
+purpose (Stage 5.5: one encode for the browser MPEG-TS output, one for
 the diagnostic RTSP output — see Stage 5.5's Output section). Every
 subsystem consumes one of those existing representations by
 subscribing to it; no subsystem creates another copy of a
@@ -406,15 +427,30 @@ inference or re-parses `NvDsBatchMeta`):
   (defaults `8554`/`radar-eye`, `configs/visualization.yaml`) — for VLC
   or any other RTSP client, via `VisualizationManager`/
   `RtspStreamServer`, unchanged.
-- **Browser video output (WebRTC)**: `apps/deepstream/app/live_stream/`
-  — a second, independent OSD-annotated encode off `sgie_tee`, feeding
-  `rtph264pay → capsfilter → webrtcbin` directly (a fresh transport
-  triple built per browser connection; `iframeinterval` set on the
-  encoder so late-joining viewers get an immediate keyframe). Delivered
-  to the browser through the existing, unchanged `apps.api` proxy
-  contract (`POST /cameras/{camera_id}/webrtc/offer`). This is the only
-  video representation the browser ever receives — there is no raw/
-  non-AI channel and no separate Live Streaming process (ADR-030).
+- **Browser video output (low-latency MPEG-TS, ADR-032)**:
+  `apps/deepstream/app/live_stream/` — a second, independent
+  OSD-annotated encode off `sgie_tee`, feeding
+  `h264parse → mpegtsmux → tcpserversink` directly. Built exactly once
+  per camera (at camera-add) and torn down exactly once (at
+  camera-remove) — no output tee, no per-browser-connection sub-branch,
+  no dynamic pad request/release of any kind; `idrinterval`/
+  `iframeinterval` are both set to the encoder's own output-fps (~1s
+  cadence), and `mpegtsmux`'s default PAT/PMT repeat interval (100ms)
+  keeps the stream self-describing for a client connecting at any
+  moment, together giving `tcpserversink` (`sync-method=next-keyframe`)
+  a clean start point within about one GOP. `tcpserversink` accepts any
+  number of simultaneous TCP clients natively (GStreamer's own
+  multi-client fan-out); `apps.api` discovers each camera's assigned
+  port via `camera_media_endpoints` (`subsystem="live_stream"`) and
+  relays it to authenticated browser WebSocket clients
+  (`GET /ws/cameras/{camera_id}/video`) — one dedicated TCP connection
+  per browser viewer, a pure byte relay holding no state of its own; the
+  browser plays it via `mpegts.js`. This is the only video
+  representation the browser ever receives — there is no raw/non-AI
+  channel and no separate Live Streaming process (ADR-030); DeepStream
+  is never touched by a browser connecting, disconnecting, refreshing,
+  or by how many browsers are watching (ADR-031/ADR-032). Measured
+  glass-to-glass latency: ~0-1.2 seconds.
 
 ---
 

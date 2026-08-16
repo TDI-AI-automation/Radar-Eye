@@ -7,7 +7,7 @@ package touches those classes directly. ``apps/deepstream/app/
 pipeline/builder.py`` and ``runtime.py`` only ever call the five members
 exposed here: ``initialize()``, ``start()``, ``stop()``, ``health()``, and
 the ``track_annotations`` accessor. Future additions (recording, snapshots,
-WebRTC, HLS, web streaming) become internal additions to this package,
+WebRTC, web streaming) become internal additions to this package,
 never touching the pipeline builder or ``runtime.py`` again.
 
 Always constructed regardless of ``visualization.enabled`` (cheap -- no

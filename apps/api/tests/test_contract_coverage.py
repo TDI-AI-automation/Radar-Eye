@@ -55,7 +55,6 @@ IMPLEMENTED_REST_ROUTES: set[tuple[str, str]] = {
     ("patch", "/cameras/{camera_id}"),
     ("get", "/cameras/{camera_id}/health"),
     ("get", "/cameras/{camera_id}/calibration"),
-    ("post", "/cameras/{camera_id}/webrtc/offer"),
     ("get", "/analytics/threats"),
     ("get", "/analytics/incidents"),
     ("get", "/analytics/cameras"),
@@ -99,6 +98,7 @@ IMPLEMENTED_WS_CHANNELS: set[str] = {
     "/ws/camera-health",
     "/ws/reviews",
     "/ws/alarms",
+    "/ws/cameras/{camera_id}/video",
 }
 
 DESCOPED_WS_CHANNELS: set[str] = {"/ws/tracking"}  # docs/OPEN_QUESTIONS.md Q-015

@@ -173,25 +173,28 @@ class DeepStreamRuntime:
         self.live_stream_manager = LiveStreamManager(
             self._pipeline,
             bridge=self._bridge,
-            loop=loop,
             settings=live_stream,
             visualization_settings=visualization,
             track_annotations=self.visualization_manager.track_annotations,
             instrumentation=self._instrumentation,
             streammux_width=settings.streammux_width,
             streammux_height=settings.streammux_height,
+            session_factory=session_factory,
         )
         """Live Monitoring's permanent video delivery path -- see
         apps/deepstream/app/live_stream/__init__.py. AI-annotated-only
         (ADR-030): one input, the AI pipeline's own already-produced
         annotated output, tapped off the shared SGIE tee and encoded
         independently -- no raw passthrough, no runtime source switch.
-        Reuses VisualizationManager's already-live TrackAnnotationRegistry
-        -- no new overlay-rendering mechanism. Per ADR-029, nothing
-        populates this registry from inside AI Runtime anymore (previously
-        ThreatEngineRuntimeAdapter); it is a preserved interface, read as
-        always-empty until a later phase feeds it again over the Event
-        Bus."""
+        Delivered to the browser as HLS (ADR-031): DeepStream writes
+        segments/playlist to disk and never mutates this branch for a
+        browser connecting, disconnecting, or refreshing -- see
+        ``live_stream/branch.py``. Reuses VisualizationManager's
+        already-live TrackAnnotationRegistry -- no new overlay-rendering
+        mechanism. Per ADR-029, nothing populates this registry from
+        inside AI Runtime anymore (previously ThreatEngineRuntimeAdapter);
+        it is a preserved interface, read as always-empty until a later
+        phase feeds it again over the Event Bus."""
         self.runtime_supervisor = RuntimeSupervisor(
             self._pipeline,
             self._bridge,
@@ -354,8 +357,10 @@ class DeepStreamRuntime:
         operator delete/re-register cycle for the life of the process.
         Confirmed via reproduction that this leak was NOT the cause of
         the originally reported 502/permanently-disconnected symptom
-        (already fixed by the sink-to-source teardown-order correction --
-        see CameraWebRtcBranch.teardown()) -- it is a separate, real,
+        (already fixed by the sink-to-source teardown-order correction,
+        preserved in the WebRTC-era CameraWebRtcBranch.teardown() at the
+        time and carried forward into CameraHlsBranch.teardown() when
+        ADR-031 replaced it) -- it is a separate, real,
         independently-confirmed ownership gap, fixed here once,
         permanently, at the one place every future per-camera subsystem
         should also hook into rather than inventing its own ad hoc

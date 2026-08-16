@@ -313,3 +313,86 @@ class TestCameraHealthChannel:
             "source_component": "deepstream",
             "message": "test",
         }
+
+
+class TestLiveVideoChannel:
+    """``/ws/cameras/{camera_id}/video`` -- Live Monitoring's video
+    delivery (ADR-032). Unlike this module's other channels, this one
+    needs ``db_session``/``db_engine`` (it looks up the camera's
+    ``live_stream`` media endpoint row) and a real local TCP listener
+    standing in for ``apps.deepstream``'s ``tcpserversink`` -- the route
+    is a pure byte relay, so a plain echo-style stub is enough to prove
+    the relay itself works without any real GStreamer/MPEG-TS involved."""
+
+    async def _make_camera(self, session) -> uuid.UUID:
+        from apps.api.app.models.camera import Camera
+        from apps.api.app.repositories.camera import CameraRepository
+
+        camera = Camera(name="cam-video-test", location="north gate", status="CONNECTED")
+        created = await CameraRepository(session).add(camera)
+        return created.id
+
+    def test_missing_token_is_rejected(self, _default_env: None, test_settings: Settings) -> None:
+        app = create_app(settings=test_settings)
+        with TestClient(app) as client:
+            try:
+                with client.websocket_connect(f"/ws/cameras/{uuid.uuid4()}/video"):
+                    raise AssertionError("connection should have been rejected")
+            except Exception:  # noqa: BLE001 -- WebSocketDisconnect, by design
+                pass
+
+    @pytest.mark.asyncio
+    async def test_unknown_camera_closes_try_again_later(
+        self, db_engine, db_session, test_settings: Settings
+    ) -> None:
+        """No ``camera_media_endpoints`` row for this camera_id (empty
+        table is enough -- no camera needs to exist at all) -- matches
+        VideoProvider's "unavailable" status, not a server error."""
+        app = create_app(settings=test_settings)
+        with TestClient(app) as client, pytest.raises(Exception):  # noqa: BLE001, PT011
+            with client.websocket_connect(f"/ws/cameras/{uuid.uuid4()}/video?token={_token()}"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_relays_bytes_from_tcp_source(
+        self, db_engine, db_session, test_settings: Settings
+    ) -> None:
+        from apps.api.app.repositories.media import CameraMediaEndpointRepository
+
+        camera_id = await self._make_camera(db_session)
+        payload = b"\x47" + b"\x00" * 187  # one MPEG-TS-sized packet, content is irrelevant here
+        server_ready = threading.Event()
+        received_connection = threading.Event()
+
+        async def _handle(_reader, writer) -> None:
+            writer.write(payload)
+            await writer.drain()
+            received_connection.set()
+            writer.close()
+
+        async def _run_server() -> None:
+            server = await asyncio.start_server(_handle, "127.0.0.1", 0)
+            port_holder["port"] = server.sockets[0].getsockname()[1]
+            server_ready.set()
+            async with server:
+                await server.serve_forever()
+
+        port_holder: dict[str, int] = {}
+        loop = asyncio.new_event_loop()
+        server_thread = threading.Thread(target=loop.run_until_complete, args=(_run_server(),))
+        server_thread.daemon = True
+        server_thread.start()
+        server_ready.wait(timeout=5)
+
+        await CameraMediaEndpointRepository(db_session).set_endpoint(
+            camera_id, "live_stream", transport="tcp", address=f"127.0.0.1:{port_holder['port']}"
+        )
+        await db_session.commit()
+
+        app = create_app(settings=test_settings)
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/ws/cameras/{camera_id}/video?token={_token()}") as ws:
+                received = ws.receive_bytes()
+
+        assert received == payload
+        assert received_connection.wait(timeout=5)

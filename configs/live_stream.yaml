@@ -1,4 +1,5 @@
-# Live Monitoring's permanent video delivery path (WebRTC).
+# Live Monitoring's permanent video delivery path (low-latency MPEG-TS
+# over TCP, ADR-032).
 #
 # Unlike configs/visualization.yaml (an optional RTSP diagnostic feature,
 # off by default), this is core Camera Runtime functionality -- a
@@ -11,15 +12,12 @@
 
 enabled: true
 
-# Signaling server bind host/port -- 127.0.0.1 only, never network-exposed.
-# apps.api is the sole externally-reachable authenticated door; it proxies
-# the SDP offer/answer exchange to this address (POST /cameras/{id}/webrtc/offer).
-host: 127.0.0.1
-port: 8590
+# Loopback only, never network-exposed directly -- apps.api relays this
+# TCP byte stream to authenticated browser WebSocket clients (see
+# apps/api/app/routers/live_video.py). One fixed port per camera,
+# starting here and incrementing, assigned once at camera-add time.
+tcp_host: 127.0.0.1
+tcp_port_range_start: 8610
 
 output_codec: h264
 output_bitrate: 4000000
-
-# Empty -- a single-node, air-gapped, LAN deployment only ever needs host
-# ICE candidates; no STUN/TURN server is reachable or required.
-stun_servers: []

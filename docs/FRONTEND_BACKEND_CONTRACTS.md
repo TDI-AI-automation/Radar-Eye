@@ -53,47 +53,56 @@ GET /incidents/open
 
 /ws/camera-health
 
+/ws/cameras/{camera_id}/video
+
 Purpose:
 
 Real-time operational monitoring.
 
-## WebRTC
+## Live Video Delivery (ADR-032)
 
-POST /cameras/{camera_id}/webrtc/offer
+WS /ws/cameras/{camera_id}/video
 
-Request:
+Auth: `?token=` query parameter (browsers cannot set a WebSocket
+handshake header) — same convention as every other `/ws/` channel in
+this contract.
 
-{
-  "sdp": "...",
-  "type": "offer"
-}
-
-Response:
-
-{
-  "sdp": "...",
-  "type": "answer"
-}
+Message shape: no framing, no JSON envelope. Binary WebSocket frames
+carrying a raw, continuous, low-latency MPEG-TS byte stream (H.264
+video, AI overlays already burned in) — the same bytes `apps.deepstream`
+writes to its own local `tcpserversink`, relayed verbatim.
 
 Purpose:
 
-Live video delivery. The browser sends one SDP offer per
-`RTCPeerConnection`; this route returns the SDP answer. Once
-negotiated, media flows directly between the browser and DeepStream —
-never through this route, and never through the API service at all.
+Live video delivery. `apps.api` opens one dedicated TCP connection per
+browser WebSocket connection to `apps.deepstream`'s per-camera
+`tcpserversink` port (discovered via `camera_media_endpoints`,
+`subsystem="live_stream"` — not a static config value, since the port
+is assigned at runtime) and relays bytes in both directions, unmodified.
+Not a network proxy to a DeepStream-hosted signaling server -- no
+signaling of any kind is involved. The browser plays the stream via
+`mpegts.js` (MSE-based; a plain `<video src>` cannot consume a raw
+MPEG-TS byte stream, and native browser HLS/MSE APIs have no built-in
+demuxer for it either).
 
-Backend ownership (ADR-030):
+Backend ownership (ADR-030/ADR-031/ADR-032):
 
-This route proxies the offer/answer exchange to **DeepStream**'s own
-WebRTC signaling server — see `docs/DEEPSTREAM_PIPELINE_SPEC.md` Stage
-5.5), loopback-only, never network-exposed directly. The frontend has
-no awareness of, and no dependency on, which backend process answers
-this route — `WebRtcVideoProvider`'s contract is exactly the
-request/response shape above, nothing more.
+DeepStream is the sole producer of this stream (Stage 5.5), and is
+never touched by a browser requesting it — connecting, disconnecting,
+refreshing, or how many browsers are watching, are all invisible to
+DeepStream; `tcpserversink` accepts any number of simultaneous TCP
+clients natively (GStreamer's own multi-client fan-out), so `apps.api`
+opening more or fewer relay connections never reaches DeepStream's
+pipeline at all. The frontend has no awareness of, and no dependency
+on, which backend process is producing the bytes it's relaying --
+`MpegtsVideoProvider`'s contract is exactly this one WebSocket channel,
+nothing more. Measured glass-to-glass latency: ~0-1.2 seconds (replaces
+ADR-031's HLS delivery, measured at ~10s and rejected as unacceptable
+for real-time surveillance).
 
 Channels:
 
-Exactly one representation exists behind this route: DeepStream's
+Exactly one representation exists behind this channel: DeepStream's
 AI-annotated output. There is no raw/non-AI channel (ADR-030) — Radar
 Eye has no product requirement to show camera video independent of AI
 processing. The browser never sees "raw," "annotated," or "AI" in this

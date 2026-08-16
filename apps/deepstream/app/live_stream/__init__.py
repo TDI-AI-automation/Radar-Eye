@@ -1,62 +1,52 @@
-"""Live Monitoring's permanent video delivery path (WebRTC).
+"""Live Monitoring's permanent video delivery path (HLS, ADR-031).
 
 Single subsystem boundary, mirroring ``visualization/manager.py``'s own
 "nothing outside this package touches internal collaborators" rule:
 ``apps/deepstream/app/runtime.py`` only ever calls ``LiveStreamManager``
-(``manager.py``) -- ``add_camera``/``remove_camera``/``start``/``stop``/
-``handle_offer``.
+(``manager.py``) -- ``add_camera``/``remove_camera``/``start``/``stop``.
+There is no signaling, no per-browser-connection state, and no dynamic
+GStreamer branch creation/destruction of any kind: each camera's
+``CameraHlsBranch`` is built exactly once (when the camera is added) and
+torn down exactly once (when it's removed), fully independent of whether
+any browser is ever watching.
 
-AI-annotated-only video output (ADR-030). This package taps the AI
-pipeline's own SGIE tee, encodes what PGIE/NvDCF/SGIE/OSD already
-produced, and delivers it to the browser over WebRTC -- it never decodes
-a second time, never re-runs inference, and cannot affect the Inference
+AI-annotated-only video output (ADR-030, unchanged by ADR-031). This
+package taps the AI pipeline's own SGIE tee, encodes what
+PGIE/NvDCF/SGIE/OSD already produced, and writes it to disk as an HLS
+(HTTP Live Streaming) segment sequence + playlist -- it never decodes a
+second time, never re-runs inference, and cannot affect the Inference
 Path. There is no raw/non-AI channel: DeepStream is the sole producer of
 the one video representation the browser ever receives (see
-``docs/DEEPSTREAM_PIPELINE_SPEC.md`` Stage 5.5). Radar Eye has no product
-requirement to view camera video independent of AI processing -- if
-DeepStream is unavailable, browser video is unavailable, an accepted
-trade-off (ADR-030's Consequences).
+``docs/DEEPSTREAM_PIPELINE_SPEC.md`` Stage 5.5).
 
 Topology:
 
     SGIE tee -- queue -- nvvideoconvert -- nvdsosd -- nvvideoconvert --
-    nvv4l2h264enc -- h264parse -- output tee --+-- queue(leaky) -- fakesink
-                                                |     (permanent drain)
-                                                +-- queue(leaky) -- rtph264pay
-                                                      -- webrtcbin
-                                                      (per browser connection)
+    nvv4l2h264enc -- h264parse -- hlssink2 (writes segment*.ts + playlist.m3u8)
 
-The output tee (``branch.py``'s ``build()``) exists so the encode chain
-always has a live downstream peer, even when no browser is connected --
-the chain starts receiving real buffers the moment the camera is added,
-long before any browser necessarily connects, and a src pad with no peer
-at all fails every push (unlike an inactive input-selector branch, which
-discards internally without attempting one); once that happens
-repeatedly the streaming thread stops delivering buffers, and linking a
-real consumer later does not wake it back up. The drain branch is
-permanent and never released; the transport branch (queue onward)
-requests/releases its own tee pad per browser connection, so
-attaching/detaching a browser never disturbs the drain or the chain
-upstream of the tee.
+No output tee, no drain branch, no per-connection sub-branch: unlike the
+WebRTC design this replaces (ADR-030 era), there is exactly one
+consumer -- ``hlssink2`` -- and it is permanent, so the encode chain
+always has a live downstream peer for the branch's entire lifetime with
+no dynamic linking ever required. ``hlssink2`` is a plain file sink from
+GStreamer's point of view; it has no concept of "a browser connected" at
+all.
 
-*Every* tee branch gets its own leaky queue immediately downstream,
-including the transport branch (``_build_webrtc_transport``'s own
-docstring has the hardware-confirmed story) -- not just the drain.
-``webrtcbin``'s own internal send path can stall (a dead/unresponsive
-browser peer, most commonly an old connection mid-reconnect) without any
-error ever reaching this branch; without a queue there, that stall
-propagates synchronously back through the tee's own push call into the
-*shared* ``sgie_tee`` this tee forks off of, freezing PGIE/tracker/SGIE
-for every camera, not just this one's video delivery. The queue makes
-that impossible: the tee's push into it always succeeds immediately
-(buffer or drop), so nothing downstream of it -- however stuck -- can
-ever apply backpressure past that point.
+Browser delivery (ADR-031): ``apps.api`` serves the HLS files
+``hlssink2`` writes under ``configs/live_stream.yaml``'s ``output_dir``
+directly over authenticated HTTP (``GET /cameras/{camera_id}/hls/...`` --
+see ``apps/api/app/routers/cameras.py``). Any number of browsers read the
+same files independently; DeepStream is completely unaware of how many
+browsers (if any) are watching, and a browser refresh/reconnect/multi-tab
+open never reaches this process at all -- it only ever talks to
+``apps.api``. If DeepStream crashes, the last-written HLS files simply
+stop updating (playback stalls, does not error) until DeepStream
+restarts and resumes writing; there is still no product requirement to
+view video with no AI running (ADR-030's accepted trade-off, unchanged).
 
 Browser contract (permanent invariant): the browser never knows this is
 AI-annotated video specifically -- it only ever receives "Camera Video,"
 forever. Frontend-facing terminology never uses "raw," "annotated," or
 "AI" (``VideoProvider``'s own status vocabulary is
-``connecting``/``playing``/``error``, nothing source-specific). One
-``RTCPeerConnection``, one ``RTCRtpTransceiver``, one ``<video>`` element
-per camera, built once per browser connection.
+``connecting``/``playing``/``error``, nothing source-specific).
 """

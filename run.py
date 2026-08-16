@@ -52,11 +52,6 @@ FRONTEND_DEFAULT_PORT = 8080
 # but it's launched/health-checked alongside everything else so it can
 # be verified independently.
 INGESTION_PORT = 8600
-# Must match configs/live_stream.yaml's `port:` -- DeepStream Runtime's Live
-# Monitoring signaling server binds this fixed TCP port on every start.
-# DeepStream owns browser video delivery directly (ADR-030); there is no
-# second, independent Live Streaming Service/port.
-LIVE_STREAM_PORT = 8590
 # Must match shared/events/config.py's EVENT_BUS_PUBLISH_PORT/
 # EVENT_BUS_SUBSCRIBE_PORT -- the production EventBus's ZMQ XSUB/XPUB
 # broker (ADR-029 Phase 4). Every publisher/subscriber connects to these
@@ -313,8 +308,6 @@ def _own_service_sigs(port: int) -> tuple[str, ...]:
     """Return the command-line substrings that identify *our* process on *port*."""
     if port == API_PORT:
         return ("uvicorn", "apps.api")
-    if port == LIVE_STREAM_PORT:
-        return ("apps.deepstream",)
     if port == INGESTION_PORT:
         return ("apps.ingestion",)
     return ("bun", "vite", "node")
@@ -395,7 +388,6 @@ def run_prerequisite_checks() -> list[Check]:
         _check_models(),
         _check_port(API_PORT, "Backend API"),
         _check_port(FRONTEND_DEFAULT_PORT, "Frontend"),
-        _check_port(LIVE_STREAM_PORT, "Live Monitoring signaling"),
         _check_port(INGESTION_PORT, "Camera Ingestion media distribution"),
     ]
 
@@ -757,23 +749,15 @@ class Orchestrator:
         # DeepStream Runtime -- always started fresh, never adopted (unlike
         # the API/Frontend above): a running instance owns live GStreamer
         # pipeline/GPU state that can't be safely "verified healthy" from
-        # the outside the way a REST health check can. It does, however,
-        # own a fixed TCP port (LIVE_STREAM_PORT, Live Monitoring's
-        # signaling server) since Stage C -- spawning a second instance
-        # while one already holds that port fails confusingly deep inside
-        # its own startup ("address already in use"). Check for that
-        # collision up front and fail clearly instead.
+        # the outside the way a REST health check can. Unlike Stage C
+        # (WebRTC era), DeepStream no longer binds any dedicated TCP port
+        # of its own (ADR-031: Live Monitoring delivers video as HLS files
+        # on disk, not a signaling server) -- there is no cheap early
+        # double-start guard left to check; a real double-start still
+        # fails, just deeper inside DeepStream's own GStreamer/GPU
+        # initialization instead of at a friendly "port already in use"
+        # check up front.
         # ------------------------------------------------------------------
-        if _is_own_service_on_port(LIVE_STREAM_PORT):
-            print(
-                _fail(
-                    f"DeepStream Runtime already running (port {LIVE_STREAM_PORT} -- "
-                    "Live Monitoring signaling -- is already bound by an apps.deepstream "
-                    "process) -- stop it first if you want to restart"
-                )
-            )
-            return False
-
         deepstream = ManagedService(
             name="deepstream",
             command=[str(VENV_PYTHON), "-m", "apps.deepstream.app.main"],

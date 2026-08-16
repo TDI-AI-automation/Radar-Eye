@@ -48,6 +48,7 @@ from apps.api.app.routers import (
     evidence_router,
     health_router,
     incidents_router,
+    live_video_router,
     reviews_router,
     threats_router,
     users_router,
@@ -146,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(evidence_router)
     app.include_router(analytics_router)
     app.include_router(users_router)
+    app.include_router(live_video_router)
     app.include_router(ws_router)
 
     return app
